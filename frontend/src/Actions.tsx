@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { errorText } from "./api";
 import { Drawing } from "./Drawing";
+import { draftKey, useDraft } from "./drafts";
 import { Modal, RecordView } from "./components";
 import { useGame } from "./state";
 import type { Field, UIAction } from "./types";
@@ -20,6 +21,14 @@ const groups: Record<string, string> = {
   phase: "阶段控制",
   abilities: "角色技能",
 };
+
+function actionIdentity(action: UIAction) {
+  return JSON.stringify([action.id, action.payload ?? {}], (_key, value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
+      : value,
+  );
+}
 export function ActionPanel({
   actions,
   title = "本阶段行动",
@@ -27,10 +36,13 @@ export function ActionPanel({
   actions: UIAction[];
   title?: string;
 }) {
-  const { state } = useGame();
+  const { state, session } = useGame();
   const [selected, setSelected] = useState<{
     action: UIAction;
     version: number;
+    key: string;
+    actorId: string | undefined;
+    gameId: string;
   } | null>(null);
   const [query, setQuery] = useState("");
   const grouped = useMemo(() => {
@@ -84,7 +96,13 @@ export function ActionPanel({
               <button
                 className={`action-tile ${action.danger ? "danger-action" : ""}`}
                 key={`${action.id}:${index}`}
-                onClick={() => setSelected({ action, version: state!.version })}
+                onClick={() => setSelected({
+                  action,
+                  version: state!.version,
+                  key: draftKey(state!.id, session.actor?.id ?? null, "action", state!.day, state!.half, state!.phase, actionIdentity(action)),
+                  actorId: session.actor?.id,
+                  gameId: state!.id,
+                })}
               >
                 <span>{action.label}</span>
                 {action.description && <small>{action.description}</small>}
@@ -96,8 +114,10 @@ export function ActionPanel({
           </div>
         </details>
       ))}
-      {selected && (
+      {selected && selected.actorId === session.actor?.id && selected.gameId === state?.id && (
         <ActionForm
+          key={selected.key}
+          storageKey={selected.key}
           action={selected.action}
           version={selected.version}
           onClose={() => setSelected(null)}
@@ -117,24 +137,31 @@ function ActionForm({
   action,
   version,
   onClose,
+  storageKey,
 }: {
   action: UIAction;
   version: number;
   onClose: () => void;
+  storageKey: string;
 }) {
   const { command, busy, state } = useGame();
   const [expectedVersion, setExpectedVersion] = useState(version);
   const [descriptor, setDescriptor] = useState(action);
   action = descriptor;
-  const [values, setValues] = useState<Record<string, unknown>>(() =>
+  const [savedValues, setValues, clearDraft, draftError] = useDraft<Record<string, unknown>>(storageKey, () =>
     Object.fromEntries(
-      action.fields.map((field) => [field.name, initialValue(field)]),
+      action.fields.filter((field) => field.name !== "confirm").map((field) => [field.name, initialValue(field)]),
     ),
   );
+  const [confirmed, setConfirmed] = useState(false);
+  const values = action.fields.some((field) => field.name === "confirm")
+    ? { ...savedValues, confirm: confirmed }
+    : savedValues;
   const [review, setReview] = useState(false);
   const [error, setError] = useState("");
   const update = (name: string, value: unknown) => {
-    setValues((previous) => ({ ...previous, [name]: value }));
+    if (name === "confirm") setConfirmed(Boolean(value));
+    else setValues((previous) => ({ ...previous, [name]: value }));
     setError("");
   };
   const submit = async (event: FormEvent) => {
@@ -151,6 +178,14 @@ function ActionForm({
             (field.type === "checkbox" && !value))
         ) {
           setError(`请完成「${field.label}」。`);
+          return;
+        }
+        if (
+          field.options &&
+          (Array.isArray(value) ? value : value === "" || value == null ? [] : [value])
+            .some((item) => !field.options!.some((option) => option.value === item))
+        ) {
+          setError(`「${field.label}」的选项已失效，请重新选择。`);
           return;
         }
         if (
@@ -182,19 +217,17 @@ function ActionForm({
     }
     try {
       await command(action, payload, expectedVersion);
+      clearDraft();
       onClose();
     } catch (failure) {
       setError(errorText(failure));
       setReview(false);
+      setConfirmed(false);
     }
   };
   const stale = state?.version !== expectedVersion;
   const latestAction = state?.actions.find(
-    (item) =>
-      item.id === action.id &&
-      Object.entries(action.payload ?? {}).every(
-        ([key, value]) => item.payload?.[key] === value,
-      ),
+    (item) => actionIdentity(item) === actionIdentity(action),
   );
   return (
     <Modal
@@ -226,6 +259,7 @@ function ActionForm({
                 setExpectedVersion(state!.version);
                 setDescriptor(latestAction);
                 setReview(false);
+                setConfirmed(false);
                 setError("");
               }}
             >
@@ -306,6 +340,7 @@ function ActionForm({
             )}
           </div>
         )}
+        {draftError && <p className="warning" role="alert">{draftError}</p>}
         {error && (
           <p className="error" role="alert">
             {error}

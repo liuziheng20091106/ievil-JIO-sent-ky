@@ -136,7 +136,6 @@ export interface MessagePage {
 }
 export interface Invite {
   code: string;
-  seat_id: string | null;
   kind: "player" | "spectator";
 }
 export type LiveEvent =

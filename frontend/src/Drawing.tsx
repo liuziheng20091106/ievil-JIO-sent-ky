@@ -15,6 +15,7 @@ export function Drawing({
   const [color, setColor] = useState("#30233f");
   const [width, setWidth] = useState(4);
   const [hasHistory, setHasHistory] = useState(false);
+  const [restoring, setRestoring] = useState(Boolean(value));
   const context = () => canvas.current!.getContext("2d")!;
   useEffect(() => {
     const element = canvas.current!;
@@ -23,8 +24,13 @@ export function Drawing({
     ctx.fillRect(0, 0, element.width, element.height);
     if (value) {
       const image = new Image();
-      image.onload = () => ctx.drawImage(image, 0, 0);
+      image.onload = () => {
+        ctx.drawImage(image, 0, 0);
+        setRestoring(false);
+      };
+      image.onerror = () => setRestoring(false);
       image.src = value;
+      return () => { image.onload = null; image.onerror = null; };
     }
   }, []);
   const point = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -35,7 +41,7 @@ export function Drawing({
     ] as const;
   };
   const begin = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || restoring) return;
     event.preventDefault();
     history.current.push(value);
     if (history.current.length > 20) history.current.shift();
@@ -73,8 +79,13 @@ export function Drawing({
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, 800, 500);
     if (imageValue) {
+      setRestoring(true);
       const image = new Image();
-      image.onload = () => ctx.drawImage(image, 0, 0);
+      image.onload = () => {
+        ctx.drawImage(image, 0, 0);
+        setRestoring(false);
+      };
+      image.onerror = () => setRestoring(false);
       image.src = imageValue;
     }
     onChange(imageValue);
@@ -105,7 +116,7 @@ export function Drawing({
         <button
           type="button"
           className="quiet"
-          disabled={!hasHistory}
+          disabled={!hasHistory || restoring}
           onClick={() => {
             const previous = history.current.pop();
             if (previous !== undefined) restore(previous);
@@ -117,6 +128,7 @@ export function Drawing({
         <button
           type="button"
           className="quiet"
+          disabled={restoring}
           onClick={() => {
             history.current.push(value);
             setHasHistory(true);
@@ -135,15 +147,17 @@ export function Drawing({
         onPointerUp={finish}
         onPointerCancel={finish}
         aria-label={`${label}画板，使用手指或鼠标绘画`}
+        aria-busy={restoring}
       />
       <p className="hint">
-        画作仍为私密草稿，确认提交后才保存。可手绘，或导入自己准备的图片。
+        {restoring ? "正在恢复画作…" : "画作是本机私密草稿；确认提交后才发送给服务器。可手绘，或导入自己准备的图片。"}
       </p>
       <label className="file-field">
         导入画作
         <input
           type="file"
           accept="image/png,image/jpeg"
+          disabled={restoring}
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (!file) return;
@@ -153,9 +167,14 @@ export function Drawing({
               return;
             }
             event.target.setCustomValidity("");
+            setRestoring(true);
             const url = URL.createObjectURL(file);
             const image = new Image();
             image.onload = () => {
+              if (!canvas.current) {
+                URL.revokeObjectURL(url);
+                return;
+              }
               history.current.push(value);
               setHasHistory(true);
               const ctx = context();
@@ -170,9 +189,11 @@ export function Drawing({
                 image.height * scale,
               );
               onChange(canvas.current!.toDataURL("image/png"));
+              setRestoring(false);
               URL.revokeObjectURL(url);
             };
             image.onerror = () => {
+              setRestoring(false);
               URL.revokeObjectURL(url);
               event.target.setCustomValidity("无法读取此图片，请选择PNG或JPEG");
               event.target.reportValidity();

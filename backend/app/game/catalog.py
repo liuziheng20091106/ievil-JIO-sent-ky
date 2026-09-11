@@ -103,7 +103,8 @@ CATALOG = [
 ROLES = {role["id"]: role for role in CATALOG}
 DEFAULT_CODEX = [role["id"] for role in CATALOG if role["id"] not in {"sherry", "millia", "arisa"}]
 PHASES = {
-    "lobby": "候场与上下牌确认",
+    "lobby": "候场与首次准备",
+    "ordering": "私下调整上下牌与再次准备",
     "witch": "当日魔女化检测",
     "night": "夜间行动",
     "night_coco": "最后夜间行动",

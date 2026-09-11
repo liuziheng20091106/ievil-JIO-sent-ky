@@ -49,10 +49,10 @@ def game_view(game, actor):
         entry = {
             "id": s["id"],
             "name": s["name"],
-            "avatar_role_id": s["avatar_role_id"],
+            "avatar_role_id": None if game["status"] == "lobby" else s["avatar_role_id"],
             "occupied": bool(s["occupant_id"]),
             "ready": s["ready"],
-            "alive": current(game, s) is not None,
+            "alive": game["status"] == "lobby" or current(game, s) is not None,
         }
         if host:
             entry["cards"] = [card_view(game, game["cards"][cid], True) for cid in s["cards"]]

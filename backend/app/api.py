@@ -121,23 +121,18 @@ async def invite(game_id: str, body: schemas.Invite, request: Request):
         with storage.transaction() as db:
             auth.require_actor(db, request, game_id, host=True)
             game = require_game(db, game_id, mutable=True)
-            if body.kind == "player":
-                seat = seat_for(game, body.seat_id)
-                participant_id = seat["occupant_id"]
-            else:
-                if body.seat_id is not None:
-                    raise HTTPException(422, "观战邀请码不对应玩家席位")
-                participant_id = None
+            if body.kind == "player" and game["phase"] != "lobby":
+                raise HTTPException(409, "已经发牌，请让替补先进入观战席，再由主持人接管席位")
             db.execute(
-                "UPDATE invites SET valid=0 WHERE game_id=? AND kind=? AND seat_id IS ?",
-                (game_id, body.kind, body.seat_id),
+                "UPDATE invites SET valid=0 WHERE game_id=? AND kind=?",
+                (game_id, body.kind),
             )
             code = secrets.token_urlsafe(12)
             db.execute(
-                "INSERT INTO invites(code_hash,game_id,seat_id,kind,participant_id) VALUES(?,?,?,?,?)",
-                (auth.secret_hash(code), game_id, body.seat_id, body.kind, participant_id),
+                "INSERT INTO invites(code_hash,game_id,kind) VALUES(?,?,?)",
+                (auth.secret_hash(code), game_id, body.kind),
             )
-        return {"code": code, "seat_id": body.seat_id, "kind": body.kind}
+        return {"code": code, "kind": body.kind}
 
 
 @router.post("/join")
@@ -145,56 +140,49 @@ async def join(body: schemas.Join, request: Request, response: Response):
     async with realtime.lock:
         with storage.transaction() as db:
             invitation = db.execute(
-                "SELECT * FROM invites WHERE code_hash=? AND valid=1 AND redeemed_by IS NULL",
+                "SELECT * FROM invites WHERE code_hash=? AND valid=1",
                 (auth.secret_hash(body.code),),
             ).fetchone()
             if not invitation:
-                raise HTTPException(403, "邀请码无效、已使用或已被撤销")
+                raise HTTPException(403, "邀请码无效或已被撤销")
             game = require_game(db, invitation["game_id"], mutable=True)
-            previous = auth.actor_for_token(db, auth.token_hash(request))
+            hashed = auth.token_hash(request)
+            blocked = db.execute(
+                "SELECT 1 FROM sessions s JOIN participants p ON p.id=s.participant_id "
+                "WHERE s.token_hash=? AND p.game_id=? AND p.blocked=1",
+                (hashed, game["id"]),
+            ).fetchone()
+            if blocked:
+                raise HTTPException(403, "该参与身份已在本局拉黑")
+            previous = auth.actor_for_token(db, hashed)
             if previous and previous["kind"] == "host":
                 raise HTTPException(409, "主持人请使用另一个浏览器身份加入，或先退出主持人")
-            seat = seat_for(game, invitation["seat_id"]) if invitation["kind"] == "player" else None
-            participant_id = invitation["participant_id"] or secrets.token_urlsafe(18)
-            if (
-                previous
-                and previous["game_id"] == game["id"]
-                and previous["kind"] == "player"
-                and previous["id"] != participant_id
-            ):
-                raise HTTPException(409, "你已占据本局席位，请由主持人处理替补或移出")
-            if seat and seat["occupant_id"] and seat["occupant_id"] != invitation["participant_id"]:
-                raise HTTPException(409, "该席位已被占用，请联系主持人")
-            if invitation["participant_id"]:
-                participant = db.execute(
-                    "SELECT * FROM participants WHERE id=? AND active=1 AND blocked=0",
-                    (participant_id,),
-                ).fetchone()
-                if not participant:
-                    raise HTTPException(403, "该参与身份已撤销，请联系主持人重新发码")
-                db.execute("UPDATE sessions SET valid=0 WHERE participant_id=?", (participant_id,))
-                db.execute("UPDATE participants SET name=? WHERE id=?", (body.name, participant_id))
-            else:
-                db.execute(
-                    "INSERT INTO participants(id,game_id,kind,seat_id,name,access_ids) VALUES(?,?,?,?,?,?)",
-                    (
-                        participant_id,
-                        game["id"],
-                        invitation["kind"],
-                        invitation["seat_id"],
-                        body.name,
-                        storage.dumps([participant_id]),
-                    ),
-                )
+            if previous and previous["game_id"] == game["id"]:
+                raise HTTPException(409, "你已加入本局，请继续使用现有身份；换席或替补由主持人处理")
+            seat = None
+            if invitation["kind"] == "player":
+                if game["phase"] != "lobby":
+                    raise HTTPException(409, "已经发牌，请使用观战码加入并由主持人安排替补")
+                available = [s for s in game["seats"] if not s["occupant_id"]]
+                if not available:
+                    raise HTTPException(409, "七个席位已满，请联系主持人获取观战码")
+                seat = secrets.choice(available)
+            participant_id = secrets.token_urlsafe(18)
+            db.execute(
+                "INSERT INTO participants(id,game_id,kind,seat_id,name,access_ids) VALUES(?,?,?,?,?,?)",
+                (
+                    participant_id,
+                    game["id"],
+                    invitation["kind"],
+                    seat["id"] if seat else None,
+                    body.name,
+                    storage.dumps([participant_id]),
+                ),
+            )
             revoke_current_cookie(db, request)
             if seat:
                 seat["occupant_id"], seat["name"] = participant_id, body.name
-                if game["status"] == "lobby" and not invitation["participant_id"]:
-                    seat["ready"] = False
-            db.execute(
-                "UPDATE invites SET valid=0,redeemed_by=? WHERE code_hash=?",
-                (participant_id, invitation["code_hash"]),
-            )
+                seat["ready"] = False
             token = auth.issue_session(db, invitation["kind"], participant_id)
             game["version"] += 1
             storage.save_game(db, game)
@@ -230,9 +218,6 @@ def room_command(db, game, actor, action, payload):
             raise HTTPException(409, "该参与者已不再占据该席位")
         auth.revoke_participant(db, target["id"], block=body.block)
         if seat:
-            db.execute(
-                "UPDATE invites SET valid=0 WHERE game_id=? AND seat_id=?", (game["id"], seat["id"])
-            )
             seat["occupant_id"] = None
             if game["status"] == "lobby":
                 seat["ready"] = False
@@ -240,6 +225,8 @@ def room_command(db, game, actor, action, payload):
     elif action == "room.replace":
         body = schemas.Replace.model_validate(payload)
         seat = seat_for(game, body.seat_id)
+        if seat["occupant_id"]:
+            raise HTTPException(409, "请先移出原玩家，再让观战者接管空席")
         substitute = db.execute(
             "SELECT * FROM participants WHERE id=? AND game_id=? AND kind='spectator' AND active=1 AND blocked=0",
             (body.participant_id, game["id"]),
@@ -258,9 +245,6 @@ def room_command(db, game, actor, action, payload):
                 access_ids = list(dict.fromkeys(access_ids + json.loads(old["access_ids"])))
             auth.revoke_participant(db, old["id"], block=bool(old["blocked"]))
         db.execute(
-            "UPDATE invites SET valid=0 WHERE game_id=? AND seat_id=?", (game["id"], seat["id"])
-        )
-        db.execute(
             "UPDATE participants SET kind='player',seat_id=?,access_ids=? WHERE id=?",
             (seat["id"], storage.dumps(access_ids), substitute["id"]),
         )
@@ -269,6 +253,8 @@ def room_command(db, game, actor, action, payload):
             (substitute["id"],),
         )
         seat["occupant_id"], seat["name"] = substitute["id"], substitute["name"]
+        if game["status"] == "lobby":
+            seat["ready"] = False
         if not body.keep_actions:
             clear_seat_actions(game, seat["id"])
         text = seat["id"] + "号席位已由【" + substitute["name"] + "】接管"
@@ -331,21 +317,17 @@ def room_command(db, game, actor, action, payload):
             else "【" + target["name"] + "】已解除禁言"
         )
     elif action == "room.revoke_invite":
-        if set(payload) != {"seat_id"}:
-            raise HTTPException(422, "请选择邀请码范围")
-        seat_id = payload["seat_id"]
-        if seat_id != "spectator":
-            seat_for(game, seat_id)
+        body = schemas.Invite.model_validate(payload)
         db.execute(
-            "UPDATE invites SET valid=0 WHERE game_id=? AND seat_id IS ?",
-            (game["id"], None if seat_id == "spectator" else seat_id),
+            "UPDATE invites SET valid=0 WHERE game_id=? AND kind=?",
+            (game["id"], body.kind),
         )
         game["version"] += 1
         return [
             storage.add_message(
                 db,
                 game["id"],
-                text="所选未使用邀请码已撤销",
+                text="所选统一邀请码已撤销，已入场身份不受影响",
                 audience=["host"],
                 channel_id="information",
             )
@@ -431,7 +413,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 kind="chat",
                 sender_id=actor["id"],
                 sender_name=seat["name"] if seat else actor["name"],
-                avatar_role_id=seat["avatar_role_id"]
+                avatar_role_id=(seat["avatar_role_id"] if game["status"] != "lobby" else None)
                 if seat
                 else ("host" if actor["kind"] == "host" else None),
                 channel_id=body.channel_id,

@@ -117,23 +117,15 @@ def can_use_card(game, card):
     )
 
 
-def create_game(codex):
-    require(
-        isinstance(codex, list)
-        and len(codex) == 11
-        and all(isinstance(r, str) and r in ROLES for r in codex)
-        and len(set(codex)) == 11,
-        "请确认11名不重复的魔典角色",
-    )
-    rng = SystemRandom()
+def deal_cards(game):
+    require(game["phase"] == "lobby" and not game["cards"], "本局已经发牌")
     order = list(ROLES)
+    rng = SystemRandom()
     while True:
         rng.shuffle(order)
         if order.index("millia") // 2 != order.index("arisa") // 2:
             break
-    shuffled_codex = list(codex)
-    rng.shuffle(shuffled_codex)
-    cards = {
+    game["cards"] = {
         r: {
             "id": r,
             "role_id": r,
@@ -146,6 +138,22 @@ def create_game(codex):
         }
         for r in order
     }
+    for i, s in enumerate(game["seats"]):
+        s["cards"] = order[i * 2 : i * 2 + 2]
+        s["ready"] = False
+    game["phase"] = "ordering"
+
+
+def create_game(codex):
+    require(
+        isinstance(codex, list)
+        and len(codex) == 11
+        and all(isinstance(r, str) and r in ROLES for r in codex)
+        and len(set(codex)) == 11,
+        "请确认11名不重复的魔典角色",
+    )
+    shuffled_codex = list(codex)
+    SystemRandom().shuffle(shuffled_codex)
     return {
         "id": uid(),
         "version": 0,
@@ -155,7 +163,7 @@ def create_game(codex):
         "phase": "lobby",
         "deadline": None,
         "codex": shuffled_codex,
-        "cards": cards,
+        "cards": {},
         "seats": [
             {
                 "id": str(i + 1),
@@ -163,7 +171,7 @@ def create_game(codex):
                 "name": f"{i + 1}号玩家",
                 "avatar_role_id": None,
                 "ready": False,
-                "cards": order[i * 2 : i * 2 + 2],
+                "cards": [],
             }
             for i in range(7)
         ],

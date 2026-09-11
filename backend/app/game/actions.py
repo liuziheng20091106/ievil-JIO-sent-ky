@@ -289,7 +289,8 @@ def pending_action(game, item):
 def host_actions(game):
     result = []
     if game["status"] == "lobby":
-        result.append(action("host.start", "全部准备后开局", group="流程"))
+        if game["phase"] == "ordering":
+            result.append(action("host.start", "全部再次准备后开局", group="流程"))
         result.append(
             action(
                 "host.codex",
@@ -527,36 +528,47 @@ def actions_for(game, actor):
     card = current(game, s)
     result = []
     if game["status"] == "lobby":
+        if game["phase"] == "ordering":
+            result.append(
+                action(
+                    "lobby.order",
+                    "选择上层角色",
+                    [
+                        field(
+                            "top",
+                            "上层角色",
+                            "select",
+                            [
+                                (cid, ROLES[game["cards"][cid]["role_id"]]["name"])
+                                for cid in s["cards"]
+                            ],
+                        )
+                    ],
+                    group="准备",
+                )
+            )
         result.append(
             action(
-                "lobby.order",
-                "选择上层角色",
-                [
-                    field(
-                        "top",
-                        "上层角色",
-                        "select",
-                        [(cid, ROLES[game["cards"][cid]["role_id"]]["name"]) for cid in s["cards"]],
-                    )
-                ],
+                "lobby.ready",
+                "取消准备"
+                if s["ready"]
+                else ("确认上下牌并再次准备" if game["phase"] == "ordering" else "准备发牌"),
                 group="准备",
             )
         )
         result.append(
-            action("lobby.ready", "取消准备" if s["ready"] else "确认上下牌并准备", group="准备")
-        )
-        result.append(
             action(
                 "player.profile",
-                "设置公开称呼和头像",
+                "设置公开称呼和开局示人头像",
                 [
                     field("name", "公开称呼", default=s["name"]),
                     field(
                         "avatar",
-                        "示人头像（不代表真实角色）",
+                        "示人头像（开局前保密，不代表真实角色）",
                         "select",
-                        [("", "中性席位头像")] + role_options(),
+                        [("", "开局时使用上层角色头像")] + role_options(),
                         required=False,
+                        default=s["avatar_role_id"] or "",
                     ),
                 ],
                 group="准备",

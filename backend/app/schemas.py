@@ -17,7 +17,6 @@ class Create(Input):
 
 
 class Invite(Input):
-    seat_id: str | None = None
     kind: Literal["player", "spectator"]
 
 

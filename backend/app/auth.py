@@ -107,7 +107,6 @@ def revoke_participant(db, participant_id, *, block=False):
         "UPDATE participants SET active=0,blocked=? WHERE id=?", (int(block), participant_id)
     )
     db.execute("UPDATE sessions SET valid=0 WHERE participant_id=?", (participant_id,))
-    db.execute("UPDATE invites SET valid=0 WHERE participant_id=?", (participant_id,))
 
 
 def me(actor):

@@ -37,8 +37,7 @@ def initialize():
         );
         CREATE TABLE IF NOT EXISTS invites (
             code_hash TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
-            seat_id TEXT, kind TEXT NOT NULL, participant_id TEXT,
-            valid INTEGER NOT NULL DEFAULT 1, redeemed_by TEXT
+            kind TEXT NOT NULL, valid INTEGER NOT NULL DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS channels (
             id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
@@ -58,6 +57,25 @@ def initialize():
             image BLOB, created_at TEXT NOT NULL
         );
         """)
+    with transaction() as db:
+        if "seat_id" in {row["name"] for row in db.execute("PRAGMA table_info(invites)")}:
+            db.execute("UPDATE invites SET valid=0")
+            for column in ("seat_id", "participant_id", "redeemed_by"):
+                db.execute(f"ALTER TABLE invites DROP COLUMN {column}")
+        for row in db.execute("SELECT state FROM games WHERE status='lobby'").fetchall():
+            game = json.loads(row["state"])
+            if game["phase"] == "lobby" and game["cards"]:
+                game["phase"] = "ordering"
+                game["version"] += 1
+                game["snapshots"] = []
+                for seat in game["seats"]:
+                    seat["ready"] = False
+                save_game(db, game)
+                db.execute(
+                    "UPDATE messages SET avatar_role_id=NULL "
+                    "WHERE game_id=? AND kind='chat' AND sender_id!='host'",
+                    (game["id"],),
+                )
 
 
 @contextmanager

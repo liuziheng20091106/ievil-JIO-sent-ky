@@ -57,6 +57,7 @@ def runtime_actions(game, participants):
     seats = [
         {"value": seat["id"], "label": seat["id"] + "号 · " + (seat["name"] or "空席")}
         for seat in game["seats"]
+        if not seat["occupant_id"]
     ]
     active = [row for row in participants if row["active"] and not row["blocked"]]
     people = [
@@ -81,7 +82,7 @@ def runtime_actions(game, participants):
             "label": "移出参与者 / 本局拉黑",
             "group": "房间管理",
             "danger": True,
-            "description": "撤销玩家或观战者的全部会话；玩家席位旧邀请码也会失效，不改变角色与技能状态。",
+            "description": "撤销玩家或观战者的全部会话，不改变角色与技能状态。统一邀请码不受影响；发牌后空席只能由主持人安排观战者接管。",
             "fields": [
                 {
                     "name": "participant_id",
@@ -99,14 +100,14 @@ def runtime_actions(game, participants):
             ],
         }
     ]
-    if substitutes:
+    if substitutes and seats:
         actions.append(
             {
                 "id": "room.replace",
                 "label": "观战者接管席位",
                 "group": "房间管理",
                 "danger": True,
-                "description": "保留该席双牌、状态与剩余次数。请先在主持人牌表查看该席状态和已提交行动；勾选后才继承原私密历史或保留行动。旧操作者立即失去访问权。",
+                "description": "先移出原玩家，再接管空席；保留该席双牌、状态与剩余次数。请先在主持人牌表查看状态和已提交行动；勾选后才继承原私密历史或保留行动。",
                 "fields": [
                     select_seat,
                     {
@@ -175,16 +176,19 @@ def runtime_actions(game, participants):
     actions.append(
         {
             "id": "room.revoke_invite",
-            "label": "撤销未使用的邀请码",
+            "label": "撤销统一邀请码",
             "group": "房间管理",
             "danger": True,
             "fields": [
                 {
-                    "name": "seat_id",
+                    "name": "kind",
                     "label": "邀请码范围",
                     "type": "select",
                     "required": True,
-                    "options": seats + [{"value": "spectator", "label": "观战邀请码"}],
+                    "options": [
+                        {"value": "player", "label": "统一玩家邀请码"},
+                        {"value": "spectator", "label": "统一观战邀请码"},
+                    ],
                 }
             ],
         }

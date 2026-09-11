@@ -7,13 +7,13 @@ import {
 } from "react";
 import { api, errorText } from "./api";
 import { Avatar, Evidence } from "./components";
+import { draftKey, useDraft } from "./drafts";
 import { useGame } from "./state";
 import type { Message, MessagePage } from "./types";
 
 export function Chat({ onRole }: { onRole: (id: string) => void }) {
   const { state, session, messages, mergeMessages, connection } = useGame();
   const [channelId, setChannelId] = useState("public");
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -33,10 +33,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
   ];
   const channel = channels.find((item) => item.id === channelId) ?? channels[0];
   const activeId = channel?.id ?? "public";
-  const currentChannel = useRef(activeId);
-  currentChannel.current = activeId;
+  const scope = draftKey(state?.id ?? null, session.actor?.id ?? null, "chat", activeId);
+  const [draft, setDraft, clearDraft, draftError] = useDraft(scope, "");
+  const currentChannel = useRef(scope);
+  currentChannel.current = scope;
   const rows = messages.filter((message) => message.channel_id === activeId);
-  const draft = drafts[activeId] ?? "";
   const lastId = rows.at(-1)?.id ?? 0;
   const scrollBottom = () => {
     const node = scroller.current;
@@ -66,8 +67,10 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       controller.signal,
     )
       .then((page) => {
-        mergeMessages(page.messages);
-        setHasMore(page.has_more);
+        if (!controller.signal.aborted) {
+          mergeMessages(page.messages);
+          setHasMore(page.has_more);
+        }
       })
       .catch((failure) => {
         if (!controller.signal.aborted) setError(errorText(failure));
@@ -106,7 +109,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       const page = await api<MessagePage>(
         `/games/${state.id}/messages?channel_id=${encodeURIComponent(activeId)}&before=${rows[0].id}`,
       );
-      if (currentChannel.current !== activeId) return;
+      if (currentChannel.current !== scope) return;
       if (scroller.current)
         restoreScroll.current = {
           height: scroller.current.scrollHeight,
@@ -115,9 +118,9 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       mergeMessages(page.messages);
       setHasMore(page.has_more);
     } catch (failure) {
-      if (currentChannel.current === activeId) setError(errorText(failure));
+      if (currentChannel.current === scope) setError(errorText(failure));
     } finally {
-      if (currentChannel.current === activeId) setLoading(false);
+      if (currentChannel.current === scope) setLoading(false);
     }
   };
   const send = async (event: FormEvent) => {
@@ -140,17 +143,13 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
         text: submitted,
       });
       mergeMessages([message]);
-      setDrafts((previous) => ({
-        ...previous,
-        [recipient]:
-          previous[recipient] === submitted ? "" : previous[recipient],
-      }));
-      if (recipient === currentChannel.current) {
+      clearDraft();
+      if (scope === currentChannel.current) {
         nearBottom.current = true;
         requestAnimationFrame(scrollBottom);
       }
     } catch (failure) {
-      setError(
+      if (scope === currentChannel.current) setError(
         `${errorText(failure)} 草稿已保留；如响应丢失，请先检查记录是否已有此消息，再决定是否重发。`,
       );
     } finally {
@@ -274,6 +273,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             {error}
           </p>
         )}
+        {draftError && <p className="warning" role="alert">{draftError}</p>}
         <div className="compose-controls">
           <textarea
             aria-label={`发消息到${channel?.label}`}
@@ -286,12 +286,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             rows={2}
             value={draft}
             disabled={!channel?.can_send || state?.status === "ended"}
-            onChange={(event) =>
-              setDrafts((previous) => ({
-                ...previous,
-                [activeId]: event.target.value,
-              }))
-            }
+            onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (
                 event.key === "Enter" &&

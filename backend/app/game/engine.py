@@ -24,6 +24,7 @@ from .state import (
     check_winner,
     clear_seat_actions,
     current,
+    deal_cards,
     eligible_voters,
     finish,
     next_nominator,
@@ -693,10 +694,14 @@ def sync_declarations(game):
 
 def host_command(game, events, action, data):
     if action == "host.start":
+        require(game["status"] == "lobby" and game["phase"] == "ordering", "请先全员准备并发牌")
         require(
             all(s["occupant_id"] and s["ready"] for s in game["seats"]),
             "需要7名玩家全部入座、确认上下牌并准备",
         )
+        for s in game["seats"]:
+            if not s["avatar_role_id"]:
+                s["avatar_role_id"] = current(game, s)["role_id"]
         game["status"] = "playing"
         game["phase"] = "witch"
         honoka = role_card(game, "honoka")
@@ -891,10 +896,17 @@ def player_command(game, actor, events, action, data):
     sid = s["id"]
     card = current(game, s)
     if action == "lobby.order":
+        require(game["status"] == "lobby" and game["phase"] == "ordering", "发牌后才能调整上下牌")
         s["cards"] = [data["top"]] + [cid for cid in s["cards"] if cid != data["top"]]
         s["ready"] = False
     elif action == "lobby.ready":
+        require(game["status"] == "lobby" and game["phase"] in {"lobby", "ordering"})
         s["ready"] = not s["ready"]
+        if game["phase"] == "lobby" and all(
+            other["occupant_id"] and other["ready"] for other in game["seats"]
+        ):
+            deal_cards(game)
+            notify(game, events, "全员首次准备完成，已私下发牌；请调整上下牌并再次准备。")
     elif action == "player.profile":
         require(1 <= len(data["name"].strip()) <= 30, "公开称呼需为1至30字")
         s["name"] = data["name"].strip()

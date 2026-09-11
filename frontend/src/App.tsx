@@ -10,6 +10,7 @@ import {
   RecordView,
   RoleCard,
 } from "./components";
+import { draftKey, useDraft } from "./drafts";
 import { useGame } from "./state";
 import type { Invite, Seat } from "./types";
 
@@ -186,12 +187,14 @@ export function App() {
 }
 
 function Entry() {
-  const { authenticate } = useGame();
+  const { authenticate, setError: setGlobalError } = useGame();
   const [mode, setMode] = useState<"join" | "host">("join");
   const [code, setCode] = useState(
     () => new URLSearchParams(location.search).get("code") ?? "",
   );
-  const [name, setName] = useState("");
+  const [name, setName, clearName, draftError] = useDraft(
+    draftKey(null, null, "entry-name"), "",
+  );
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -206,6 +209,13 @@ function Entry() {
           ? { password }
           : { code: code.trim(), name: name.trim() },
       );
+      if (mode === "join") {
+        try {
+          clearName();
+        } catch (failure) {
+          setGlobalError(errorText(failure));
+        }
+      }
     } catch (failure) {
       setError(errorText(failure));
     } finally {
@@ -251,7 +261,7 @@ function Entry() {
       <section className="entry-form panel">
         <span className="eyebrow">欢迎来到魔法裁判</span>
         <h2>
-          {mode === "join" ? "你的席位，已被留好。" : "今晚，由你翻开魔典。"}
+          {mode === "join" ? "入席，一起等待发牌。" : "今晚，由你翻开魔典。"}
         </h2>
         <div className="segmented" aria-label="选择登录方式">
           <button
@@ -301,7 +311,7 @@ function Entry() {
                 />
               </label>
               <p className="hint">
-                玩家与观战者均凭邀请码进入。双牌只对本人和主持人可见；入席后可选择上下顺序。
+                玩家共用一个邀请码，随机进入空席。七人首次准备后私下发牌，调整上下顺序并再次准备后开局。
               </p>
             </>
           ) : (
@@ -322,6 +332,7 @@ function Entry() {
               </p>
             </>
           )}
+          {draftError && mode === "join" && <p className="error" role="alert">{draftError}</p>}
           {error && (
             <p className="error" role="alert">
               {error}
@@ -338,7 +349,7 @@ function Entry() {
         <div className="entry-note">
           <span>关于这场游戏</span>
           <p>
-            邀请仅在本局有效。刷新或短暂掉线不会重新发牌；失去凭证时，请联系主持人换发邀请。
+            邀请仅在本局有效。刷新或短暂掉线使用原会话恢复；失去凭证时，请以观战身份加入并联系主持人接管原席。
           </p>
         </div>
       </section>
@@ -353,8 +364,11 @@ function CreateGame({
   onCreated: () => void;
   onCancel?: () => void;
 }) {
-  const { catalog, create } = useGame();
-  const [selected, setSelected] = useState<string[]>(catalog.default_codex);
+  const { catalog, create, session, setError: setGlobalError } = useGame();
+  const [selected, setSelected, clearDraft, draftError] = useDraft<string[]>(
+    draftKey(session.game_id, session.actor?.id ?? null, "create"),
+    catalog.default_codex,
+  );
   const [confirmed, setConfirmed] = useState(false);
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -364,6 +378,11 @@ function CreateGame({
     setError("");
     try {
       await create(selected);
+      try {
+        clearDraft();
+      } catch (failure) {
+        setGlobalError(errorText(failure));
+      }
       onCreated();
     } catch (failure) {
       setError(errorText(failure));
@@ -377,7 +396,7 @@ function CreateGame({
         <span className="eyebrow">主持人 · 建立新对局</span>
         <h1>确认魔典，再让命运发牌。</h1>
         <p>
-          选择本局的11名魔典角色。系统会随机排列魔典，并随机分配七席双牌；此处选择不代表出场顺序。
+          选择本局的11名魔典角色并随机排列。创建后先邀请七位玩家入席，全员首次准备后才随机分配双牌。
         </p>
       </div>
       <section className="panel codex-picker">
@@ -426,6 +445,7 @@ function CreateGame({
             我已确认这11名角色为本局魔典名单，实际转化顺序由系统随机生成。
           </span>
         </label>
+        {draftError && <p className="error" role="alert">{draftError}</p>}
         {error && (
           <p className="error" role="alert">
             {error}
@@ -442,7 +462,7 @@ function CreateGame({
             disabled={selected.length !== 11 || !confirmed || busy}
             onClick={() => setReview(true)}
           >
-            确认名单，准备发牌
+            确认名单，建立候场
           </button>
         </div>
       </section>
@@ -461,13 +481,13 @@ function CreateGame({
               </span>
             ))}
           </div>
-          <p>将随机生成七席双角色牌及魔典顺序；进入候场后可为每席私发邀请。</p>
+          <p>将随机生成魔典顺序，建立七个空席。玩家通过同一个邀请码随机入席；全员首次准备后才发牌。</p>
           <button
             className="primary full-width"
             disabled={busy}
             onClick={() => void submit()}
           >
-            {busy ? "正在创建…" : "确认创建并随机发牌"}
+            {busy ? "正在创建…" : "确认创建候场"}
           </button>
           {error && (
             <p className="error" role="alert">
@@ -724,7 +744,7 @@ function SeatList({
                 : state?.status === "lobby"
                   ? seat.ready
                     ? "已准备"
-                    : "选择双牌中"
+                    : state.phase === "lobby" ? "等待准备" : "选择双牌中"
                   : seat.alive
                     ? "存活"
                     : "已出局"}
@@ -792,12 +812,14 @@ function PublicTable({
       )}
       {state.status === "lobby" && (
         <div className="lobby-note">
-          <span className="eyebrow">入席 → 排列双牌 → 准备</span>
+          <span className="eyebrow">随机入席 → 首次准备 → 私下排牌 → 再次准备 → 主持人开局</span>
           <h3>
             {state.seats.filter((seat) => seat.ready).length} / 7 位玩家已准备
           </h3>
           <p>
-            每席持有两张牌，上层先行。请在「行动」中确认上下顺序、公开称呼与示人身份，再准备开局。
+            {state.phase === "lobby"
+              ? "还未发牌。请在「行动」中点击准备发牌；七人首次准备齐全后，系统才会私下发放双牌。"
+              : "双牌已私下发放。请在「行动」中选择上层角色，再次准备；换序会取消本次准备。开局前所有公开角色头像均隐藏。"}
           </p>
           <progress
             value={state.seats.filter((seat) => seat.ready).length}
@@ -846,6 +868,9 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
         <p className="hint">
           观战者不占玩家席位，不获得角色牌。接管席位须由主持人明确授权。
         </p>
+      )}
+      {session.actor?.kind === "player" && state.phase === "lobby" && (
+        <p className="hint">等待七位玩家首次准备，之后在这里查看自己的双牌。</p>
       )}
       <div className="private-cards">
         {state.self.cards.map((card, index) => (
@@ -982,14 +1007,12 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   if (!state || session.actor?.kind !== "host") return null;
-  const issue = async (seatId: string | null) => {
-    const key = seatId ?? "spectator";
+  const issue = async (key: Invite["kind"]) => {
     setBusy(key);
     setError("");
     try {
       const invite = await api<Invite>(`/games/${state.id}/invites`, {
-        seat_id: seatId,
-        kind: seatId ? "player" : "spectator",
+        kind: key,
       });
       setInvites((previous) => ({ ...previous, [key]: invite }));
     } catch (failure) {
@@ -1011,7 +1034,7 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
       <div className="invite-code">
         <label>
           <span className="sr-only">
-            {key === "spectator" ? "观战" : `${key}号席位`}邀请码
+            统一{key === "spectator" ? "观战" : "玩家"}邀请码
           </span>
           <input
             readOnly
@@ -1047,12 +1070,21 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
         <span className="tag gold">仅主持人可见</span>
       </div>
       <p className="hint">
-        邀请码绑定本局席位及双牌，仅私下发放。重新生成会撤销旧未用码；已入席玩家可换发身份恢复码，兑换后旧会话失效但牌和历史保留。换成另一位玩家请使用观战替补操作。
+        玩家共用一个码，随机进入空席；全员首次准备后发牌。重新生成会撤销同类旧码，不影响已入场会话。发牌后失去凭证或更换玩家，请从观战者中接管原席，不重发牌。
       </p>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
+      )}
+      {state.phase === "lobby" && state.status === "lobby" && (
+        <section className="spectator-invite">
+          <h3>统一玩家入口</h3>
+          <button className="secondary" disabled={!!busy} onClick={() => void issue("player")}>
+            {busy === "player" ? "生成中…" : invites.player ? "重新生成统一玩家邀请码" : "生成统一玩家邀请码"}
+          </button>
+          {inviteControls("player")}
+        </section>
       )}
       <div className="invite-grid">
         {state.seats.map((seat) => (
@@ -1092,22 +1124,6 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
                 </button>
               ))}
             </div>
-            {state.status !== "ended" && (
-              <button
-                className="secondary full-width"
-                disabled={!!busy}
-                onClick={() => void issue(seat.id)}
-              >
-                {busy === seat.id
-                  ? "生成中…"
-                  : seat.occupied
-                    ? "换发身份恢复码（旧会话兑换后失效）"
-                    : invites[seat.id]
-                      ? "换发邀请码（旧未用码失效）"
-                      : "生成此席邀请码"}
-              </button>
-            )}
-            {inviteControls(seat.id)}
             <details>
               <summary>完整双牌状态与剩余次数</summary>
               <RecordView value={seat.cards} />
@@ -1118,15 +1134,15 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
       <section className="spectator-invite">
         <h3>观战与替补入口</h3>
         <p className="hint">
-          观战码不分配角色。替补从已入场观战者中选择，继承范围及已提交行动须单独确认。
+          观战码可供多人使用，不分配角色。需要替补时，先移出原玩家，再选择观战者接管空席；继承范围及已提交行动须单独确认。
         </p>
         {state.status !== "ended" && (
           <button
             className="secondary"
             disabled={!!busy}
-            onClick={() => void issue(null)}
+            onClick={() => void issue("spectator")}
           >
-            {busy === "spectator" ? "生成中…" : "生成观战邀请码"}
+            {busy === "spectator" ? "生成中…" : invites.spectator ? "重新生成统一观战邀请码" : "生成统一观战邀请码"}
           </button>
         )}
         {inviteControls("spectator")}

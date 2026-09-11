@@ -9,6 +9,7 @@ import {
 } from "react";
 import { api, ApiError, errorText } from "./api";
 import { connectLive } from "./live";
+import { clearActorDrafts } from "./drafts";
 import type {
   Catalog,
   Connection,
@@ -54,11 +55,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [draftError, setDraftError] = useState("");
   const [connection, setConnection] = useState<Connection>("connecting");
   const latest = useRef(0);
-  const room = useRef<string | null>(null);
+  const actor = useRef<Session["actor"]>(null);
+  const scope = JSON.stringify([session.game_id, session.actor?.id ?? null]);
+  const identity = useRef(scope);
   const mutation = useRef(false);
   const mergeMessages = useCallback((items: Message[]) => {
+    if (identity.current !== scope) return;
     for (const item of items)
       latest.current = Math.max(latest.current, item.id);
     setMessages((previous) =>
@@ -68,8 +73,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
         ).values(),
       ].sort((a, b) => a.id - b.id),
     );
-  }, []);
-  const acceptState = useCallback((next: GameView) => {
+  }, [scope]);
+  const acceptState = useCallback((next: GameView, owner: string) => {
+    if (identity.current !== owner) return;
     setState((previous) =>
       previous?.id === next.id && previous.version > next.version
         ? previous
@@ -78,25 +84,31 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, []);
   const adoptSession = useCallback(
     async (next: Session) => {
-      if (room.current !== next.game_id) {
-        room.current = next.game_id;
+      const owner = JSON.stringify([next.game_id, next.actor?.id ?? null]);
+      if (identity.current !== owner) {
+        if (actor.current && actor.current.id !== next.actor?.id)
+          setDraftError(clearActorDrafts(actor.current.id));
+        identity.current = owner;
+        actor.current = next.actor;
         latest.current = 0;
         setMessages([]);
         setState(null);
       }
       setSession(next);
       if (next.actor && next.game_id) {
-        acceptState(await api<GameView>(`/games/${next.game_id}/state`));
+        acceptState(await api<GameView>(`/games/${next.game_id}/state`), owner);
       }
     },
     [acceptState],
   );
   const refresh = useCallback(async () => {
+    const owner = identity.current;
     try {
       const [nextCatalog, nextSession] = await Promise.all([
         api<Catalog>("/catalog"),
         api<Session>("/me"),
       ]);
+      if (identity.current !== owner) return;
       setCatalog(nextCatalog);
       await adoptSession(nextSession);
       setError("");
@@ -122,6 +134,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     if (!session.actor || !session.game_id) return;
     let active = true;
     const gameId = session.game_id;
+    const owner = identity.current;
     const catchUp = async (after: number) => {
       try {
         let cursor = after;
@@ -129,7 +142,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
           const page = await api<MessagePage>(
             `/games/${gameId}/messages?after=${cursor}`,
           );
-          if (!active) return;
+          if (!active || identity.current !== owner) return;
           mergeMessages(page.messages);
           const nextCursor = Math.max(
             cursor,
@@ -139,30 +152,32 @@ export function GameProvider({ children }: { children: ReactNode }) {
           cursor = nextCursor;
         }
       } catch (failure) {
-        if (active) setError(errorText(failure));
+        if (active && identity.current === owner) setError(errorText(failure));
       }
     };
     const disconnect = connectLive(
       (event) => {
-        if (!active) return;
+        if (!active || identity.current !== owner) return;
         if (event.type === "sync") {
           const cursor = latest.current;
-          acceptState(event.state);
+          acceptState(event.state, owner);
           mergeMessages(event.messages);
           if (cursor) void catchUp(cursor);
-        } else if (event.type === "state") acceptState(event.state);
+        } else if (event.type === "state") acceptState(event.state, owner);
         else if (event.type === "message") mergeMessages([event.message]);
       },
       (status) => {
-        if (!active) return;
+        if (!active || identity.current !== owner) return;
         setConnection(status);
         if (status === "unauthorized") {
+          if (actor.current) setDraftError(clearActorDrafts(actor.current.id));
+          actor.current = null;
+          identity.current = JSON.stringify([null, null]);
           setError("会话已失效或席位已变更，请重新进入。");
           setSession(emptySession);
           setState(null);
           setMessages([]);
           latest.current = 0;
-          room.current = null;
         }
       },
     );
@@ -177,8 +192,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
     history.replaceState(null, "", location.pathname);
   };
   const logout = async () => {
+    const owner = identity.current;
     await api("/logout", {});
-    room.current = null;
+    if (identity.current !== owner) return;
+    if (actor.current) setDraftError(clearActorDrafts(actor.current.id));
+    actor.current = null;
+    identity.current = JSON.stringify([null, null]);
     latest.current = 0;
     setSession(emptySession);
     setState(null);
@@ -186,8 +205,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
     setError("");
   };
   const create = async (codex: string[]) => {
+    const owner = identity.current;
     const next = await api<GameView>("/games", { codex });
-    room.current = next.id;
+    if (identity.current !== owner) return;
+    identity.current = JSON.stringify([next.id, actor.current?.id ?? null]);
     latest.current = 0;
     setMessages([]);
     setState(next);
@@ -202,6 +223,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       throw new Error("另一项操作正在提交，请稍候。");
     mutation.current = true;
     setBusy(true);
+    const owner = identity.current;
     try {
       acceptState(
         await api<GameView>(`/games/${state.id}/commands`, {
@@ -209,14 +231,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
           action: action.id,
           payload: { ...action.payload, ...payload },
         }),
+        owner,
       );
-      setError("");
+      if (identity.current === owner) setError("");
     } catch (failure) {
+      if (identity.current !== owner) throw failure;
       // A lost response may already have committed; refresh, never replay a mutation.
       try {
-        acceptState(await api<GameView>(`/games/${state.id}/state`));
+        acceptState(await api<GameView>(`/games/${state.id}/state`), owner);
       } catch (refreshFailure) {
-        setError(errorText(refreshFailure));
+        if (identity.current === owner) setError(errorText(refreshFailure));
       }
       if (failure instanceof ApiError && failure.status === 409)
         throw new Error(
@@ -236,7 +260,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         state,
         messages,
         loading,
-        error,
+        error: error || draftError,
         connection,
         busy,
         setError,
