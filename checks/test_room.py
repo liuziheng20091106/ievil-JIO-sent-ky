@@ -1,14 +1,17 @@
 """Room access, preparation, and legacy migration must preserve private seat state."""
 
+import asyncio
 import tempfile
+import time
 import unittest
+from contextlib import suppress
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import auth, storage
+from backend.app import auth, realtime, storage
 from backend.app.game import DEFAULT_CODEX, create_game
 from backend.app.game.state import deal_cards
 from backend.app.main import app
@@ -226,6 +229,121 @@ class RoomAccess(unittest.TestCase):
                 self.assertIsNone(
                     db.execute("SELECT avatar_role_id FROM messages").fetchone()["avatar_role_id"]
                 )
+
+
+class RoomReset(unittest.TestCase):
+    def test_reset_and_next_game_clear_previous_game_data(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(storage, "DATA_DIR", Path(directory)),
+            TestClient(app) as client,
+        ):
+            client.post("/api/host/login", json={"password": "114514"}).raise_for_status()
+            host = {"Cookie": f"{auth.COOKIE}={client.cookies[auth.COOKIE]}"}
+            game = client.post("/api/games", json={"codex": DEFAULT_CODEX}).json()
+            root = f"/api/games/{game['id']}"
+            code = client.post(
+                root + "/invites", headers=host, json={"kind": "player"}
+            ).json()["code"]
+
+            def join(invite_code, name):
+                client.cookies.clear()
+                result = client.post("/api/join", json={"code": invite_code, "name": name})
+                result.raise_for_status()
+                headers = {"Cookie": f"{auth.COOKIE}={client.cookies[auth.COOKIE]}"}
+                client.cookies.clear()
+                return headers
+
+            player = join(code, "一号玩家")
+            self.assertEqual(client.post("/api/reset", json={}).status_code, 401)
+            self.assertEqual(client.post("/api/reset", json={}, headers=player).status_code, 403)
+            self.assertEqual(client.post("/api/reset", json={}, headers=host).status_code, 200)
+            self.assertIsNone(client.get("/api/me", headers=host).json()["actor"]["game_id"])
+            self.assertIsNone(client.get("/api/me", headers=player).json()["actor"])
+            self.assertEqual(client.get(root + "/state", headers=host).status_code, 404)
+            self.assertEqual(
+                client.post("/api/join", json={"code": code, "name": "旧码"}).status_code, 403
+            )
+            with storage.connect() as db:
+                for table in ("games", "participants", "invites", "channels", "messages", "evidence"):
+                    self.assertEqual(
+                        db.execute(f"SELECT count(*) AS total FROM {table}").fetchone()["total"],
+                        0,
+                        table,
+                    )
+                self.assertEqual(
+                    db.execute("SELECT count(*) AS total FROM sessions WHERE kind='host'").fetchone()[
+                        "total"
+                    ],
+                    1,
+                )
+            second = client.post("/api/games", json={"codex": DEFAULT_CODEX}, headers=host)
+            second.raise_for_status()
+            second_root = f"/api/games/{second.json()['id']}"
+            second_code = client.post(
+                second_root + "/invites", headers=host, json={"kind": "player"}
+            ).json()["code"]
+            player = join(second_code, "二号玩家")
+            ended = client.post(
+                second_root + "/commands",
+                headers=host,
+                json={
+                    "expected_version": client.get(second_root + "/state", headers=host)
+                    .json()["version"],
+                    "action": "host.end",
+                    "payload": {"winner": "aborted", "reason": "回归验证终止"},
+                },
+            )
+            self.assertEqual(ended.status_code, 200, ended.text)
+            self.assertEqual(ended.json()["status"], "ended")
+            self.assertEqual(client.get(second_root + "/state", headers=host).status_code, 200)
+            third = client.post("/api/games", json={"codex": DEFAULT_CODEX}, headers=host)
+            third.raise_for_status()
+            self.assertEqual(client.get(second_root + "/state", headers=host).status_code, 404)
+            self.assertIsNone(client.get("/api/me", headers=player).json()["actor"])
+            self.assertEqual(
+                client.post("/api/join", json={"code": second_code, "name": "旧码"}).status_code,
+                403,
+            )
+            third_code = client.post(
+                f"/api/games/{third.json()['id']}/invites", headers=host, json={"kind": "player"}
+            ).json()["code"]
+            self.assertEqual(
+                client.post("/api/join", json={"code": third_code, "name": "新码"}).status_code, 200
+            )
+
+
+class Heartbeat(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_connection_without_a_game_never_writes_presence(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(storage, "DATA_DIR", Path(directory)),
+        ):
+            storage.initialize()
+            peer = realtime.Connection(
+                socket=None,
+                token_hash="stale",
+                game_id=None,
+                participant_id="host",
+                name="主持人",
+                kind="host",
+                seat_id=None,
+            )
+            peer.last_pong = time.monotonic() - 61
+            realtime.connections.add(peer)
+            try:
+                with patch.object(realtime.logger, "exception") as failed:
+                    heartbeat = asyncio.create_task(realtime.clock())
+                    await asyncio.sleep(1.3)
+                    heartbeat.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await heartbeat
+                self.assertFalse(failed.called, failed.call_args)
+                self.assertNotIn(peer, realtime.connections)
+                with storage.connect() as db:
+                    self.assertFalse(db.execute("SELECT id FROM messages").fetchall())
+            finally:
+                realtime.connections.clear()
 
 
 if __name__ == "__main__":

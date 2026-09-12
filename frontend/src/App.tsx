@@ -12,7 +12,7 @@ import {
 } from "./components";
 import { draftKey, useDraft } from "./drafts";
 import { useGame } from "./state";
-import type { Invite, Seat } from "./types";
+import type { Invite, Seat, Session } from "./types";
 
 type Tab = "chat" | "table" | "cards" | "actions" | "manage";
 export function App() {
@@ -482,6 +482,7 @@ function CreateGame({
             ))}
           </div>
           <p>将随机生成魔典顺序，建立七个空席。玩家通过同一个邀请码随机入席；全员首次准备后才发牌。</p>
+          <p className="hint">建立新对局会清空上一局的全部数据（邀请码、玩家、进度、聊天与证物）。</p>
           <button
             className="primary full-width"
             disabled={busy}
@@ -809,7 +810,7 @@ function PublicTable({
             </button>
           )}
           <p className="hint">
-            本局记录只读，未获准的信息不会因结局自动公开。下一局须使用新邀请码。
+            本局记录只读，未获准的信息不会因结局自动公开。下一局须使用新邀请码；开启下一局时本局记录会一并清空，需要保留请先截图或抄录。
           </p>
         </section>
       )}
@@ -1070,11 +1071,13 @@ function Codex() {
 }
 
 function HostManagement({ onRole }: { onRole: (id: string) => void }) {
-  const { state, session, catalog } = useGame();
+  const { state, session, catalog, refresh } = useGame();
   const [invites, setInvites] = useState<Record<string, Invite>>({});
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
   if (!state || session.actor?.kind !== "host") return null;
   const issue = async (key: Invite["kind"]) => {
     setBusy(key);
@@ -1096,6 +1099,20 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
       setCopied(key);
     } catch {
       setError("浏览器未授权剪贴板，请选择下方文字码手动复制。");
+    }
+  };
+  const reset = async () => {
+    setResetBusy(true);
+    setError("");
+    try {
+      await api<Session>("/reset", {});
+      setResetOpen(false);
+      await refresh();
+    } catch (failure) {
+      setResetOpen(false);
+      setError(errorText(failure));
+    } finally {
+      setResetBusy(false);
     }
   };
   const inviteControls = (key: string) =>
@@ -1227,6 +1244,50 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
           action.id.startsWith("room."),
         )}
       />
+      <section className="spectator-invite">
+        <h3>初始化</h3>
+        <p className="hint">
+          清除全部对局数据：邀请码、玩家与观战身份、登录会话、取牌与阶段进度、聊天记录、证物图片。删除后无法恢复，主持人登录保留。开启下一局时也会自动清空上一局。
+        </p>
+        <button
+          className="danger-button"
+          disabled={resetBusy}
+          onClick={() => setResetOpen(true)}
+        >
+          一键初始化
+        </button>
+      </section>
+      {resetOpen && (
+        <Modal
+          title="确认清空全部对局数据"
+          onClose={() => {
+            if (!resetBusy) setResetOpen(false);
+          }}
+        >
+          <p>
+            将删除本局的一切数据：邀请码、七席玩家与观战者、登录会话、双牌与阶段进度、聊天记录、证物图片。
+          </p>
+          <p className="hint">
+            删除后无法恢复，所有玩家与观战者会被登出。主持人登录保留，清空后可直接建立新对局。
+          </p>
+          <div className="button-row">
+            <button
+              className="primary"
+              disabled={resetBusy}
+              onClick={() => void reset()}
+            >
+              {resetBusy ? "清除中…" : "确认清除并回到初始状态"}
+            </button>
+            <button
+              className="quiet"
+              disabled={resetBusy}
+              onClick={() => setResetOpen(false)}
+            >
+              取消
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

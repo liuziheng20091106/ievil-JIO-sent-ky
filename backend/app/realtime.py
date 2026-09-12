@@ -213,6 +213,9 @@ async def clock():
                         peer.last_ping = stamp
                 for game_id, peers in disconnected.items():
                     with storage.transaction() as db:
+                        # 初始化会删除全部对局；已消失的对局不再补写在线记录。
+                        if not game_id or not storage.load_game(db, game_id):
+                            continue
                         rows = [
                             storage.add_message(
                                 db, game_id, kind="presence", text=presence_text(peer, False)

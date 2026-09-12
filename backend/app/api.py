@@ -46,6 +46,15 @@ def refresh_connections():
         realtime.publish(game_id)
 
 
+def clear_connections(game_id=None):
+    """清空对局数据后：主持人连接跟随新局（未建局时置空），其余连接断开并要求重新入场。"""
+    for peer in list(realtime.connections):
+        if peer.kind == "host":
+            peer.game_id = game_id
+        else:
+            realtime.detach(peer, 4401)
+
+
 @router.get("/health")
 async def health():
     return {"ok": True}
@@ -87,6 +96,18 @@ async def logout(request: Request, response: Response):
         return {"ok": True}
 
 
+@router.post("/reset")
+async def reset(request: Request):
+    """一键初始化：清除全部对局数据，主持人登录保留。"""
+    async with realtime.lock:
+        with storage.transaction() as db:
+            auth.require_actor(db, request, host=True)
+            storage.purge(db)
+        clear_connections()
+        with storage.connect() as db:
+            return auth.me(auth.actor_for_token(db, auth.token_hash(request)))
+
+
 @router.post("/games")
 async def create(body: schemas.Create, request: Request):
     async with realtime.lock:
@@ -95,6 +116,7 @@ async def create(body: schemas.Create, request: Request):
             active = db.execute("SELECT id FROM games WHERE status != 'ended' LIMIT 1").fetchone()
             if active:
                 raise HTTPException(409, "请先结束当前对局，再创建下一局")
+            storage.purge(db)
             game = create_game(body.codex)
             db.execute(
                 "INSERT INTO games(id,state,version,status,created_at) VALUES(?,?,?,?,?)",
@@ -106,11 +128,8 @@ async def create(body: schemas.Create, request: Request):
                     storage.now_text(),
                 ),
             )
-            db.execute("UPDATE invites SET valid=0 WHERE game_id != ?", (game["id"],))
             row = storage.add_message(db, game["id"], text="新对局已创建，等待七位玩家凭邀请码入席")
-        for peer in realtime.connections:
-            if peer.kind == "host":
-                peer.game_id = game["id"]
+        clear_connections(game["id"])
         realtime.publish(game["id"], [row])
         return current_view(game["id"], auth.token_hash(request))
 

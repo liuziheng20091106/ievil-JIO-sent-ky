@@ -124,6 +124,13 @@ def save_game(db, game):
         db.execute("UPDATE invites SET valid=0 WHERE game_id=?", (game["id"],))
 
 
+def purge(db):
+    """清空全部对局数据（含邀请码、参与身份、进度、聊天与证物）；主持人会话保留。"""
+    for table in ("messages", "evidence", "channels", "invites", "participants", "games"):
+        db.execute(f"DELETE FROM {table}")
+    db.execute("DELETE FROM sessions WHERE kind != 'host'")
+
+
 def add_message(
     db,
     game_id,
