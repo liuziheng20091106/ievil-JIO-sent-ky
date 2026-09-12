@@ -35,7 +35,7 @@ export interface Seat {
   name: string;
   avatar_role_id: string | null;
   occupied: boolean;
-  ready: boolean;
+  ready: boolean | null;
   alive: boolean;
   online?: boolean;
   cards?: Card[];
@@ -78,6 +78,15 @@ export interface Channel {
   can_send: boolean;
   reason?: string;
 }
+export interface NightAction {
+  id: string;
+  seat_id: string;
+  card_id: string;
+  ability: string;
+  target_seat?: string;
+  confirmed?: boolean;
+  [key: string]: unknown;
+}
 export interface GameView {
   id: string;
   version: number;
@@ -88,12 +97,13 @@ export interface GameView {
   phase_label: string;
   deadline: number | null;
   seats: Seat[];
+  ready_count: number;
   self: {
     seat_id: string | null;
     cards: Card[];
     current_card_id: string | null;
     night_confirmed?: boolean;
-    night_actions?: Record<string, unknown>[];
+    night_actions?: NightAction[];
     water?: boolean;
     vote?: string | null;
     balloon_choice?: string | null;
@@ -105,7 +115,8 @@ export interface GameView {
   host?: {
     codex: string[];
     pending: Record<string, unknown>[];
-    night_actions: Record<string, unknown>[];
+    night_actions: NightAction[];
+    night_confirmed: string[];
     snapshots: Record<string, unknown>[];
     [key: string]: unknown;
   };

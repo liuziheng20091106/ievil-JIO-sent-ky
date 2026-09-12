@@ -45,13 +45,15 @@ def game_view(game, actor):
     own = player_seat(game, actor) if actor.get("kind") == "player" else None
     own_id = own["id"] if own else None
     seats = []
+    ready_count = 0
     for s in game["seats"]:
+        ready_count += bool(s["ready"])
         entry = {
             "id": s["id"],
             "name": s["name"],
             "avatar_role_id": None if game["status"] == "lobby" else s["avatar_role_id"],
             "occupied": bool(s["occupant_id"]),
-            "ready": s["ready"],
+            "ready": s["ready"] if host or s["id"] == own_id else None,
             "alive": game["status"] == "lobby" or current(game, s) is not None,
         }
         if host:
@@ -76,6 +78,7 @@ def game_view(game, actor):
         "phase_label": PHASES[game["phase"]],
         "deadline": game["deadline"],
         "seats": seats,
+        "ready_count": ready_count,
         "self": {
             "seat_id": own_id,
             "cards": [card_view(game, game["cards"][cid]) for cid in own["cards"]] if own else [],

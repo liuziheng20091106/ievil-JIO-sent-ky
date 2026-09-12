@@ -646,6 +646,7 @@ function Room({
         <div className="side-scroll">
           <div className="actions-surface">
             {isHost && state.host && <HostPending />}
+            {isHost && <NightLedger />}
             <ActionPanel
               actions={state.actions}
               title={isHost ? "主持人操作" : "本阶段行动"}
@@ -744,7 +745,9 @@ function SeatList({
                 : state?.status === "lobby"
                   ? seat.ready
                     ? "已准备"
-                    : state.phase === "lobby" ? "等待准备" : "选择双牌中"
+                    : seat.id === state?.self.seat_id
+                      ? state.phase === "lobby" ? "等待准备" : "选择双牌中"
+                      : "已入席"
                   : seat.alive
                     ? "存活"
                     : "已出局"}
@@ -814,7 +817,7 @@ function PublicTable({
         <div className="lobby-note">
           <span className="eyebrow">随机入席 → 首次准备 → 私下排牌 → 再次准备 → 主持人开局</span>
           <h3>
-            {state.seats.filter((seat) => seat.ready).length} / 7 位玩家已准备
+            {state.ready_count} / 7 位玩家已准备
           </h3>
           <p>
             {state.phase === "lobby"
@@ -822,7 +825,7 @@ function PublicTable({
               : "双牌已私下发放。请在「行动」中选择上层角色，再次准备；换序会取消本次准备。开局前所有公开角色头像均隐藏。"}
           </p>
           <progress
-            value={state.seats.filter((seat) => seat.ready).length}
+            value={state.ready_count}
             max={7}
             aria-label="玩家准备进度"
           />
@@ -983,6 +986,72 @@ function HostPending() {
     </section>
   );
 }
+
+function NightLedger() {
+  const { state } = useGame();
+  const host = state?.host;
+  if (!state || !host || state.status !== "playing" || state.half !== "night") {
+    return null;
+  }
+  const confirmed = new Set(host.night_confirmed);
+  const rows = state.seats.filter(
+    (seat) =>
+      seat.occupied &&
+      (seat.cards?.some((card) => card.alive) ||
+        host.night_actions.some((action) => action.seat_id === seat.id)),
+  );
+  return (
+    <section className="pending-panel">
+      <div className="section-heading">
+        <h2>本夜全员行动</h2>
+        <span className="count gold">
+          {rows.filter((seat) => confirmed.has(seat.id)).length} / {rows.length} 已确认
+        </span>
+      </div>
+      <p className="hint">
+        仅主持人可见。玩家提交后立即显示；未提交即按放弃处理，玩家之间看不到彼此的夜间行动。
+      </p>
+      <div className="seat-list">
+        {rows.map((seat) => {
+          const card = seat.cards?.find((item) => item.alive);
+          const actions = host.night_actions.filter(
+            (action) => action.seat_id === seat.id,
+          );
+          return (
+            <article className="seat" key={seat.id}>
+              <span className="seat-number">{seat.id.padStart(2, "0")}</span>
+              <div className="seat-info">
+                <strong>
+                  {seat.name}
+                  {card && (
+                    <small>
+                      <RecordView value={card.role_id} />
+                      {card.witch ? " · 魔女" : ""}
+                    </small>
+                  )}
+                </strong>
+                {actions.length ? (
+                  actions.map((action) => (
+                    <span key={action.id}>
+                      <RecordView value={action.ability} />
+                      {action.target_seat ? ` → ${action.target_seat}号` : ""}
+                      {action.confirmed ? "" : " · 未确认"}
+                    </span>
+                  ))
+                ) : (
+                  <span>
+                    {confirmed.has(seat.id) ? "本夜未发动行动（已确认）" : "尚未提交"}
+                  </span>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function Codex() {
   const { state, catalog } = useGame();
   return (

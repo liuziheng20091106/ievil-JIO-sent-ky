@@ -66,6 +66,42 @@ class SetupRules(unittest.TestCase):
         self.assertFalse(observer.get("host"))
         self.assertTrue(all(not seat.get("cards") for seat in observer["seats"]))
 
+    def test_ready_progress_is_a_count_and_never_a_roster(self):
+        game = create_game(DEFAULT_CODEX)
+        actors = players(game)
+        observer = {
+            "id": "observer",
+            "kind": "spectator",
+            "game_id": game["id"],
+            "seat_id": None,
+            "access_ids": ["observer"],
+        }
+        apply_command(game, actors[0], "lobby.ready", {})
+        self.assertTrue(game_view(game, actors[0])["seats"][0]["ready"])
+        stranger = game_view(game, actors[1])
+        self.assertEqual(stranger["ready_count"], 1)
+        self.assertFalse(stranger["seats"][0]["ready"])
+        self.assertTrue(
+            all(seat["ready"] is None for seat in stranger["seats"] if seat["id"] != "2")
+        )
+        spectator = game_view(game, observer)
+        self.assertEqual(spectator["ready_count"], 1)
+        self.assertTrue(all(seat["ready"] is None for seat in spectator["seats"]))
+        for actor in actors[1:]:
+            apply_command(game, actor, "lobby.ready", {})
+        self.assertEqual(game["phase"], "ordering")
+        apply_command(game, actors[3], "lobby.ready", {})
+        owner = game_view(game, actors[0])
+        self.assertEqual(owner["ready_count"], 1)
+        self.assertFalse(owner["seats"][0]["ready"])
+        self.assertTrue(all(seat["ready"] is None for seat in owner["seats"] if seat["id"] != "1"))
+        host = game_view(game, HOST)
+        self.assertEqual(host["ready_count"], 1)
+        self.assertTrue(host["seats"][3]["ready"])
+        self.assertTrue(
+            all(not seat["ready"] for index, seat in enumerate(host["seats"]) if index != 3)
+        )
+
     def test_two_ready_rounds_keep_roles_private_until_host_start(self):
         game = create_game(DEFAULT_CODEX)
         actors = players(game)

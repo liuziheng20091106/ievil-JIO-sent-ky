@@ -187,6 +187,11 @@ class ResolutionEdges(unittest.TestCase):
         command(game, HOST, "host.advance")
         command(game, actor, "honoka.disguise", {"role": "emma"})
         self.assertEqual(game_view(game, actor)["seats"][6]["avatar_role_id"], "emma")
+        self.assertTrue(any("示人" in item["text"] for item in game_view(game, HOST)["information"]))
+        for viewer in (player(game, "1"), player(game, "7")):
+            self.assertFalse(
+                any("示人" in item["text"] for item in game_view(game, viewer)["information"])
+            )
 
 
 if __name__ == "__main__":

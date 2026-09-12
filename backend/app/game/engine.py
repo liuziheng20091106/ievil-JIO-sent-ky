@@ -1039,7 +1039,7 @@ def player_command(game, actor, events, action, data):
         notify(game, events, f"{sid}号质疑{d['seat_id']}号的技能声明，等待主持人结算。")
     elif action == "honoka.disguise":
         s["avatar_role_id"] = data["role"]
-        notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。")
+        notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
     elif action == "honoka.witness":
         card["states"]["witness_role"] = data["role"]
     elif action == "hiro.exit":
