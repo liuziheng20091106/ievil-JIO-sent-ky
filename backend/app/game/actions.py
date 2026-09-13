@@ -668,7 +668,7 @@ def actions_for(game, actor):
                     if s["ready"]
                     else ("确认上下牌并再次准备" if game["phase"] == "ordering" else "准备发牌"),
                     group="准备",
-                    blocking=True,
+                    blocking=not s["ready"],
                 )
             )
         if "honoka" in s["cards"]:

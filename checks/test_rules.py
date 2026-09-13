@@ -3,6 +3,7 @@
 import unittest
 
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
+from backend.app.game.actions import actions_for
 
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
@@ -101,6 +102,20 @@ class SetupRules(unittest.TestCase):
         self.assertTrue(
             all(not seat["ready"] for index, seat in enumerate(host["seats"]) if index != 3)
         )
+
+    def test_ready_action_stops_asking_once_the_player_is_ready(self):
+        game = create_game(DEFAULT_CODEX)
+        actors = players(game)
+
+        def ready_action(actor):
+            return next(item for item in actions_for(game, actor) if item["id"] == "lobby.ready")
+
+        self.assertTrue(ready_action(actors[0])["blocking"])
+        apply_command(game, actors[0], "lobby.ready", {})
+        item = ready_action(actors[0])
+        self.assertEqual(item["label"], "取消准备")
+        self.assertFalse(item.get("blocking", False))
+        self.assertTrue(ready_action(actors[1])["blocking"])
 
     def test_two_ready_rounds_keep_roles_private_until_host_start(self):
         game = create_game(DEFAULT_CODEX)
