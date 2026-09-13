@@ -99,13 +99,18 @@ def target_field(game, night=False, exclude=None):
     )
 
 
-def day_fields(game, ability):
+def day_fields(game, ability, exclude=None):
     if ability == "last_speaker":
         return []
     if ability == "balloon":
         return [
             field(
-                "participants", "参加者（至多4人）", "multiselect", seat_options(game), min=1, max=4
+                "participants",
+                "参加者（不含自己，至多4人）",
+                "multiselect",
+                [(sid, label) for sid, label in seat_options(game) if sid != exclude],
+                min=1,
+                max=4,
             )
         ]
     if ability == "photo":
@@ -190,16 +195,6 @@ def pending_action(game, item):
     if kind == "information":
         fields = [
             field("text", "发给当事人的裁定信息", "textarea", default=item.get("text", ""))
-        ]
-    elif kind == "millia":
-        fields = [
-            field(
-                "follow",
-                "交换后行动目标跟随",
-                "select",
-                [("card", "原角色牌"), ("seat", "原席位当前上层")],
-                default="card",
-            )
         ]
     elif kind == "hiro":
         choices = [("decline", "不发动回溯")] + [
@@ -316,20 +311,6 @@ def pending_action(game, item):
                 required=False,
             ),
             field("reason", "裁定说明", "textarea", default="魔典未按时结算，按跳过处理"),
-        ]
-    elif kind == "balloon_organize":
-        fields = [
-            field("allow", "确认好人组织投票通过（不勾选为否决）", "checkbox", required=False),
-            field(
-                "participants",
-                "通过时指定参加者（至多4人）",
-                "multiselect",
-                seat_options(game),
-                required=False,
-                min=0,
-                max=4,
-            ),
-            field("reason", "组织投票裁定说明", "textarea"),
         ]
     elif kind == "madness":
         fields = [
@@ -754,7 +735,7 @@ def actions_for(game, actor):
                     action(
                         "day.skill",
                         DAY_ABILITIES[ability][1],
-                        day_fields(game, ability),
+                        day_fields(game, ability, sid),
                         {"ability": ability},
                         "白天技能",
                     )
@@ -775,7 +756,7 @@ def actions_for(game, actor):
                         action(
                             "day.skill",
                             "声称" + DAY_ABILITIES[ability][1],
-                            day_fields(game, ability),
+                            day_fields(game, ability, sid),
                             {"ability": ability},
                             "私密伪装选择",
                         )
@@ -833,7 +814,7 @@ def actions_for(game, actor):
         result.append(
             action(
                 "speech.speak",
-                "提前发言",
+                "提前写发言（轮到你时公开）",
                 [field("text", "发言内容", "textarea")],
                 group="流程",
                 instant=True,
@@ -897,7 +878,7 @@ def actions_for(game, actor):
         and sid in balloon["participants"]
         and sid not in game["balloon_choices"]
     ):
-        options = [("make", "制作")]
+        options = [("make", "制作"), ("skip", "不制作")]
         if card and (card["witch"] or card["role_id"] == "annan"):
             options.append(("break", "破坏"))
         result.append(
@@ -909,20 +890,41 @@ def actions_for(game, actor):
                 blocking=True,
             )
         )
+    proposal = game["balloon_proposal"]
+    if proposal and card and sid not in proposal["votes"]:
+        result.append(
+            action(
+                "balloon.agree",
+                f"同意{proposal['by']}号的热气球名单",
+                group="热气球",
+                instant=True,
+            )
+        )
+        result.append(action("balloon.decline", "不同意该名单", group="热气球", instant=True))
     if (
         game["half"] == "day"
         and card
-        and not card["witch"]
         and not present(game, "arisa")
         and balloon["day"] != game["day"]
+        and not proposal
         and phase in {"discussion", "balloon"}
     ):
         result.append(
             action(
-                "balloon.organize_vote",
-                "好人秘密投票组织热气球",
-                [field("agree", "同意组织", "checkbox", required=False)],
+                "balloon.propose",
+                "提议热气球名单（至多5人，过半同意即组织）",
+                [
+                    field(
+                        "participants",
+                        "提议参加者（至多5人）",
+                        "multiselect",
+                        seat_options(game),
+                        min=1,
+                        max=5,
+                    )
+                ],
                 group="热气球",
+                instant=True,
             )
         )
     for photo in game["photos"]:

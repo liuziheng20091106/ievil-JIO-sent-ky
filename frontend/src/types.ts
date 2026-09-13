@@ -201,7 +201,11 @@ export interface GameView {
     photos?: HostPhoto[];
     gaze?: HostGaze | null;
     balloon_choices?: Record<string, string>;
-    balloon_votes?: Record<string, boolean>;
+    balloon_proposal?: {
+      by: string;
+      participants: string[];
+      votes: Record<string, boolean>;
+    } | null;
     brainwash?: Record<string, string>;
     water?: { holder: string | null; used: boolean };
     warnings?: Record<string, number>;

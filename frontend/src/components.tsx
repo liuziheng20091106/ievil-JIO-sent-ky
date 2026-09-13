@@ -284,7 +284,7 @@ const labels: Record<string, string> = {
   night_confirmed: "已确认行动席位",
   night_preview: "本夜预结算",
   balloon_choices: "秘密制作选择",
-  balloon_votes: "组织热气球投票",
+  balloon_proposal: "热气球名单表决",
   brainwash: "洗脑目标",
   spiritual: "精神系与不可回溯效果",
   winner_candidate: "待确认胜负",

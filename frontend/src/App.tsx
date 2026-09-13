@@ -1506,7 +1506,7 @@ function HostSources() {
   const voteRounds = host.vote_rounds ?? [];
   const photos = host.photos ?? [];
   const balloon = host.balloon_choices ?? {};
-  const ballot = host.balloon_votes ?? {};
+  const proposal = host.balloon_proposal ?? null;
   const brainwash = host.brainwash ?? {};
   const water = host.water;
   const warnings = host.warnings ?? {};
@@ -1571,10 +1571,12 @@ function HostSources() {
           提交情况：
           <RecordView value={balloon} />
         </p>
-        <p>
-          表决：
-          <RecordView value={ballot} />
-        </p>
+        {proposal && (
+          <p>
+            {proposal.by}号提议名单：
+            <RecordView value={proposal} />
+          </p>
+        )}
         <p>
           结果：
           <RecordView value={state.public.balloon} />

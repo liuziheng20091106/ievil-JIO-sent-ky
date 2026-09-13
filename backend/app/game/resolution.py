@@ -16,6 +16,7 @@ from .state import (
     present,
     require,
     role_card,
+    seat,
     uid,
 )
 
@@ -241,7 +242,54 @@ def damage_preview(game, attacks, protection=()):
     return {"deaths": list(dead.values()), "injured": injured, "attacks": deepcopy(attacks)}
 
 
+def swap_cards(game, swap):
+    """米莉亚与被选席位交换上层角色牌，并记下本技能已使用。"""
+    left, right = owner(game, "millia"), seat(game, swap["target_seat"])
+    a, b = current(game, left), current(game, right)
+    require(a and b and a["id"] == "millia", "换牌对象已改变，请先纠错")
+    ia, ib = left["cards"].index(a["id"]), right["cards"].index(b["id"])
+    left["cards"][ia], right["cards"][ib] = b["id"], a["id"]
+    a["uses"]["swap"] = True
+
+
 def prepare_night_preview(game):
+    night = game["night"]
+    preview, dead = night_damage(game)
+    if (
+        "millia" in dead
+        and not role_card(game, "millia")["uses"].get("swap")
+        and not poisoned(role_card(game, "millia"))
+        and "millia" not in night["reactions"]
+    ):
+        action = next(
+            (a for a in night["actions"] if a["ability"] == "swap" and a.get("effective")), None
+        )
+        if action:
+            # 米莉亚自己选好了对象：直接换牌重算，不留主持人判定点。
+            swap_cards(game, action)
+            night["reactions"].append("millia")
+            preview, dead = night_damage(game)
+    night["preview"] = preview
+    if (
+        "hiro" in dead
+        and not poisoned(role_card(game, "hiro"))
+        and "hiro" not in night["reactions"]
+    ):
+        mode = "witch" if role_card(game, "hiro")["witch"] else "normal"
+        if not game["spiritual"]["hiro_used"][mode]:
+            pending(
+                game,
+                "hiro",
+                "希罗庇护后仍会死亡：裁定是否回溯及对应时间点",
+                mode=mode,
+                seat_id=owner(game, "hiro")["id"],
+                expected_day=game["day"] - 1,
+                expected_phase="night",
+            )
+            night["reactions"].append("hiro")
+
+
+def night_damage(game):
     attacks, protection = [], []
     night = game["night"]
     for a in night["actions"]:
@@ -264,44 +312,7 @@ def prepare_night_preview(game):
             )
     attacks.extend(night.get("extra_attacks", []))
     preview = damage_preview(game, attacks, protection)
-    night["preview"] = preview
-    dead = {d["target_card"] for d in preview["deaths"]}
-    if (
-        "millia" in dead
-        and not role_card(game, "millia")["uses"].get("swap")
-        and not poisoned(role_card(game, "millia"))
-        and "millia" not in night["reactions"]
-    ):
-        action = next(
-            (a for a in night["actions"] if a["ability"] == "swap" and a.get("effective")), None
-        )
-        if action:
-            pending(
-                game,
-                "millia",
-                "米莉亚庇护后仍会死亡：确认交换后的目标跟随方式",
-                seat_id=owner(game, "millia")["id"],
-                target_seat=action["target_seat"],
-            )
-            night["reactions"].append("millia")
-            return
-    if (
-        "hiro" in dead
-        and not poisoned(role_card(game, "hiro"))
-        and "hiro" not in night["reactions"]
-    ):
-        mode = "witch" if role_card(game, "hiro")["witch"] else "normal"
-        if not game["spiritual"]["hiro_used"][mode]:
-            pending(
-                game,
-                "hiro",
-                "希罗庇护后仍会死亡：裁定是否回溯及对应时间点",
-                mode=mode,
-                seat_id=owner(game, "hiro")["id"],
-                expected_day=game["day"] - 1,
-                expected_phase="night",
-            )
-            night["reactions"].append("hiro")
+    return preview, {d["target_card"] for d in preview["deaths"]}
 
 
 def death_batch(game, events, preview):

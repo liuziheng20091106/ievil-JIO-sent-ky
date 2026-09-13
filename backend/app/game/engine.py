@@ -14,6 +14,7 @@ from .resolution import (
     lock_night,
     prepare_night_preview,
     revive,
+    swap_cards,
     target_allowed,
     unlock_coco,
 )
@@ -26,6 +27,7 @@ from .state import (
     deal_cards,
     eligible_voters,
     finish,
+    living,
     lost_by_challenge,
     pending_nominators,
     notify,
@@ -125,6 +127,14 @@ def convert_daily(game, events):
     pending(game, "codex", "魔典已无合法目标：主持人裁定本日转化或耗尽处理")
 
 
+def millia_swap(game, events, preview, swap):
+    """米莉亚临死交换：选好对象就直接换上层牌并重新结算，不设主持人判定点。"""
+    left, right = owner(game, "millia"), seat(game, swap["target_seat"])
+    swap_cards(game, swap)
+    notify(game, events, "米莉亚临死交换已生效。", [left["id"], right["id"]], "角色交换")
+    apply_damage(game, events, damage_preview(game, deepcopy(preview["attacks"])))
+
+
 def apply_damage(game, events, preview, allow_reaction=True):
     millia = role_card(game, "millia")
     swap = next(
@@ -137,14 +147,7 @@ def apply_damage(game, events, preview, allow_reaction=True):
         and not poisoned(millia)
         and any(d["target_card"] == "millia" for d in preview["deaths"])
     ):
-        pending(
-            game,
-            "millia",
-            "米莉亚即将死亡：裁定交换后的目标跟随方式",
-            seat_id=owner(game, "millia")["id"],
-            target_seat=swap["target_seat"],
-            preview=preview,
-        )
+        millia_swap(game, events, preview, swap)
         return
     hiro = role_card(game, "hiro")
     mode = "witch" if hiro["witch"] else "normal"
@@ -172,8 +175,8 @@ def open_balloon(game, events, organizer, participants):
     balloon = game["public"]["balloon"]
     require(balloon["day"] != game["day"], "本白天已组织过热气球")
     require(
-        1 <= len(participants) <= 4 and len(set(participants)) == len(participants),
-        "热气球需要1至4名不重复参加者",
+        1 <= len(participants) <= 5 and len(set(participants)) == len(participants),
+        "热气球需要1至5名不重复参加者",
     )
     require(all(current(game, p) for p in participants), "参加者必须存活")
     balloon.update(
@@ -185,15 +188,12 @@ def open_balloon(game, events, organizer, participants):
         }
     )
     game["balloon_choices"] = {}
-    notify(game, events, f"热气球开始制作，参加席位：{'、'.join(participants)}。")
-    for sid in participants:
-        card = current(game, sid)
-        if card and not card["witch"] and card["role_id"] != "annan":
-            # Good, non-Annan participants have no other legal choice; skip the ceremony.
-            game["balloon_choices"][sid] = "make"
-            notify(game, events, "你只能选择制作，已自动提交。", [sid])
-    if set(participants).issubset(game["balloon_choices"]):
-        settle_balloon(game, events)
+    notify(
+        game,
+        events,
+        f"热气球开始制作，参加席位：{'、'.join(participants)}；请各自秘密提交选择。",
+        alert=True,
+    )
 
 
 def settle_balloon(game, events):
@@ -216,6 +216,10 @@ def settle_balloon(game, events):
         "delta": delta,
     }
     balloon["status"] = "complete"
+    for declaration in game["declarations"]:
+        if declaration["ability"] == "balloon" and declaration["status"] == "open":
+            declaration["status"] = "complete"
+    sync_declarations(game)
     notify(
         game,
         events,
@@ -231,20 +235,47 @@ def settle_balloon(game, events):
         finish(game, events, "good", "热气球达到13并起飞；安安强制落败。", balloon=True)
 
 
-def speech_done(game):
+def resolve_balloon_proposal(game, events):
+    """亚里沙不在场：超过半数存活玩家同意就按名单组织，票数不可能过半就作废。"""
+    proposal = game.get("balloon_proposal")
+    if not proposal:
+        return
+    alive = living(game)
+    agreed = sum(1 for value in proposal["votes"].values() if value)
+    if agreed * 2 > len(alive):
+        game["balloon_proposal"] = None
+        open_balloon(game, events, f"{proposal['by']}号提议", proposal["participants"])
+        return
+    remaining = len(alive) - len(proposal["votes"])
+    if agreed + remaining <= len(alive) / 2:
+        game["balloon_proposal"] = None
+        notify(game, events, "同意人数已无法过半，本次热气球提议作废，可以重新提议。", alert=True)
+        return
+    notify(
+        game,
+        events,
+        f"热气球名单表决中：同意{agreed}人／存活{len(alive)}人，需要超过{len(alive) // 2}人同意。",
+    )
+
+
+def speech_done(game, events):
     public = game["public"]
     if public.get("interrupted_speaker"):
         public["speaker"] = public.pop("interrupted_speaker")
         return
-    public["speaker"] = next_speaker(game, public["speaker"])
+    public["speaker"] = next_speaker(game, public["speaker"], events)
 
 
-def next_speaker(game, current_speaker):
-    """下一位发言人；已经提前确认发言完毕的席位直接跳过。"""
+def next_speaker(game, current_speaker, events):
+    """下一位发言人；提前发言的席位在此刻才公开内容，宣布不发言的直接跳过。"""
     order = game["public"]["speech_order"]
     passed = set(game.get("speech_passed", []))
+    queued = game.get("speech_queued", {})
     index = order.index(current_speaker) + 1 if current_speaker in order else 0
     while index < len(order) and order[index] in passed:
+        sid = order[index]
+        if sid in queued:
+            notify(game, events, f"{sid}号的发言：{queued.pop(sid)}")
         index += 1
     return order[index] if index < len(order) else None
 
@@ -387,19 +418,20 @@ def advance(game, events):
             dict.fromkeys(dead_first + [s["id"] for s in game["seats"]])
         )
         game["public"]["speech_order"] = order
-        game["public"]["speaker"] = next_speaker(game, None)
+        game["public"]["speaker"] = next_speaker(game, None, events)
         game["brainwash"] = {}
         game["nominations"] = []
         game["nomination_done"] = []
         game["vote_rounds"] = []
         game["execution"] = []
-        game["balloon_votes"] = {}
+        game["balloon_proposal"] = None
     elif phase == "speech":
         require(game["public"]["speaker"] is None, "仍有顺序发言未完成，请玩家确认或警告超时")
         game["phase"] = "discussion"
     elif phase == "discussion":
         game["phase"] = "balloon"
     elif phase == "balloon":
+        game["balloon_proposal"] = None
         if game["public"]["balloon"]["status"] == "collecting":
             settle_balloon(game, events)
         if game["status"] != "ended":
@@ -460,6 +492,7 @@ def advance(game, events):
         game["public"]["speaker"] = None
         game["public"]["speech_order"] = []
         game["speech_passed"] = []
+        game["speech_queued"] = {}
     else:
         raise GameError("当前阶段不能推进")
     game["warnings"] = {}
@@ -542,7 +575,8 @@ def execute_declaration(game, events, declaration):
             photo["image_id"],
         )
     elif ability == "balloon":
-        open_balloon(game, events, sid, data["participants"])
+        participants = [sid] + [p for p in data["participants"] if p != sid]
+        open_balloon(game, events, sid, participants)
     declaration["executed"] = True
 
 
@@ -553,30 +587,6 @@ def resolve_pending(game, events, data):
         notify(
             game, events, data["text"], [item["seat_id"]], "主持人裁定信息", item.get("image_id")
         )
-    elif kind == "millia":
-        left, right = seat(game, item["seat_id"]), seat(game, item["target_seat"])
-        target_seats = [
-            owner(game, attack["target_card"])["id"]
-            for attack in item.get("preview", {}).get("attacks", [])
-        ]
-        a, b = current(game, left), current(game, right)
-        require(a and b and a["id"] == "millia", "换牌对象已改变，请先纠错")
-        ia, ib = left["cards"].index(a["id"]), right["cards"].index(b["id"])
-        left["cards"][ia], right["cards"][ib] = b["id"], a["id"]
-        a["uses"]["swap"] = True
-        for action in game["night"]["actions"]:
-            action["follow_seat"] = data["follow"] == "seat"
-        notify(game, events, "米莉亚临死交换已生效。", [left["id"], right["id"]], "角色交换")
-        if item.get("preview"):
-            attacks = deepcopy(item["preview"]["attacks"])
-            if data["follow"] == "seat":
-                for attack, sid in zip(attacks, target_seats):
-                    target = current(game, sid)
-                    if target:
-                        attack["target_card"] = target["id"]
-            apply_damage(game, events, damage_preview(game, attacks))
-        else:
-            prepare_night_preview(game)
     elif kind == "hiro":
         if data["snapshot"] == "decline":
             if item.get("preview"):
@@ -689,11 +699,6 @@ def resolve_pending(game, events, data):
             set_witch(game, events, data["target"])
         notify(game, events, "主持人已处理本日魔女化检测。")
         begin_night(game, events)
-    elif kind == "balloon_organize":
-        if data.get("allow"):
-            open_balloon(game, events, "good_vote", data["participants"])
-        else:
-            game["balloon_votes"] = {}
     elif kind == "madness":
         if data["outcome"] == "penalty":
             game["public"]["achievements_enabled"] = False
@@ -1088,12 +1093,16 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             "executed": False,
         }
         game["declarations"].append(d)
-        pending(
-            game,
-            "declaration",
-            f"{sid}号声明{DAY_ABILITIES[ability][1]}：{'伪装，按主持人裁定执行' if fake else '真实技能'}",
-            declaration_id=d["id"],
-        )
+        if ability == "balloon":
+            # 造热气球不需要主持人审批：声明后立即开始收集，质疑窗口开到结算为止。
+            execute_declaration(game, events, d)
+        else:
+            pending(
+                game,
+                "declaration",
+                f"{sid}号声明{DAY_ABILITIES[ability][1]}：{'伪装，按主持人裁定执行' if fake else '真实技能'}",
+                declaration_id=d["id"],
+            )
         sync_declarations(game)
         notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。", alert=True)
     elif action == "day.challenge":
@@ -1154,7 +1163,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             apply_damage(game, events, damage_preview(game, [attack]))
     elif action == "speech.done":
         if sid == game["public"]["speaker"]:
-            speech_done(game)
+            speech_done(game, events)
         else:
             require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
             require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
@@ -1169,10 +1178,14 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
         text = data["text"].strip()
         require(text, "请先写下发言内容")
-        notify(game, events, f"{sid}号的发言：{text}")
-        game.setdefault("speech_passed", []).append(sid)
         if sid == game["public"]["speaker"]:
-            speech_done(game)
+            notify(game, events, f"{sid}号的发言：{text}")
+            game.setdefault("speech_passed", []).append(sid)
+            speech_done(game, events)
+        else:
+            game.setdefault("speech_queued", {})[sid] = text
+            game.setdefault("speech_passed", []).append(sid)
+            notify(game, events, f"{sid}号已写好发言，轮到时自动公开。")
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
@@ -1223,13 +1236,38 @@ def player_command(game, actor, events, action, data, *, by_host=False):
     elif action == "execution.confirm":
         game["execution_ready"].append(sid)
     elif action == "balloon.choose":
+        balloon = game["public"]["balloon"]
+        require(balloon["status"] == "collecting" and sid in balloon["participants"], "你不在本次热气球名单里")
+        require(data["choice"] in {"make", "skip", "break"}, "不合法的热气球选择")
+        require(
+            data["choice"] != "break" or card["witch"] or card["role_id"] == "annan",
+            "除安安以外的好人不能选择破坏热气球",
+        )
         game["balloon_choices"][sid] = data["choice"]
-        if set(game["public"]["balloon"]["participants"]).issubset(game["balloon_choices"]):
+        notify(game, events, "热气球选择已提交。", [sid])
+        if set(balloon["participants"]).issubset(game["balloon_choices"]):
             settle_balloon(game, events)
-    elif action == "balloon.organize_vote":
-        game["balloon_votes"][sid] = bool(data.get("agree"))
-        if not any(p["kind"] == "balloon_organize" for p in game["pending"]):
-            pending(game, "balloon_organize", "亚里沙不在场：裁定好人组织投票并指定参加者")
+    elif action == "balloon.propose":
+        require(game["half"] == "day" and not present(game, "arisa"), "当前不能由玩家提议热气球")
+        require(game["public"]["balloon"]["day"] != game["day"], "本白天已组织过热气球")
+        require(not game["balloon_proposal"], "已有一份待表决的名单")
+        participants = list(dict.fromkeys(data["participants"]))
+        require(1 <= len(participants) <= 5, "名单需要1至5名不重复玩家")
+        require(all(current(game, p) for p in participants), "名单内玩家必须存活")
+        game["balloon_proposal"] = {"by": sid, "participants": participants, "votes": {sid: True}}
+        notify(
+            game,
+            events,
+            f"{sid}号提议热气球参加者：{'、'.join(participants)}；请其他玩家表决。",
+            alert=True,
+        )
+        resolve_balloon_proposal(game, events)
+    elif action in {"balloon.agree", "balloon.decline"}:
+        proposal = game["balloon_proposal"]
+        require(proposal, "当前没有待表决的热气球名单")
+        require(sid not in proposal["votes"], "你已经表决过这份名单")
+        proposal["votes"][sid] = action == "balloon.agree"
+        resolve_balloon_proposal(game, events)
     elif action == "photo.permission":
         photo = next(p for p in game["photos"] if p["id"] == data["photo_id"])
         photo["allowed"] = bool(data.get("allow"))
@@ -1360,7 +1398,7 @@ def expire_warnings(game, now=None):
                 role_card(game, "noah")["states"]["paint_done"] = game["day"]
             unlock_coco(game, events)
         elif phase == "speech" and game["public"]["speaker"] == sid:
-            speech_done(game)
+            speech_done(game, events)
         elif phase == "nomination" and sid in pending_nominators(game):
             game.setdefault("nomination_done", []).append(sid)
         elif phase == "voting":

@@ -209,9 +209,10 @@ def create_game(codex):
             "rewinds": 0,
         },
         "balloon_choices": {},
-        "balloon_votes": {},
+        "balloon_proposal": None,
         "nominations": [],
         "speech_passed": [],
+        "speech_queued": {},
         "votes": {},
         "vote_rounds": [],
         "brainwash": {},
@@ -355,7 +356,7 @@ def clear_seat_actions(game, seat_id):
         from .resolution import prepare_night_preview
 
         game["pending"] = [
-            p for p in game["pending"] if p["kind"] not in {"millia", "hiro"} or p.get("preview")
+            p for p in game["pending"] if p["kind"] != "hiro" or p.get("preview")
         ]
         night["reactions"] = []
         prepare_night_preview(game)

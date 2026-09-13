@@ -13,7 +13,13 @@ from backend.app.game import (
     run_auto_advance,
 )
 from backend.app.game.actions import actions_for, outstanding_seats
-from backend.app.game.resolution import begin_night, damage_preview, death_batch, revive
+from backend.app.game.resolution import (
+    begin_night,
+    damage_preview,
+    death_batch,
+    prepare_night_preview,
+    revive,
+)
 from backend.app.game.state import check_winner, pending, pending_nominators, rewind, save_snapshot
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
@@ -100,7 +106,7 @@ class ResolutionEdges(unittest.TestCase):
         self.assertTrue(game_view(game, player(game, "1"))["information"])
         self.assertFalse(game_view(game, player(game, "2"))["information"])
 
-    def test_millia_can_react_to_daytime_damage_after_night_selection(self):
+    def test_millia_swap_is_immediate_and_has_no_host_step(self):
         game = arranged_game()
         game["night"]["actions"] = [
             {
@@ -117,12 +123,42 @@ class ResolutionEdges(unittest.TestCase):
             "host.damage",
             {"targets": ["millia"], "effect": "death", "source": "coco", "reason": "测试临死结算"},
         )
-        self.assertEqual(game_view(game, player(game, "1"))["self"]["current_card_id"], "millia")
-        item = next(item for item in game["pending"] if item["kind"] == "millia")
-        command(game, HOST, "host.resolve", {"pending_id": item["id"], "follow": "seat"})
-        self.assertEqual(game_view(game, player(game, "3"))["self"]["current_card_id"], "millia")
-        self.assertFalse(game["cards"]["meruru"]["alive"])
-        self.assertTrue(game["cards"]["millia"]["alive"])
+        self.assertFalse(any(item["kind"] == "millia" for item in game["pending"]))
+        self.assertTrue(game["cards"]["millia"]["uses"].get("swap"))
+        # 默认跟随原角色牌：上层牌按换牌后的归属结算，原席位改玩换来的牌。
+        self.assertEqual(game_view(game, player(game, "1"))["self"]["current_card_id"], "meruru")
+        self.assertEqual(game_view(game, player(game, "3"))["self"]["current_card_id"], "hanna")
+        self.assertFalse(game["cards"]["millia"]["alive"])
+        self.assertTrue(game["cards"]["meruru"]["alive"])
+
+    def test_night_preview_swaps_immediately_without_a_host_step(self):
+        game = arranged_game("night_review", "night")
+        game["night"]["reactions"] = []
+        game["night"]["actions"] = [
+            {
+                "ability": "knife",
+                "card_id": "emma",
+                "seat_id": "2",
+                "target_card": "millia",
+                "effective": True,
+                "hit": True,
+            },
+            {
+                "ability": "swap",
+                "card_id": "millia",
+                "seat_id": "1",
+                "target_seat": "3",
+                "effective": True,
+            },
+        ]
+        prepare_night_preview(game)
+        self.assertFalse(any(item["kind"] == "millia" for item in game["pending"]))
+        self.assertTrue(game["cards"]["millia"]["uses"].get("swap"))
+        self.assertEqual(game["seats"][0]["cards"], ["meruru", "emma"])
+        self.assertEqual(game["seats"][2]["cards"], ["millia", "hanna"])
+        self.assertEqual(
+            {death["target_card"] for death in game["night"]["preview"]["deaths"]}, {"millia"}
+        )
 
     def test_protection_and_half_day_limit_prevent_extra_card_exit(self):
         game = arranged_game()
@@ -434,7 +470,7 @@ class SpeechOrder(unittest.TestCase):
         command(game, player(game, "2"), "speech.done", {})
         self.assertEqual(game["public"]["speaker"], "4")
 
-    def test_a_seat_can_speak_early_and_the_text_is_published(self):
+    def test_a_seat_can_speak_early_and_the_text_waits_for_its_turn(self):
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         speak = next(
@@ -449,12 +485,18 @@ class SpeechOrder(unittest.TestCase):
         events = command(game, player(game, "4"), "speech.speak", {"text": "我提前说完了"})
         self.assertEqual(
             [item["text"] for item in events if item["text"].startswith("4号")],
-            ["4号的发言：我提前说完了"],
+            ["4号已写好发言，轮到时自动公开。"],
         )
+        self.assertEqual(game["speech_queued"], {"4": "我提前说完了"})
         self.assertIn("4", game["speech_passed"])
         for sid in ("1", "2"):
             command(game, player(game, sid), "speech.done", {})
-        command(game, player(game, "3"), "speech.done", {})
+        events = command(game, player(game, "3"), "speech.done", {})
+        self.assertEqual(
+            [item["text"] for item in events if "4号的发言" in item["text"]],
+            ["4号的发言：我提前说完了"],
+        )
+        self.assertEqual(game["speech_queued"], {})
         self.assertEqual(game["public"]["speaker"], "5")
 
     def test_the_current_speaker_can_publish_its_speech_text_and_move_on(self):
@@ -487,6 +529,74 @@ class SpeechOrder(unittest.TestCase):
         command(game, HOST, "host.advance", {})
         self.assertEqual(game["phase"], "witch")
         self.assertEqual(game["speech_passed"], [])
+
+
+class BalloonFlow(unittest.TestCase):
+    def test_arisa_starts_the_balloon_without_any_host_step(self):
+        game = arranged_game()
+        game["seats"][4].update(cards=["arisa", "leia"])
+        command(
+            game,
+            player(game, "5"),
+            "day.skill",
+            {"ability": "balloon", "participants": ["2", "3"]},
+        )
+        balloon = game["public"]["balloon"]
+        self.assertEqual(balloon["status"], "collecting")
+        self.assertEqual(balloon["participants"], ["5", "2", "3"])
+        self.assertEqual(game["pending"], [])
+        declaration = next(d for d in game["declarations"] if d["ability"] == "balloon")
+        self.assertTrue(declaration["executed"])
+        self.assertEqual(declaration["status"], "open")
+        options = next(
+            item
+            for item in actions_for(game, player(game, "2"))
+            if item["id"] == "balloon.choose"
+        )
+        self.assertEqual(
+            [item["value"] for item in options["fields"][0]["options"]], ["make", "skip"]
+        )
+        for sid in ("5", "2", "3"):
+            command(game, player(game, sid), "balloon.choose", {"choice": "make"})
+        self.assertEqual(game["public"]["balloon"]["status"], "complete")
+        self.assertEqual(game["public"]["balloon"]["progress"], 3)
+        self.assertEqual(
+            next(d for d in game["declarations"] if d["ability"] == "balloon")["status"],
+            "complete",
+        )
+        self.assertEqual(game["pending"], [])
+
+    def test_good_players_cannot_break_the_balloon(self):
+        game = arranged_game()
+        game["seats"][4].update(cards=["arisa", "leia"])
+        command(game, player(game, "5"), "day.skill", {"ability": "balloon", "participants": ["2"]})
+        with self.assertRaises(GameError):
+            command(game, player(game, "2"), "balloon.choose", {"choice": "break"})
+
+    def test_proposal_needs_more_than_half_of_the_living_players(self):
+        game = arranged_game()
+        game["cards"]["arisa"]["alive"] = False
+        command(game, player(game, "1"), "balloon.propose", {"participants": ["2", "3"]})
+        self.assertEqual(game["balloon_proposal"]["votes"], {"1": True})
+        self.assertEqual(game["public"]["balloon"]["status"], "idle")
+        for sid in ("2", "3"):
+            command(game, player(game, sid), "balloon.agree", {})
+        self.assertEqual(game["public"]["balloon"]["status"], "idle")
+        command(game, player(game, "4"), "balloon.agree", {})
+        self.assertIsNone(game["balloon_proposal"])
+        balloon = game["public"]["balloon"]
+        self.assertEqual(balloon["status"], "collecting")
+        self.assertEqual(balloon["participants"], ["2", "3"])
+        self.assertEqual(balloon["organizer"], "1号提议")
+
+    def test_a_proposal_that_can_no_longer_pass_is_dropped(self):
+        game = arranged_game()
+        game["cards"]["arisa"]["alive"] = False
+        command(game, player(game, "1"), "balloon.propose", {"participants": ["2"]})
+        for sid in ("2", "3", "4", "5"):
+            command(game, player(game, sid), "balloon.decline", {})
+        self.assertIsNone(game["balloon_proposal"])
+        self.assertEqual(game["public"]["balloon"]["status"], "idle")
 
 
 class AutoAdvance(unittest.TestCase):

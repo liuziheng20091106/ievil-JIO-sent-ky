@@ -308,7 +308,7 @@ def game_view(game, actor):
             ],
             "water": deepcopy(game["water"]),
             "balloon_choices": deepcopy(game["balloon_choices"]),
-            "balloon_votes": deepcopy(game["balloon_votes"]),
+            "balloon_proposal": deepcopy(game["balloon_proposal"]),
             "votes": deepcopy(game["votes"]),
             "brainwash": deepcopy(game["brainwash"]),
             "deaths": deepcopy(game["deaths"]),
