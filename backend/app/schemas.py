@@ -29,6 +29,7 @@ class Command(Input):
     expected_version: StrictInt = Field(ge=0)
     action: str = Field(min_length=1, max_length=80)
     payload: dict = Field(default_factory=dict)
+    as_seat: str | None = Field(default=None, max_length=8)
 
 
 class Chat(Input):

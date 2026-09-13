@@ -38,6 +38,7 @@ interface GameContext {
     action: UIAction,
     payload: Record<string, unknown>,
     version: number,
+    asSeat?: string,
   ) => Promise<void>;
   mergeMessages: (messages: Message[]) => void;
 }
@@ -62,18 +63,21 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const scope = JSON.stringify([session.game_id, session.actor?.id ?? null]);
   const identity = useRef(scope);
   const mutation = useRef(false);
-  const mergeMessages = useCallback((items: Message[]) => {
-    if (identity.current !== scope) return;
-    for (const item of items)
-      latest.current = Math.max(latest.current, item.id);
-    setMessages((previous) =>
-      [
-        ...new Map(
-          [...previous, ...items].map((item) => [item.id, item]),
-        ).values(),
-      ].sort((a, b) => a.id - b.id),
-    );
-  }, [scope]);
+  const mergeMessages = useCallback(
+    (items: Message[]) => {
+      if (identity.current !== scope) return;
+      for (const item of items)
+        latest.current = Math.max(latest.current, item.id);
+      setMessages((previous) =>
+        [
+          ...new Map(
+            [...previous, ...items].map((item) => [item.id, item]),
+          ).values(),
+        ].sort((a, b) => a.id - b.id),
+      );
+    },
+    [scope],
+  );
   const acceptState = useCallback((next: GameView, owner: string) => {
     if (identity.current !== owner) return;
     setState((previous) =>
@@ -218,6 +222,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     action: UIAction,
     payload: Record<string, unknown>,
     version: number,
+    asSeat?: string,
   ) => {
     if (!state || mutation.current)
       throw new Error("另一项操作正在提交，请稍候。");
@@ -230,6 +235,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
           expected_version: version,
           action: action.id,
           payload: { ...action.payload, ...payload },
+          as_seat: asSeat ?? null,
         }),
         owner,
       );

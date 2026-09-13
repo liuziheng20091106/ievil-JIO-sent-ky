@@ -7,6 +7,7 @@ from .state import (
     current,
     eligible_voters,
     next_nominator,
+    owner,
     player_seat,
     present,
     role_card,
@@ -41,6 +42,49 @@ def seat_options(game, alive=True):
 
 def role_options():
     return [(r, d["name"]) for r, d in ROLES.items()]
+
+
+def speech_start(game):
+    """Speeches usually start at today's last dead seat; fall back to seat 1."""
+    return next(
+        (d["seat_id"] for d in reversed(game["deaths"]) if d["day"] == game["day"]),
+        "1",
+    )
+
+
+def outstanding_seats(game):
+    """Seats whose missing input currently holds up the flow; only these are worth warning."""
+    if game["status"] != "playing":
+        return []
+    phase = game["phase"]
+    result = []
+    if phase in {"night", "night_coco"}:
+        coco = coco_seat(game)
+        for sid in game["night"]["actors"]:
+            if sid in game["night"]["confirmed"] or (phase == "night" and sid == coco):
+                continue
+            result.append(sid)
+    elif phase == "speech" and game["public"]["speaker"]:
+        result.append(game["public"]["speaker"])
+    elif phase == "nomination":
+        sid = next_nominator(game)
+        if sid:
+            result.append(sid)
+    elif phase == "voting":
+        result = [s["id"] for s in eligible_voters(game) if s["id"] not in game["votes"]]
+    elif phase == "execution":
+        result = [
+            owner(game, cid)["id"]
+            for cid in game["execution"]
+            if cid == "nanoka"
+            and game["cards"][cid]["alive"]
+            and role_card(game, cid)["uses"].get("bullets", 0) > 0
+            and owner(game, cid)["id"] not in game["execution_ready"]
+        ]
+    balloon = game["public"]["balloon"]
+    if balloon["status"] == "collecting":
+        result += [sid for sid in balloon["participants"] if sid not in game["balloon_choices"]]
+    return list(dict.fromkeys(result))
 
 
 def target_field(game, night=False, exclude=None):
@@ -145,7 +189,9 @@ def pending_action(game, item):
     kind = item["kind"]
     fields = []
     if kind == "information":
-        fields = [field("text", "发给当事人的裁定信息", "textarea")]
+        fields = [
+            field("text", "发给当事人的裁定信息", "textarea", default=item.get("text", ""))
+        ]
     elif kind == "millia":
         fields = [
             field(
@@ -153,14 +199,24 @@ def pending_action(game, item):
                 "交换后行动目标跟随",
                 "select",
                 [("card", "原角色牌"), ("seat", "原席位当前上层")],
+                default="card",
             )
         ]
     elif kind == "hiro":
         choices = [("decline", "不发动回溯")] + [
             (s["id"], f"{s['label']}（日{s['day']}）") for s in game["snapshots"]
         ]
+        preferred = next(
+            (snap for snap in reversed(game["snapshots"]) if snap["half"] == game["half"]), None
+        ) or (game["snapshots"][-1] if game["snapshots"] else None)
         fields = [
-            field("snapshot", "回溯时间点（优先前一天同阶段；其他须裁定）", "select", choices),
+            field(
+                "snapshot",
+                "回溯时间点（优先前一天同阶段；其他须裁定）",
+                "select",
+                choices,
+                default=preferred["id"] if preferred else None,
+            ),
             field(
                 "keep_states",
                 "额外保留的状态归属（精神系自动保留）",
@@ -171,15 +227,35 @@ def pending_action(game, item):
             field("reason", "特殊时间点的裁定说明", "textarea", required=False),
         ]
     elif kind == "suspects":
+        source = item.get("source_card")
+        killer = game["cards"][source]["states"].get("framed_killer", source) if source else None
+        third = next(
+            (r for r in ROLES if r not in {killer, "hanna"} and present(game, r)), None
+        )
+        suggested = list(dict.fromkeys(r for r in (killer, "hanna", third) if r))
         fields = [
-            field("suspects", "三名疑似凶手", "multiselect", role_options(), min=3, max=3),
+            field(
+                "suspects",
+                "三名疑似凶手",
+                "multiselect",
+                role_options(),
+                min=3,
+                max=3,
+                default=suggested if len(suggested) == 3 else None,
+            ),
             field("omit_leia", "裁定魔女蕾雅不列入名单", "checkbox", required=False),
         ]
         if not item.get("source_card"):
             fields.append(field("true_source", "补充裁定实际真凶", "select", role_options()))
     elif kind == "lower_entry":
         fields = [
-            field("allow", "允许下层本阶段行动（同半天仍最多出局一牌）", "checkbox", required=False)
+            field(
+                "allow",
+                "允许下层本阶段行动（同半天仍最多出局一牌）",
+                "checkbox",
+                required=False,
+                default=True,
+            )
         ]
     elif kind == "declaration":
         fields = [
@@ -192,11 +268,10 @@ def pending_action(game, item):
                     ("complete", "执行并完成声明"),
                     ("stop", "依据裁定停止尚未完成部分"),
                 ],
+                default="execute",
             ),
             field("reason", "裁定说明", "textarea", required=False),
         ]
-    elif kind == "challenge":
-        fields = [field("confirm", "确认按真实或伪装结算质疑（失败者出局并个人判负）", "checkbox")]
     elif kind == "water":
         fields = [
             field(
@@ -209,12 +284,13 @@ def pending_action(game, item):
                     ("injure", "裁定只负伤"),
                     ("cancel", "本次时机不合法，退回13水"),
                 ],
+                default="kill",
             ),
-            field("reason", "互动与时机裁定", "textarea"),
+            field("reason", "互动与时机裁定", "textarea", default="13水：按现有庇护结算"),
         ]
     elif kind == "evidence":
         fields = [
-            field("public", "向全员公开", "checkbox", required=False),
+            field("public", "向全员公开", "checkbox", required=False, default=True),
             field(
                 "recipients",
                 "未公开时的接收席位",
@@ -222,7 +298,7 @@ def pending_action(game, item):
                 seat_options(game, False),
                 required=False,
             ),
-            field("allow", "准许发布（不勾选为拒绝）", "checkbox", required=False),
+            field("allow", "准许发布（不勾选为拒绝）", "checkbox", required=False, default=True),
         ]
     elif kind == "codex":
         fields = [
@@ -231,6 +307,7 @@ def pending_action(game, item):
                 "魔典处理",
                 "select",
                 [("skip", "本日不转化"), ("convert", "指定特殊转化对象")],
+                default="skip",
             ),
             field(
                 "target",
@@ -239,7 +316,7 @@ def pending_action(game, item):
                 [("", "不指定")] + role_options(),
                 required=False,
             ),
-            field("reason", "裁定说明", "textarea"),
+            field("reason", "裁定说明", "textarea", default="魔典未按时结算，按跳过处理"),
         ]
     elif kind == "balloon_organize":
         fields = [
@@ -266,6 +343,7 @@ def pending_action(game, item):
                     ("penalty", "判定不够疯狂，禁用成就并执行不利裁定"),
                     ("satisfied", "符合要求"),
                 ],
+                default="warn",
             ),
             field(
                 "penalty",
@@ -282,8 +360,17 @@ def pending_action(game, item):
             field("reason", "裁定说明", "textarea"),
         ]
     elif kind == "reaction":
-        fields = [field("proceed", "确认按预结算执行（特殊互动请先纠错）", "checkbox")]
-    return action("host.resolve", item["title"], fields, {"pending_id": item["id"]}, "裁决待办")
+        fields = [
+            field("proceed", "确认按预结算执行（特殊互动请先纠错）", "checkbox", default=True)
+        ]
+    return action(
+        "host.resolve",
+        item["title"],
+        fields,
+        {"pending_id": item["id"]},
+        "裁决待办",
+        blocking=True,
+    )
 
 
 def host_actions(game):
@@ -300,7 +387,7 @@ def host_actions(game):
             )
         )
     else:
-        result.append(action("host.advance", "完成当前阶段 / 推进", group="流程"))
+        result.append(action("host.advance", "完成当前阶段 / 推进", group="流程", blocking=True))
     result.extend(pending_action(game, p) for p in game["pending"])
     result.append(
         action(
@@ -311,26 +398,50 @@ def host_actions(game):
         )
     )
     if game["status"] == "playing":
-        result.extend(
-            [
+        outstanding = outstanding_seats(game)
+        if outstanding:
+            result.append(
                 action(
                     "host.warn",
                     "警告：30秒后结束该玩家操作",
-                    [field("seat_id", "被警告席位", "select", seat_options(game, False))],
+                    [
+                        field(
+                            "seat_id",
+                            "被警告席位（仅列出当前卡住的席位）",
+                            "select",
+                            [
+                                (sid, label)
+                                for sid, label in seat_options(game, False)
+                                if sid in outstanding
+                            ],
+                            required=False,
+                        ),
+                        field("all", "警告当前全部卡住的席位", "checkbox", required=False),
+                    ],
                     group="流程",
-                ),
+                    blocking=True,
+                )
+            )
+        result.extend(
+            [
                 action(
                     "host.speech",
                     "安排顺序发言",
                     [
                         field(
-                            "order",
-                            "发言顺序（按选择顺序）",
-                            "multiselect",
+                            "start",
+                            "从谁开始（通常为死者）",
+                            "select",
                             seat_options(game, False),
-                            min=1,
-                            max=7,
-                        )
+                            default=speech_start(game),
+                        ),
+                        field(
+                            "direction",
+                            "方向",
+                            "select",
+                            [("asc", "顺序（序号递增）"), ("desc", "逆序（序号递减）")],
+                            default="asc",
+                        ),
                     ],
                     group="流程",
                 ),
@@ -476,6 +587,7 @@ def host_actions(game):
                     [field("confirm", "本半天所有同时出局与连锁均已处理", "checkbox")],
                     group="胜负",
                     danger=True,
+                    blocking=True,
                 )
             )
         if game["surrenders"]:
@@ -494,6 +606,7 @@ def host_actions(game):
                     ],
                     group="胜负",
                     danger=True,
+                    blocking=True,
                 )
             )
     result.append(
@@ -528,7 +641,7 @@ def actions_for(game, actor):
     card = current(game, s)
     result = []
     if game["status"] == "lobby":
-        if game["phase"] == "ordering":
+        if game["phase"] == "ordering" and not s["ready"]:
             result.append(
                 action(
                     "lobby.order",
@@ -547,30 +660,31 @@ def actions_for(game, actor):
                     group="准备",
                 )
             )
-        result.append(
-            action(
-                "lobby.ready",
-                "取消准备"
-                if s["ready"]
-                else ("确认上下牌并再次准备" if game["phase"] == "ordering" else "准备发牌"),
-                group="准备",
+        if game["phase"] == "lobby" or not s["ready"]:
+            result.append(
+                action(
+                    "lobby.ready",
+                    "取消准备"
+                    if s["ready"]
+                    else ("确认上下牌并再次准备" if game["phase"] == "ordering" else "准备发牌"),
+                    group="准备",
+                    blocking=True,
+                )
             )
-        )
+        if "honoka" in s["cards"]:
+            result.append(
+                action(
+                    "honoka.disguise",
+                    "选择示人角色（穗乃香）",
+                    [field("role", "示人身份", "select", role_options())],
+                    group="准备",
+                )
+            )
         result.append(
             action(
                 "player.profile",
-                "设置公开称呼和开局示人头像",
-                [
-                    field("name", "公开称呼", default=s["name"]),
-                    field(
-                        "avatar",
-                        "示人头像（开局前保密，不代表真实角色）",
-                        "select",
-                        [("", "开局时使用上层角色头像")] + role_options(),
-                        required=False,
-                        default=s["avatar_role_id"] or "",
-                    ),
-                ],
+                "设置公开称呼",
+                [field("name", "公开称呼", default=s["name"])],
                 group="准备",
             )
         )
@@ -621,7 +735,7 @@ def actions_for(game, actor):
                 )
             if submitted:
                 result.append(action("night.clear", "清除未确认夜间选择", group="夜间"))
-            result.append(action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间"))
+            result.append(action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True))
     if card and game["half"] == "day":
         for ability in DAY_ABILITIES:
             if can_day_ability(game, card, ability) and not any(
@@ -658,7 +772,8 @@ def actions_for(game, actor):
                             "私密伪装选择",
                         )
                     )
-    if card and card["role_id"] == "honoka":
+    honoka = game["cards"]["honoka"]
+    if card and card["id"] == "honoka" and not honoka["states"].get("disguise_locked"):
         result.append(
             action(
                 "honoka.disguise",
@@ -666,28 +781,19 @@ def actions_for(game, actor):
                 [field("role", "示人身份", "select", role_options())],
             )
         )
-        if card["witch"]:
-            result.append(
-                action(
-                    "honoka.witness",
-                    "设定目击名单中的显示角色",
-                    [field("role", "名单显示身份", "select", role_options())],
-                )
+    if card and card["id"] == "honoka" and card["witch"]:
+        result.append(
+            action(
+                "honoka.witness",
+                "设定目击名单中的显示角色",
+                [field("role", "名单显示身份", "select", role_options())],
             )
+        )
     if card and card["role_id"] == "hiro" and card["witch"]:
         result.append(action("hiro.exit", "主动出局", danger=True))
     if game["half"] == "day":
         for declaration in game["declarations"]:
-            if (
-                declaration["status"] == "open"
-                and declaration["seat_id"] != sid
-                and not any(
-                    p["kind"] == "challenge"
-                    and p["declaration_id"] == declaration["id"]
-                    and p["seat_id"] == sid
-                    for p in game["pending"]
-                )
-            ):
+            if declaration["status"] == "open" and declaration["seat_id"] != sid:
                 result.append(
                     action(
                         "day.challenge",
@@ -697,10 +803,14 @@ def actions_for(game, actor):
                     )
                 )
     if phase == "speech" and game["public"]["speaker"] == sid:
-        result.append(action("speech.done", "结束本次发言", group="流程"))
+        result.append(action("speech.done", "结束本次发言", group="流程", blocking=True))
     if phase == "nomination" and card and next_nominator(game) == sid:
-        result.append(action("vote.nominate", "提名候选", [target_field(game)], group="投票"))
-        result.append(action("vote.pass", "放弃本次提名并交给下一人", group="投票"))
+        result.append(
+            action("vote.nominate", "提名候选", [target_field(game)], group="投票", blocking=True)
+        )
+        result.append(
+            action("vote.pass", "放弃本次提名并交给下一人", group="投票", blocking=True)
+        )
     if phase == "voting" and s in eligible_voters(game):
         result.append(
             action(
@@ -715,6 +825,7 @@ def actions_for(game, actor):
                     )
                 ],
                 group="投票",
+                blocking=True,
             )
         )
     if (
@@ -730,9 +841,12 @@ def actions_for(game, actor):
                     "临刑开枪（1/3魔女，1/6普通）",
                     [target_field(game)],
                     group="处决",
+                    blocking=True,
                 )
             )
-        result.append(action("execution.confirm", "放弃临刑行动并确认", group="处决"))
+            result.append(
+                action("execution.confirm", "放弃临刑行动并确认", group="处决", blocking=True)
+            )
     balloon = game["public"]["balloon"]
     if (
         balloon["status"] == "collecting"
@@ -748,6 +862,7 @@ def actions_for(game, actor):
                 "秘密提交热气球选择",
                 [field("choice", "选择", "select", options)],
                 group="热气球",
+                blocking=True,
             )
         )
     if (

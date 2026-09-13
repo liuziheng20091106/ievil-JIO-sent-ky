@@ -176,9 +176,7 @@ def add_events(db, game_id, events):
                 text=event.get("text", ""),
                 audience=audience,
                 image_id=event.get("image_id"),
-                channel_id="public"
-                if audience is None
-                else ("host:" + audience[0] if len(audience) == 1 else "information"),
+                channel_id="public" if audience is None else "information",
             )
         )
     return rows
@@ -227,8 +225,11 @@ def messages(db, game_id, actor, *, before=None, after=None, channel_id=None):
         clauses.append("m.id > ?")
         args.append(after)
     if channel_id is not None:
-        clauses.append("m.channel_id=?")
-        args.append(channel_id)
+        if channel_id == "system":
+            clauses.append("m.channel_id='information'")
+        else:
+            clauses.append("m.channel_id=?")
+            args.append(channel_id)
     order = "ASC" if after is not None else "DESC"
     rows = list(
         db.execute(

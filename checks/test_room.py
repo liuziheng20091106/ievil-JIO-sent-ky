@@ -85,10 +85,7 @@ class RoomAccess(unittest.TestCase):
             original, original_headers = players[0]
             before = state(original_headers)
             own = next(s for s in before["seats"] if s["id"] == original["seat_id"])
-            avatar = before["self"]["cards"][1]["role_id"]
-            command(
-                "player.profile", {"name": own["name"], "avatar": avatar}, headers=original_headers
-            )
+            command("player.profile", {"name": own["name"]}, headers=original_headers)
             command(
                 "lobby.order", {"top": before["self"]["cards"][1]["id"]}, headers=original_headers
             )
@@ -344,6 +341,155 @@ class Heartbeat(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(db.execute("SELECT id FROM messages").fetchall())
             finally:
                 realtime.connections.clear()
+
+
+class HostWorkbench(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.patch = patch.object(storage, "DATA_DIR", Path(self.directory.name))
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+        self.client = TestClient(app)
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+        self.client.post("/api/host/login", json={"password": "114514"}).raise_for_status()
+        self.host = {"Cookie": f"{auth.COOKIE}={self.client.cookies[auth.COOKIE]}"}
+        self.game = self.client.post("/api/games", json={"codex": DEFAULT_CODEX}).json()
+        self.root = f"/api/games/{self.game['id']}"
+        self.client.cookies.clear()
+        code = self.client.post(
+            self.root + "/invites", headers=self.host, json={"kind": "player"}
+        ).json()["code"]
+        self.players = {}
+        for index in range(7):
+            self.client.cookies.clear()
+            joined = self.client.post("/api/join", json={"code": code, "name": f"玩家{index}"})
+            joined.raise_for_status()
+            actor = joined.json()["actor"]
+            self.players[actor["seat_id"]] = (
+                actor,
+                {"Cookie": f"{auth.COOKIE}={self.client.cookies[auth.COOKIE]}"},
+            )
+            self.client.cookies.clear()
+
+    def state(self):
+        result = self.client.get(self.root + "/state", headers=self.host)
+        result.raise_for_status()
+        return result.json()
+
+    def test_host_acts_for_a_seat_and_leaves_a_public_trace(self):
+        version = self.state()["version"]
+        _, visitor = self.players["1"]
+        refused = self.client.post(
+            self.root + "/commands",
+            headers=visitor,
+            json={
+                "expected_version": version,
+                "action": "lobby.ready",
+                "payload": {},
+                "as_seat": "2",
+            },
+        )
+        self.assertEqual(refused.status_code, 403, refused.text)
+        done = self.client.post(
+            self.root + "/commands",
+            headers=self.host,
+            json={
+                "expected_version": version,
+                "action": "lobby.ready",
+                "payload": {},
+                "as_seat": "1",
+            },
+        )
+        self.assertEqual(done.status_code, 200, done.text)
+        self.assertTrue(next(s for s in done.json()["seats"] if s["id"] == "1")["ready"])
+        self.assertFalse(next(s for s in done.json()["seats"] if s["id"] == "2")["ready"])
+        messages = self.client.get(
+            self.root + "/messages?channel_id=public", headers=self.host
+        ).json()["messages"]
+        self.assertTrue(
+            any("主持人为1号完成了本阶段操作" in item["text"] for item in messages), messages
+        )
+        denied = self.client.post(
+            self.root + "/commands",
+            headers=self.host,
+            json={
+                "expected_version": done.json()["version"],
+                "action": "host.advance",
+                "payload": {},
+                "as_seat": "1",
+            },
+        )
+        self.assertEqual(denied.status_code, 422, denied.text)
+        view = self.client.get(f"{self.root}/seats/1/view", headers=self.host)
+        self.assertEqual(view.status_code, 200, view.text)
+        self.assertEqual(view.json()["seat_id"], "1")
+        self.assertTrue(any(item["id"] == "lobby.ready" for item in view.json()["view"]["actions"]))
+        self.assertNotIn("host", view.json()["view"])
+
+    def start_game(self):
+        for _ in range(2):
+            for _, headers in self.players.values():
+                ready = self.client.post(
+                    self.root + "/commands",
+                    headers=headers,
+                    json={
+                        "expected_version": self.state()["version"],
+                        "action": "lobby.ready",
+                        "payload": {},
+                    },
+                )
+                self.assertEqual(ready.status_code, 200, ready.text)
+        started = self.client.post(
+            self.root + "/commands",
+            headers=self.host,
+            json={
+                "expected_version": self.state()["version"],
+                "action": "host.start",
+                "payload": {},
+            },
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertEqual(started.json()["status"], "playing")
+
+    def test_information_channel_returns_private_notices_to_the_right_player(self):
+        actor, headers = self.players["1"]
+        _, stranger = self.players["2"]
+        self.start_game()
+        channels = self.client.get(self.root + "/state", headers=headers).json()["channels"]
+        system = next(item for item in channels if item["id"] == "system")
+        self.assertFalse(system["can_send"])
+        posted = self.client.post(
+            self.root + "/messages",
+            headers=headers,
+            json={"channel_id": "system", "text": "不应发出"},
+        )
+        self.assertEqual(posted.status_code, 403, posted.text)
+        sent = self.client.post(
+            self.root + "/commands",
+            headers=self.host,
+            json={
+                "expected_version": self.state()["version"],
+                "action": "host.information",
+                "payload": {
+                    "title": "目击名单",
+                    "text": "三名疑似凶手：甲、乙、丙",
+                    "recipients": ["1"],
+                },
+            },
+        )
+        self.assertEqual(sent.status_code, 200, sent.text)
+        mine = self.client.get(
+            self.root + "/messages?channel_id=system", headers=headers
+        ).json()["messages"]
+        self.assertTrue(any("三名疑似凶手" in item["text"] for item in mine), mine)
+        self.assertTrue(all(item["channel_id"] == "information" for item in mine))
+        others = self.client.get(
+            self.root + "/messages?channel_id=system", headers=stranger
+        ).json()["messages"]
+        self.assertFalse(any("三名疑似凶手" in item["text"] for item in others))
+        self.assertEqual(actor["seat_id"], "1")
 
 
 if __name__ == "__main__":

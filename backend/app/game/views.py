@@ -4,7 +4,126 @@ from copy import deepcopy
 
 from .actions import actions_for
 from .catalog import PHASES
-from .state import can_use_card, current, next_nominator, owner, player_seat, require
+from .resolution import coco_seat
+from .state import (
+    can_use_card,
+    current,
+    eligible_voters,
+    next_nominator,
+    owner,
+    player_seat,
+    require,
+    role_card,
+)
+
+
+def host_tasks(game):
+    """Ordered to-do list for the host: every item is either blocking or a reminder."""
+    tasks = []
+    for item in game["pending"]:
+        tasks.append(
+            {
+                "id": item["id"],
+                "kind": "pending",
+                "title": item["title"],
+                "detail": item.get("text", ""),
+                "seats": [item["seat_id"]] if item.get("seat_id") else [],
+                "action": "host.resolve",
+                "payload": {"pending_id": item["id"]},
+                "blocking": True,
+            }
+        )
+    if game["status"] != "playing":
+        return tasks
+
+    def warn_task(kind, seat_id, title):
+        tasks.append(
+            {
+                "id": f"{kind}:{seat_id}" if seat_id else kind,
+                "kind": kind,
+                "title": title,
+                "detail": "",
+                "seats": [seat_id] if seat_id else [],
+                "action": "host.warn",
+                "payload": {"seat_id": seat_id} if seat_id else {},
+                "blocking": True,
+            }
+        )
+
+    phase = game["phase"]
+    if phase in {"night", "night_coco"}:
+        coco = coco_seat(game) if phase == "night" else None
+        for sid in game["night"]["actors"]:
+            if sid in game["night"]["confirmed"] or sid == coco:
+                continue
+            warn_task("night", sid, f"{sid}号尚未确认夜间行动")
+    elif phase == "speech" and game["public"]["speaker"]:
+        sid = game["public"]["speaker"]
+        warn_task("speech", sid, f"当前发言人：{sid}号")
+    elif phase == "nomination":
+        sid = next_nominator(game)
+        if sid:
+            warn_task("nomination", sid, f"轮到{sid}号提名")
+    elif phase == "voting":
+        for s in eligible_voters(game):
+            if s["id"] not in game["votes"]:
+                warn_task("voting", s["id"], f"{s['id']}号尚未投票")
+    elif phase == "execution":
+        for cid in game["execution"]:
+            if (
+                cid != "nanoka"
+                or not game["cards"][cid]["alive"]
+                or role_card(game, cid)["uses"].get("bullets", 0) <= 0
+            ):
+                continue
+            sid = owner(game, cid)["id"]
+            if sid not in game["execution_ready"]:
+                warn_task("execution", sid, f"{sid}号临刑开枪尚未确认")
+    balloon = game["public"]["balloon"]
+    if balloon["status"] == "collecting":
+        for sid in balloon["participants"]:
+            if sid not in game["balloon_choices"]:
+                warn_task("balloon", sid, f"{sid}号尚未提交热气球选择")
+    if phase == "night_review" and game["night"]["preview"] is not None:
+        tasks.append(
+            {
+                "id": "review",
+                "kind": "review",
+                "title": "审阅本夜预结算并发布夜间结果",
+                "detail": "",
+                "seats": [],
+                "action": "host.advance",
+                "payload": {},
+                "blocking": True,
+            }
+        )
+    if game["winner_candidate"]:
+        tasks.append(
+            {
+                "id": "winner",
+                "kind": "winner",
+                "title": "已满足胜利条件，等待确认宣判",
+                "detail": game["winner_candidate"]["reason"],
+                "seats": [],
+                "action": "host.confirm_winner",
+                "payload": {},
+                "blocking": True,
+            }
+        )
+    if game["surrenders"]:
+        tasks.append(
+            {
+                "id": "surrender",
+                "kind": "surrender",
+                "title": "有交牌意向待审阅",
+                "detail": "",
+                "seats": list(game["surrenders"]),
+                "action": "host.surrender",
+                "payload": {},
+                "blocking": True,
+            }
+        )
+    return tasks
 
 
 def card_view(game, card, host=False):
@@ -68,6 +187,44 @@ def game_view(game, actor):
     public = deepcopy(game["public"])
     if game["phase"] == "nomination":
         public["nomination_speaker"] = next_nominator(game)
+    phase = game["phase"]
+    if phase == "speech":
+        public["current_actor"] = {
+            "phase": "speech",
+            "seat_id": public["speaker"],
+            "label": "顺序发言",
+        }
+    elif phase == "nomination":
+        public["current_actor"] = {
+            "phase": "nomination",
+            "seat_id": next_nominator(game),
+            "label": "依次提名",
+        }
+    elif phase == "voting":
+        public["current_actor"] = {
+            "phase": "voting",
+            "seat_id": game["public"]["votes"].get("candidate"),
+            "label": "投票中",
+        }
+    elif phase == "execution":
+        public["current_actor"] = {
+            "phase": "execution",
+            "seat_id": next(
+                (
+                    owner(game, cid)["id"]
+                    for cid in game["execution"]
+                    if owner(game, cid)["id"] not in game["execution_ready"]
+                ),
+                None,
+            ),
+            "label": "处决前响应",
+        }
+    elif phase == "balloon":
+        public["current_actor"] = {
+            "phase": "balloon",
+            "seat_id": None,
+            "label": "秘密选择中",
+        }
     view = {
         "id": game["id"],
         "version": game["version"],
@@ -109,6 +266,21 @@ def game_view(game, actor):
         view["self"]["balloon_choice"] = game["balloon_choices"].get(own_id)
         view["self"]["vote"] = game["votes"].get(own_id)
         view["self"]["warning_deadline"] = game["warnings"].get(own_id)
+        if (
+            game["status"] == "lobby"
+            and game["phase"] == "ordering"
+            and "honoka" in own["cards"]
+        ):
+            # 穗乃香规则：开局前获知其他人的上层角色（仅文字角色名，不带头像）。
+            view["self"]["honoka_upper"] = [
+                {
+                    "seat_id": s["id"],
+                    "name": s["name"],
+                    "role_id": game["cards"][s["cards"][0]]["role_id"],
+                }
+                for s in game["seats"]
+                if s["ready"] and s["id"] != own_id and s["cards"]
+            ]
     if host:
         view["host"] = {
             "codex": list(game["codex"]),
@@ -132,6 +304,12 @@ def game_view(game, actor):
             "warnings": deepcopy(game["warnings"]),
             "execution_rolls": deepcopy(game.get("execution_rolls", [])),
             "declarations": deepcopy(game["declarations"]),
+            "nominations": deepcopy(game["nominations"]),
+            "nomination_done": list(game.get("nomination_done", [])),
+            "vote_rounds": deepcopy(game["vote_rounds"]),
+            "photos": deepcopy(game["photos"]),
+            "gaze": deepcopy(game.get("gaze")),
+            "tasks": host_tasks(game),
         }
     can_chat, reason = False, "当前为只读状态"
     if host:

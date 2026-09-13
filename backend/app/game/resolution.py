@@ -77,6 +77,9 @@ def night_text(game, actions):
 
 
 def begin_night(game, events):
+    # actions imports this module; the ability list stays a local import to avoid a cycle.
+    from .actions import night_abilities
+
     game["half"] = "night"
     game["phase"] = "night"
     game["night"] = {
@@ -87,8 +90,20 @@ def begin_night(game, events):
         "preview": None,
         "reactions": [],
     }
+    for sid, cid in game["night"]["actors"].items():
+        if not night_abilities(game, game["cards"][cid]):
+            game["night"]["confirmed"].append(sid)
+            notify(
+                game,
+                events,
+                "本夜你没有可执行的技能，已自动确认（未操作视为放弃）。",
+                [sid],
+            )
     witch_information(game, events)
     notify(game, events, "夜间行动开始，请选择行动后确认；也可放弃并确认。")
+    # Everyone else auto-confirming can leave Coco as the only pending actor; nobody
+    # would trigger the final confirmation step for her otherwise.
+    unlock_coco(game, events)
 
 
 def coco_seat(game):
@@ -155,6 +170,7 @@ def lock_night(game, events):
         elif ability == "decode":
             card["uses"]["decode"] = card["uses"].get("decode", 0) + 1
             count = sum(a == b for a, b in zip(action["guess"], game["codex"]))
+            action["correct"] = count
             information(
                 game,
                 events,
@@ -318,13 +334,11 @@ def death_batch(game, events, preview):
         notify(game, events, f"{s['id']}号玩家一张角色牌出局{suffix}。")
         lower = current(game, s)
         if lower:
-            notify(
-                game,
-                events,
-                f"下层角色{ROLES[lower['role_id']]['name']}已登场。",
-                [s["id"]],
-                "下层登场",
-            )
+            s["avatar_role_id"] = lower["role_id"]
+            text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
+            if lower["id"] == "honoka":
+                text += "你可以选择一次示人角色。"
+            notify(game, events, text, [s["id"]], "下层登场")
             pending(
                 game,
                 "lower_entry",
@@ -356,5 +370,9 @@ def revive(game, events, card_id, puppet=None):
         card["states"]["puppet"] = puppet
     if card_id == "sherry" and game["spiritual"]["sherry_bound"]:
         move_hanna(game, 2)
-    notify(game, events, f"{owner(game, card_id)['id']}号玩家一张角色牌复活。")
+    owner_seat = owner(game, card_id)
+    now = current(game, owner_seat)
+    if now:
+        owner_seat["avatar_role_id"] = now["role_id"]
+    notify(game, events, f"{owner_seat['id']}号玩家一张角色牌复活。")
     check_winner(game)

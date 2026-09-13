@@ -194,5 +194,183 @@ class ResolutionEdges(unittest.TestCase):
             )
 
 
+class PlaytestFixes(unittest.TestCase):
+    def test_skill_less_seats_confirm_themselves_and_coco_still_acts_last(self):
+        game = arranged_game("night", "night")
+        layout = {
+            "1": ["emma", "hiro"],
+            "2": ["coco", "sherry"],
+            "3": ["hanna", "meruru"],
+            "4": ["annan", "noah"],
+            "5": ["leia", "marg"],
+            "6": ["nanoka", "millia"],
+            "7": ["arisa", "honoka"],
+        }
+        for seat in game["seats"]:
+            seat["cards"] = list(layout[seat["id"]])
+        game["cards"]["coco"]["witch"] = True
+        game["cards"]["nanoka"]["uses"]["bullets"] = 0
+        begin_night(game, [])
+        self.assertEqual(game["phase"], "night_coco")
+        self.assertEqual(sorted(game["night"]["confirmed"]), ["1", "3", "4", "5", "6", "7"])
+        coco = player(game, "2")
+        self.assertIn("night.submit", [a["id"] for a in game_view(game, coco)["actions"]])
+        command(game, coco, "night.confirm")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "night_review")
+
+    def test_evidence_waits_for_the_last_card_of_a_seat(self):
+        game = arranged_game("night_results", "night")
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["meruru"], "effect": "unconditional", "reason": "回归：上层牌出局"},
+        )
+        self.assertFalse(game["cards"]["meruru"]["alive"])
+        item = next(p for p in game["pending"] if p["kind"] == "suspects")
+        command(
+            game,
+            HOST,
+            "host.resolve",
+            {
+                "pending_id": item["id"],
+                "true_source": "hanna",
+                "suspects": ["hanna", "emma", "noah"],
+                "omit_leia": False,
+            },
+        )
+        seat_view = game_view(game, player(game, "3"))
+        self.assertTrue(any("三名疑似凶手" in i["text"] for i in seat_view["information"]))
+        self.assertFalse(game["cards"]["meruru"]["states"].get("evidence_allowed"))
+        self.assertNotIn("evidence.submit", [a["id"] for a in seat_view["actions"]])
+        game["day"] += 1
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["hanna"], "effect": "unconditional", "reason": "回归：下层牌出局"},
+        )
+        item = next(p for p in game["pending"] if p["kind"] == "suspects")
+        command(
+            game,
+            HOST,
+            "host.resolve",
+            {
+                "pending_id": item["id"],
+                "true_source": "hanna",
+                "suspects": ["hanna", "emma", "noah"],
+                "omit_leia": False,
+            },
+        )
+        self.assertTrue(game["cards"]["hanna"]["states"]["evidence_allowed"])
+        self.assertIn("evidence.submit", [a["id"] for a in game_view(game, player(game, "3"))["actions"]])
+
+    def test_challenge_settles_on_the_spot_instead_of_waiting_for_the_host(self):
+        game = arranged_game("discussion")
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        honoka = player(game, "7")
+        command(game, honoka, "day.skill", {"ability": "interrupt", "target": "1"})
+        declaration = game["declarations"][0]
+        self.assertTrue(declaration["fake"])
+        command(game, player(game, "1"), "day.challenge", {"declaration_id": declaration["id"]})
+        self.assertFalse(any(p["kind"] == "challenge" for p in game["pending"]))
+        self.assertFalse(any(p.get("declaration_id") == declaration["id"] for p in game["pending"]))
+        self.assertEqual(game["declarations"][0]["status"], "stopped")
+        self.assertTrue(game["cards"]["millia"]["alive"])
+
+    def test_failed_challenge_still_eliminates_the_challenger(self):
+        game = arranged_game("discussion")
+        game["seats"][0]["cards"] = ["emma", "millia"]
+        command(game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
+        declaration = game["declarations"][0]
+        self.assertFalse(declaration["fake"])
+        command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
+        self.assertFalse(game["cards"]["meruru"]["alive"])
+        self.assertIn("p3", game["spiritual"]["personal_losses"])
+        self.assertEqual(game["declarations"][0]["status"], "open")
+
+    def test_honoka_lobby_disguise_applies_only_from_the_top_card(self):
+        game = arranged_game()
+        game.update(status="lobby", phase="ordering", day=1, half="night")
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        for seat in game["seats"]:
+            seat["ready"] = True
+        command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
+        self.assertEqual(game["cards"]["honoka"]["states"]["disguise"], "emma")
+        command(game, HOST, "host.start")
+        self.assertEqual(
+            game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "emma"
+        )
+        self.assertTrue(game["cards"]["honoka"]["states"]["disguise_locked"])
+        with self.assertRaises(GameError):
+            command(game, player(game, "7"), "honoka.disguise", {"role": "noah"})
+
+    def test_honoka_bottom_disguise_is_dropped_and_redecided_on_entry(self):
+        game = arranged_game()
+        game.update(status="lobby", phase="ordering", day=1, half="night")
+        game["seats"][6]["cards"] = ["nanoka", "honoka"]
+        for seat in game["seats"]:
+            seat["ready"] = True
+        command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
+        command(game, HOST, "host.start")
+        self.assertEqual(
+            game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "nanoka"
+        )
+        self.assertNotIn("disguise", game["cards"]["honoka"]["states"])
+        death_batch(
+            game,
+            [],
+            damage_preview(
+                game, [{"target_card": "nanoka", "cause": "host", "unconditional": True}]
+            ),
+        )
+        self.assertEqual(
+            game_view(game, player(game, "7"))["seats"][6]["avatar_role_id"], "honoka"
+        )
+        item = next(p for p in game["pending"] if p["kind"] == "lower_entry")
+        command(game, HOST, "host.resolve", {"pending_id": item["id"], "allow": True})
+        command(game, player(game, "7"), "honoka.disguise", {"role": "noah"})
+        self.assertEqual(
+            game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "noah"
+        )
+        with self.assertRaises(GameError):
+            command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
+
+    def test_honoka_alone_sees_ready_upper_roles_during_ordering(self):
+        game = arranged_game()
+        game.update(status="lobby", phase="ordering", day=1, half="night")
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        for seat in game["seats"]:
+            seat["ready"] = False
+        game["seats"][0]["ready"] = True
+        game["seats"][1]["ready"] = True
+        honoka = game_view(game, player(game, "7"))["self"]["honoka_upper"]
+        self.assertEqual(
+            {item["seat_id"]: item["role_id"] for item in honoka},
+            {"1": "millia", "2": "hiro"},
+        )
+        stranger = game_view(game, player(game, "1"))["self"]
+        self.assertNotIn("honoka_upper", stranger)
+        self.assertEqual(game_view(game, player(game, "1"))["ready_count"], 2)
+
+
+class SpeechOrder(unittest.TestCase):
+    def test_speech_start_and_direction_build_the_two_documented_orders(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "4", "direction": "asc"})
+        self.assertEqual(game["public"]["speech_order"], ["4", "5", "6", "7", "1", "2", "3"])
+        self.assertEqual(game["public"]["speaker"], "4")
+        command(game, HOST, "host.speech", {"start": "4", "direction": "desc"})
+        self.assertEqual(game["public"]["speech_order"], ["4", "3", "2", "1", "7", "6", "5"])
+        self.assertEqual(game["public"]["speaker"], "4")
+        default = next(
+            item
+            for item in game_view(game, HOST)["actions"]
+            if item["id"] == "host.speech"
+        )
+        self.assertEqual(default["fields"][0]["default"], "1")
+
+
 if __name__ == "__main__":
     unittest.main()

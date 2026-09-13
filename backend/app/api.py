@@ -1,6 +1,7 @@
 """HTTP transport, room administration, and atomic domain command dispatch."""
 
 import copy
+import json
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -25,6 +26,28 @@ def seat_for(game, seat_id):
     if not seat:
         raise HTTPException(422, "请选择有效席位")
     return seat
+
+
+def impersonated_actor(db, game, seat_id):
+    """Build the player actor of a seat so the host can act in that seat's grammar."""
+    seat = seat_for(game, seat_id)
+    occupant = seat["occupant_id"]
+    if not occupant:
+        raise HTTPException(422, "该席位当前无人操作")
+    row = db.execute(
+        "SELECT * FROM participants WHERE id=? AND game_id=? AND active=1 AND blocked=0",
+        (occupant, game["id"]),
+    ).fetchone()
+    if not row:
+        raise HTTPException(422, "该席位操作者已失效，请先安排替补")
+    return {
+        "id": row["id"],
+        "kind": "player",
+        "game_id": game["id"],
+        "seat_id": seat["id"],
+        "name": row["name"],
+        "access_ids": json.loads(row["access_ids"]),
+    }
 
 
 def current_view(game_id, hashed):
@@ -282,7 +305,7 @@ def room_command(db, game, actor, action, payload):
             game["id"],
             kind="information",
             audience=[substitute["id"]],
-            channel_id="host:" + substitute["id"],
+            channel_id="information",
             text="主持人已让你接管"
             + seat["id"]
             + "号席位。"
@@ -363,6 +386,10 @@ async def command(game_id: str, body: schemas.Command, request: Request):
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
             game = copy.deepcopy(require_game(db, game_id, mutable=True))
+            if body.as_seat:
+                if actor["kind"] != "host":
+                    raise HTTPException(403, "仅主持人可以代玩家操作")
+                actor = impersonated_actor(db, game, body.as_seat)
             if body.expected_version != game["version"]:
                 raise HTTPException(409, "状态已变化，请刷新后检查并重新确认操作")
             payload = copy.deepcopy(body.payload)
@@ -374,11 +401,28 @@ async def command(game_id: str, body: schemas.Command, request: Request):
             if body.action.startswith("room."):
                 rows = room_command(db, game, actor, body.action, payload)
             else:
-                events = apply_command(game, actor, body.action, payload)
+                events = apply_command(
+                    game, actor, body.action, payload, by_host=bool(body.as_seat)
+                )
                 rows = storage.add_events(db, game_id, events)
             storage.save_game(db, game)
         realtime.publish(game_id, rows)
         return current_view(game_id, auth.token_hash(request))
+
+
+@router.get("/games/{game_id}/seats/{seat_id}/view")
+async def seat_view(game_id: str, seat_id: str, request: Request):
+    """主持人专用：以该席位玩家的身份读取视图，用于代操作前的核对。"""
+    async with realtime.lock:
+        with storage.connect() as db:
+            auth.require_actor(db, request, game_id, host=True)
+            game = require_game(db, game_id)
+            actor = impersonated_actor(db, game, seat_id)
+            return {
+                "seat_id": actor["seat_id"],
+                "name": actor["name"],
+                "view": views.view(db, game, actor, realtime.online(game_id)),
+            }
 
 
 @router.get("/games/{game_id}/messages")

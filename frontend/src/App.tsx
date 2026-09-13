@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { ActionPanel } from "./Actions";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ActionPanel, type PanelRequest } from "./Actions";
 import { api, errorText } from "./api";
 import { Chat } from "./Chat";
 import {
@@ -12,7 +12,14 @@ import {
 } from "./components";
 import { draftKey, useDraft } from "./drafts";
 import { useGame } from "./state";
-import type { Invite, Seat, Session } from "./types";
+import type {
+  GameView,
+  HostTask,
+  Invite,
+  Seat,
+  SeatView,
+  Session,
+} from "./types";
 
 type Tab = "chat" | "table" | "cards" | "actions" | "manage";
 export function App() {
@@ -29,11 +36,17 @@ export function App() {
         "--app-height",
         `${viewport?.height ?? window.innerHeight}px`,
       );
+    // iOS pans the visual viewport up to reveal the caret; pin the layout back.
+    const pinTop = () => {
+      if (viewport && viewport.offsetTop > 0) window.scrollTo(0, 0);
+    };
     resize();
     viewport?.addEventListener("resize", resize);
+    viewport?.addEventListener("scroll", pinTop);
     window.addEventListener("resize", resize);
     return () => {
       viewport?.removeEventListener("resize", resize);
+      viewport?.removeEventListener("scroll", pinTop);
       window.removeEventListener("resize", resize);
     };
   }, []);
@@ -193,7 +206,8 @@ function Entry() {
     () => new URLSearchParams(location.search).get("code") ?? "",
   );
   const [name, setName, clearName, draftError] = useDraft(
-    draftKey(null, null, "entry-name"), "",
+    draftKey(null, null, "entry-name"),
+    "",
   );
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -332,7 +346,11 @@ function Entry() {
               </p>
             </>
           )}
-          {draftError && mode === "join" && <p className="error" role="alert">{draftError}</p>}
+          {draftError && mode === "join" && (
+            <p className="error" role="alert">
+              {draftError}
+            </p>
+          )}
           {error && (
             <p className="error" role="alert">
               {error}
@@ -445,7 +463,11 @@ function CreateGame({
             我已确认这11名角色为本局魔典名单，实际转化顺序由系统随机生成。
           </span>
         </label>
-        {draftError && <p className="error" role="alert">{draftError}</p>}
+        {draftError && (
+          <p className="error" role="alert">
+            {draftError}
+          </p>
+        )}
         {error && (
           <p className="error" role="alert">
             {error}
@@ -481,8 +503,12 @@ function CreateGame({
               </span>
             ))}
           </div>
-          <p>将随机生成魔典顺序，建立七个空席。玩家通过同一个邀请码随机入席；全员首次准备后才发牌。</p>
-          <p className="hint">建立新对局会清空上一局的全部数据（邀请码、玩家、进度、聊天与证物）。</p>
+          <p>
+            将随机生成魔典顺序，建立七个空席。玩家通过同一个邀请码随机入席；全员首次准备后才发牌。
+          </p>
+          <p className="hint">
+            建立新对局会清空上一局的全部数据（邀请码、玩家、进度、聊天与证物）。
+          </p>
           <button
             className="primary full-width"
             disabled={busy}
@@ -508,11 +534,30 @@ function Room({
   onRole: (id: string) => void;
   onNewGame: () => void;
 }) {
-  const { state, session, connection } = useGame();
+  const { state, session, connection, command, setError, busy } = useGame();
   const [tab, setTab] = useState<Tab>("chat");
   const [center, setCenter] = useState<"chat" | "table">("chat");
   const [side, setSide] = useState<"cards" | "actions">("actions");
   const [management, setManagement] = useState(false);
+  const [request, setRequest] = useState<PanelRequest | null>(null);
+  const [inspecting, setInspecting] = useState<string | null>(null);
+  const [flash, setFlash] = useState("");
+  const [opening, setOpening] = useState(false);
+  const phaseKey = state ? `${state.day}:${state.half}:${state.phase}` : "";
+  const flashText = state ? `第 ${state.day} 日 · ${state.phase_label}` : "";
+  const lastPhase = useRef("");
+  const phaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!phaseKey || lastPhase.current === phaseKey) return;
+    if (!lastPhase.current) {
+      lastPhase.current = phaseKey;
+      return;
+    }
+    lastPhase.current = phaseKey;
+    setFlash(flashText);
+    if (phaseTimer.current) clearTimeout(phaseTimer.current);
+    phaseTimer.current = setTimeout(() => setFlash(""), 5000);
+  }, [phaseKey, flashText]);
   useEffect(() => {
     if (state?.status === "ended") {
       setTab("table");
@@ -532,15 +577,48 @@ function Room({
   if (!state) return null;
   const isHost = session.actor?.kind === "host";
   const isObserver = session.actor?.kind === "spectator";
-  const tabs: { id: Tab; label: string; count?: number }[] = [
+  const urgent = state.actions.filter((item) => item.blocking);
+  const hostTasks = state.host?.tasks ?? [];
+  const blockingTasks = hostTasks.filter(
+    (item) => item.blocking && item.action !== "host.advance",
+  );
+  const actor = state.public.current_actor;
+  const pick = (
+    id: string,
+    payload?: Record<string, unknown>,
+    values?: Record<string, unknown>,
+  ) => setRequest({ id, payload, values, token: Date.now() });
+  const advance = async () => {
+    const action = state.actions.find((item) => item.id === "host.advance");
+    if (!action) return;
+    setOpening(true);
+    try {
+      await command(action, {}, state.version);
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setOpening(false);
+    }
+  };
+  const tabs: { id: Tab; label: string; count?: number; urgent?: boolean }[] = [
     { id: "chat", label: "聊天" },
     { id: "table", label: "桌面" },
     isHost
-      ? { id: "actions", label: "裁决", count: state.host?.pending.length ?? 0 }
+      ? { id: "actions", label: "裁决", count: blockingTasks.length }
       : { id: "cards", label: isObserver ? "信息" : "我的牌" },
     isHost
-      ? { id: "manage", label: "管理" }
-      : { id: "actions", label: "行动", count: state.actions.length },
+      ? {
+          id: "manage",
+          label: "管理",
+          count: hostTasks.length,
+          urgent: blockingTasks.length > 0,
+        }
+      : {
+          id: "actions",
+          label: "行动",
+          count: urgent.length,
+          urgent: urgent.length > 0,
+        },
   ];
   return (
     <main
@@ -566,6 +644,18 @@ function Room({
           </div>
         </div>
         <div className="phase-meta">
+          {actor && (
+            <span
+              className={`phase-actor ${
+                actor.seat_id && actor.seat_id === state.self.seat_id
+                  ? "own-turn"
+                  : ""
+              }`}
+            >
+              {actor.seat_id ? `${seatLabel(state, actor.seat_id)} · ` : ""}
+              {actor.label}
+            </span>
+          )}
           <span className={`connection ${connection}`}>
             <i />
             {connection === "online"
@@ -576,7 +666,25 @@ function Room({
                   ? "会话已失效"
                   : "离线 · 正在恢复"}
           </span>
-          <Countdown deadline={state.deadline} />
+          <Countdown deadline={state.deadline} label="阶段计时" />
+          {isHost && (
+            <button
+              className="primary advance-button"
+              disabled={busy || opening || blockingTasks.length > 0}
+              title={
+                blockingTasks.length
+                  ? `还有 ${blockingTasks.length} 项待处理，见「裁决」列表`
+                  : "结算并推进到下一阶段"
+              }
+              onClick={() => void advance()}
+            >
+              {opening
+                ? "推进中…"
+                : blockingTasks.length
+                  ? `还有 ${blockingTasks.length} 项待处理`
+                  : "完成当前阶段 / 推进"}
+            </button>
+          )}
           {isHost && (
             <button
               className="quiet desktop-only"
@@ -587,6 +695,31 @@ function Room({
           )}
         </div>
       </div>
+      {!isHost && (urgent.length > 0 || state.self.warning_deadline) && (
+        <button
+          className={`urgent-banner ${
+            state.self.warning_deadline ? "warned" : ""
+          }`}
+          onClick={() => setTab("actions")}
+        >
+          <strong>
+            {urgent.length
+              ? `轮到你行动：${urgent.map((item) => item.label).join("、")}`
+              : "主持人正在等待你的操作"}
+          </strong>
+          <Countdown
+            deadline={state.self.warning_deadline ?? null}
+            label="主持人警告"
+          />
+          <span className="urgent-hint">点击前往「行动」</span>
+        </button>
+      )}
+      {flash && (
+        <div className="phase-flash" role="status">
+          <span className="eyebrow">阶段已推进</span>
+          <strong>{flash}</strong>
+        </div>
+      )}
       <aside className="seat-column panel">
         <div className="section-heading">
           <h2>七席</h2>
@@ -597,7 +730,11 @@ function Room({
         <p className="hint">
           {isHost ? "公开身份 · 私密牌面见管理" : "这里只展示公开身份"}
         </p>
-        <SeatList seats={state.seats} onRole={onRole} />
+        <SeatList
+          seats={state.seats}
+          onRole={onRole}
+          onInspect={isHost ? setInspecting : undefined}
+        />
         <div className="host-signature">
           <Avatar name="主持人" host />
           <div>
@@ -625,7 +762,11 @@ function Room({
           <Chat onRole={onRole} />
         </div>
         <div className="table-surface panel scroll-panel">
-          <PublicTable onRole={onRole} onNewGame={onNewGame} />
+          <PublicTable
+            onRole={onRole}
+            onNewGame={onNewGame}
+            onInspect={isHost ? setInspecting : undefined}
+          />
         </div>
       </section>
       <aside className="side-column panel">
@@ -646,11 +787,19 @@ function Room({
         </div>
         <div className="side-scroll">
           <div className="actions-surface">
-            {isHost && state.host && <HostPending />}
-            {isHost && <NightLedger />}
+            {isHost && state.host && <HostTasks onPick={pick} />}
+            {isHost && (
+              <NightLedger
+                onWarn={(seatId) =>
+                  pick("host.warn", undefined, { seat_id: seatId })
+                }
+              />
+            )}
             <ActionPanel
               actions={state.actions}
               title={isHost ? "主持人操作" : "本阶段行动"}
+              request={request}
+              onRequestHandled={() => setRequest(null)}
             />
           </div>
           <div className="cards-surface">
@@ -659,7 +808,7 @@ function Room({
         </div>
       </aside>
       <section className="mobile-management panel scroll-panel">
-        <HostManagement onRole={onRole} />
+        <HostManagement onRole={onRole} onInspect={setInspecting} />
         <details className="record-section">
           <summary>全局私密信息、夜间意图与时间快照</summary>
           <PrivatePanel onRole={onRole} />
@@ -669,12 +818,18 @@ function Room({
         {tabs.map((item) => (
           <button
             key={item.id}
-            className={tab === item.id ? "active" : ""}
+            className={`${tab === item.id ? "active" : ""} ${
+              item.urgent ? "urgent" : ""
+            }`}
             aria-current={tab === item.id ? "page" : undefined}
             onClick={() => setTab(item.id)}
           >
             <span>{item.label}</span>
-            {Boolean(item.count) && <small>{item.count}</small>}
+            {Boolean(item.count) && (
+              <small className={item.urgent ? "urgent" : ""}>
+                {item.count}
+              </small>
+            )}
           </button>
         ))}
       </nav>
@@ -684,14 +839,29 @@ function Room({
           onClose={() => setManagement(false)}
           wide
         >
-          <HostManagement onRole={onRole} />
+          <HostManagement onRole={onRole} onInspect={setInspecting} />
+        </Modal>
+      )}
+      {isHost && inspecting && (
+        <Modal
+          title={`席位视角 · ${inspecting}号`}
+          onClose={() => setInspecting(null)}
+          wide
+        >
+          <SeatInspector seatId={inspecting} />
         </Modal>
       )}
     </main>
   );
 }
 
-function Countdown({ deadline }: { deadline: number | null }) {
+function Countdown({
+  deadline,
+  label = "已警告",
+}: {
+  deadline: number | null;
+  label?: string;
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!deadline) return;
@@ -704,59 +874,106 @@ function Countdown({ deadline }: { deadline: number | null }) {
   return (
     <span className="countdown" role="timer">
       {seconds > 0
-        ? `已警告 · 剩余 ${seconds} 秒`
-        : "计时结束 · 等待服务器结算"}
+        ? `${label} · 剩余 ${seconds} 秒`
+        : `${label} · 计时结束，等待服务器结算`}
     </span>
   );
+}
+
+function seatLabel(state: GameView, id: string) {
+  const seat = state.seats.find((item) => item.id === id);
+  return `${id}号${seat?.name ? ` ${seat.name}` : ""}`;
+}
+
+function currentRoleId(state: GameView, id: string) {
+  const seat = state.seats.find((item) => item.id === id);
+  const card = seat?.cards?.find((item) => item.alive) ?? seat?.cards?.[0];
+  return card?.role_id ?? "";
 }
 
 function SeatList({
   seats,
   onRole,
+  onInspect,
 }: {
   seats: Seat[];
   onRole: (id: string) => void;
+  onInspect?: (id: string) => void;
 }) {
-  const { state } = useGame();
+  const { state, catalog } = useGame();
+  const roleName = (id: string | null | undefined) =>
+    id ? (catalog.roles.find((item) => item.id === id)?.name ?? id) : "";
   return (
     <div className="seat-list">
-      {seats.map((seat) => (
-        <article
-          key={seat.id}
-          className={`seat ${seat.id === state?.self.seat_id ? "own-seat" : ""} ${!seat.alive ? "dead-seat" : ""}`}
-        >
-          <span className="seat-number">{seat.id.padStart(2, "0")}</span>
-          <Avatar
-            name={seat.id}
-            roleId={seat.avatar_role_id}
-            onClick={
-              seat.avatar_role_id
-                ? () => onRole(seat.avatar_role_id!)
-                : undefined
-            }
-          />
-          <div className="seat-info">
-            <strong>
-              {seat.occupied ? seat.name : "等待入席"}
-              {seat.id === state?.self.seat_id && <small>你</small>}
-            </strong>
-            <span>
-              {!seat.occupied
-                ? "尚无操作者"
-                : state?.status === "lobby"
-                  ? seat.ready
-                    ? "已准备"
-                    : seat.id === state?.self.seat_id
-                      ? state.phase === "lobby" ? "等待准备" : "选择双牌中"
-                      : "已入席"
-                  : seat.alive
-                    ? "存活"
-                    : "已出局"}
-              {seat.occupied && ` · ${seat.online ? "在线" : "离线"}`}
-            </span>
-          </div>
-        </article>
-      ))}
+      {seats.map((seat) => {
+        const card =
+          seat.cards?.find((item) => item.alive) ?? seat.cards?.[0] ?? null;
+        const witch = Boolean(card?.witch && seat.alive);
+        return (
+          <article
+            key={seat.id}
+            className={`seat ${seat.id === state?.self.seat_id ? "own-seat" : ""} ${!seat.alive ? "dead-seat" : ""} ${witch ? "witch-seat" : ""}`}
+          >
+            <span className="seat-number">{seat.id.padStart(2, "0")}</span>
+            <Avatar
+              name={seat.id}
+              roleId={seat.avatar_role_id}
+              onClick={
+                seat.avatar_role_id
+                  ? () => onRole(seat.avatar_role_id!)
+                  : undefined
+              }
+            />
+            <div className="seat-info">
+              <strong>
+                {seat.occupied ? seat.name : "等待入席"}
+                {seat.avatar_role_id && `（${roleName(seat.avatar_role_id)}）`}
+                {seat.id === state?.self.seat_id && <small>你</small>}
+              </strong>
+              <span>
+                {!seat.occupied
+                  ? "尚无操作者"
+                  : state?.status === "lobby"
+                    ? seat.ready
+                      ? "已准备"
+                      : seat.id === state?.self.seat_id
+                        ? state.phase === "lobby"
+                          ? "等待准备"
+                          : "选择双牌中"
+                        : "已入席"
+                    : seat.alive
+                      ? "存活"
+                      : "已出局"}
+                {seat.occupied && ` · ${seat.online ? "在线" : "离线"}`}
+                {witch && <em className="witch-mark"> · 魔女化预定</em>}
+              </span>
+              {onInspect && seat.occupied && (
+                <button
+                  className="quiet tiny"
+                  onClick={() => onInspect(seat.id)}
+                >
+                  视角
+                </button>
+              )}
+            </div>
+          </article>
+        );
+      })}
+      {state?.self.honoka_upper && (
+        <div className="honoka-roster">
+          <h3>已准备玩家的上层角色 · 仅你看得到</h3>
+          <ul>
+            {state.self.honoka_upper.map((item) => (
+              <li key={item.seat_id}>
+                {item.seat_id}号 {item.name} · {roleName(item.role_id)}
+              </li>
+            ))}
+          </ul>
+          <small>
+            只显示文字角色名；若你选择在下层登场，这些信息仍然有效。
+          </small>
+        </div>
+      )}
     </div>
   );
 }
@@ -764,9 +981,11 @@ function SeatList({
 function PublicTable({
   onRole,
   onNewGame,
+  onInspect,
 }: {
   onRole: (id: string) => void;
   onNewGame: () => void;
+  onInspect?: (id: string) => void;
 }) {
   const { state, session } = useGame();
   if (!state) return null;
@@ -816,10 +1035,10 @@ function PublicTable({
       )}
       {state.status === "lobby" && (
         <div className="lobby-note">
-          <span className="eyebrow">随机入席 → 首次准备 → 私下排牌 → 再次准备 → 主持人开局</span>
-          <h3>
-            {state.ready_count} / 7 位玩家已准备
-          </h3>
+          <span className="eyebrow">
+            随机入席 → 首次准备 → 私下排牌 → 再次准备 → 主持人开局
+          </span>
+          <h3>{state.ready_count} / 7 位玩家已准备</h3>
           <p>
             {state.phase === "lobby"
               ? "还未发牌。请在「行动」中点击准备发牌；七人首次准备齐全后，系统才会私下发放双牌。"
@@ -833,14 +1052,16 @@ function PublicTable({
         </div>
       )}
       <div className="table-seats">
-        <SeatList seats={state.seats} onRole={onRole} />
+        <SeatList seats={state.seats} onRole={onRole} onInspect={onInspect} />
       </div>
-      {Object.entries(state.public).map(([key, value]) => (
-        <section className="public-record" key={key}>
-          <h3>{labelFor(key)}</h3>
-          <RecordView value={value} />
-        </section>
-      ))}
+      {Object.entries(state.public)
+        .filter(([key]) => key !== "current_actor")
+        .map(([key, value]) => (
+          <section className="public-record" key={key}>
+            <h3>{labelFor(key)}</h3>
+            <RecordView value={value} />
+          </section>
+        ))}
       {!Object.keys(state.public).length && (
         <p className="hint">
           当前尚无公开行动记录。主持人公布的投票、热气球、声明与结算会显示在这里。
@@ -851,7 +1072,7 @@ function PublicTable({
 }
 
 function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
-  const { state, session } = useGame();
+  const { state, session, catalog } = useGame();
   if (!state) return null;
   const isHost = session.actor?.kind === "host";
   return (
@@ -876,6 +1097,17 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
       {session.actor?.kind === "player" && state.phase === "lobby" && (
         <p className="hint">等待七位玩家首次准备，之后在这里查看自己的双牌。</p>
       )}
+      {session.actor?.kind === "player" && state.self.seat_id && (
+        <p className="hint">
+          你在 {seatLabel(state, state.self.seat_id)} 席 · 目前公开显示为「
+          {roleLabel(
+            catalog,
+            state.seats.find((seat) => seat.id === state.self.seat_id)
+              ?.avatar_role_id ?? "",
+          )}
+          」（若你选择在下层登场，公开身份会随登场更新）
+        </p>
+      )}
       <div className="private-cards">
         {state.self.cards.map((card, index) => (
           <RoleCard
@@ -889,31 +1121,15 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
       {isHost && state.host && (
         <>
           <Codex />
-          <details className="record-section">
-            <summary>已确认夜间意图</summary>
-            <RecordView value={state.host.night_actions} />
+          <details className="record-section" open>
+            <summary>本夜预结算</summary>
+            <RecordView value={state.host.night_preview} />
           </details>
           <details className="record-section">
             <summary>可用时间快照</summary>
             <RecordView value={state.host.snapshots} />
           </details>
-          {Object.entries(state.host)
-            .filter(
-              ([key]) =>
-                ![
-                  "codex",
-                  "pending",
-                  "night_actions",
-                  "snapshots",
-                  "participants",
-                ].includes(key),
-            )
-            .map(([key, value]) => (
-              <details className="record-section" key={key}>
-                <summary>{labelFor(key)}</summary>
-                <RecordView value={value} />
-              </details>
-            ))}
+          <HostSources />
         </>
       )}
       {session.actor?.kind === "player" && (
@@ -965,36 +1181,109 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
   );
 }
 
-function HostPending() {
+const taskLabels: Record<string, string> = {
+  pending: "待裁决",
+  night: "夜间未确认",
+  speech: "发言",
+  nomination: "提名",
+  voting: "投票",
+  execution: "处决",
+  balloon: "热气球",
+  review: "阶段推进",
+  winner: "胜利宣判",
+  surrender: "交牌审阅",
+};
+
+function HostTasks({
+  onPick,
+}: {
+  onPick: (
+    id: string,
+    payload?: Record<string, unknown>,
+    values?: Record<string, unknown>,
+  ) => void;
+}) {
   const { state } = useGame();
+  const tasks = state?.host?.tasks ?? [];
+  const blocking = tasks.filter((item) => item.blocking).length;
+  const goto: Record<string, string> = {
+    pending: "前往裁决",
+    night: "前往警告",
+    speech: "前往警告",
+    nomination: "前往警告",
+    voting: "前往警告",
+    execution: "前往警告",
+    balloon: "前往警告",
+    review: "前往推进",
+    winner: "前往宣判",
+    surrender: "前往审阅",
+  };
   return (
     <section className="pending-panel">
       <div className="section-heading">
-        <h2>裁决待办</h2>
-        <span className="count gold">{state?.host?.pending.length ?? 0}</span>
+        <h2>主持人待办</h2>
+        <span className={`count ${blocking ? "gold" : ""}`}>
+          {tasks.length}
+        </span>
       </div>
-      {state?.host?.pending.length ? (
-        state.host.pending.map((item, index) => (
-          <article className="pending-item" key={String(item.id ?? index)}>
-            <RecordView value={item} />
+      {tasks.length ? (
+        tasks.map((task) => (
+          <article
+            className={`pending-item ${task.blocking ? "blocking" : ""}`}
+            key={task.id}
+          >
+            <div className="split">
+              <h3>{task.title}</h3>
+              <span className="tag">{taskLabels[task.kind] ?? "待办"}</span>
+            </div>
+            {task.detail && <p>{task.detail}</p>}
+            {Boolean(task.seats.length) && (
+              <p className="hint">涉及席位：{task.seats.join("、")}</p>
+            )}
+            {task.action && (
+              <button
+                className="primary"
+                onClick={() =>
+                  onPick(
+                    task.action!,
+                    task.payload,
+                    task.kind === "night"
+                      ? { seat_id: task.seats[0] }
+                      : undefined,
+                  )
+                }
+              >
+                {goto[task.kind] ?? "前往处理"}
+              </button>
+            )}
           </article>
         ))
       ) : (
         <p className="hint">
-          没有未决裁决。明确规则由服务器执行；需要你决定的事项会列于此处。
+          没有待办。明确规则由服务器执行；需要你决定的事项会列于此处，玩家未完成操作前不会推进阶段。
         </p>
       )}
     </section>
   );
 }
 
-function NightLedger() {
-  const { state } = useGame();
+function NightLedger({ onWarn }: { onWarn: (seatId: string) => void }) {
+  const { state, catalog } = useGame();
   const host = state?.host;
-  if (!state || !host || state.status !== "playing" || state.half !== "night") {
+  if (
+    !state ||
+    !host ||
+    state.status !== "playing" ||
+    (state.phase !== "night" && state.phase !== "night_coco")
+  ) {
     return null;
   }
   const confirmed = new Set(host.night_confirmed);
+  const outstanding = new Set(
+    (host.tasks ?? [])
+      .filter((task) => task.kind === "night")
+      .map((task) => task.seats[0]),
+  );
   const rows = state.seats.filter(
     (seat) =>
       seat.occupied &&
@@ -1006,7 +1295,8 @@ function NightLedger() {
       <div className="section-heading">
         <h2>本夜全员行动</h2>
         <span className="count gold">
-          {rows.filter((seat) => confirmed.has(seat.id)).length} / {rows.length} 已确认
+          {rows.filter((seat) => confirmed.has(seat.id)).length} / {rows.length}{" "}
+          已确认
         </span>
       </div>
       <p className="hint">
@@ -1014,10 +1304,12 @@ function NightLedger() {
       </p>
       <div className="seat-list">
         {rows.map((seat) => {
-          const card = seat.cards?.find((item) => item.alive);
+          const card =
+            seat.cards?.find((item) => item.alive) ?? seat.cards?.[0];
           const actions = host.night_actions.filter(
             (action) => action.seat_id === seat.id,
           );
+          const done = confirmed.has(seat.id);
           return (
             <article className="seat" key={seat.id}>
               <span className="seat-number">{seat.id.padStart(2, "0")}</span>
@@ -1025,9 +1317,9 @@ function NightLedger() {
                 <strong>
                   {seat.name}
                   {card && (
-                    <small>
+                    <small className={card.witch ? "witch-text" : ""}>
                       <RecordView value={card.role_id} />
-                      {card.witch ? " · 魔女" : ""}
+                      {card.witch ? " · 魔女化" : ""}
                     </small>
                   )}
                 </strong>
@@ -1035,20 +1327,303 @@ function NightLedger() {
                   actions.map((action) => (
                     <span key={action.id}>
                       <RecordView value={action.ability} />
-                      {action.target_seat ? ` → ${action.target_seat}号` : ""}
+                      {action.target_seat
+                        ? ` → ${seatLabel(state, action.target_seat)}（${roleLabel(catalog, currentRoleId(state, action.target_seat))}）`
+                        : ""}
+                      {typeof action.roll === "number"
+                        ? ` · 掷骰 ${action.roll}/${action.denominator}${action.hit ? " 命中" : " 未命中"}`
+                        : ""}
+                      {typeof action.correct === "number"
+                        ? ` · 猜对 ${action.correct}/${state.host?.codex?.length ?? 0}`
+                        : ""}
+                      {action.image_id && <Evidence id={action.image_id} />}
+                      {action.effective === false ? " · 被中毒抵消" : ""}
+                      {action.by_host ? " · 主持人代提交" : ""}
                       {action.confirmed ? "" : " · 未确认"}
                     </span>
                   ))
                 ) : (
-                  <span>
-                    {confirmed.has(seat.id) ? "本夜未发动行动（已确认）" : "尚未提交"}
-                  </span>
+                  <span>{done ? "本夜未发动行动（已确认）" : "尚未提交"}</span>
+                )}
+                {!done && outstanding.has(seat.id) && (
+                  <button
+                    className="quiet tiny"
+                    onClick={() => onWarn(seat.id)}
+                  >
+                    警告30秒
+                  </button>
                 )}
               </div>
             </article>
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function roleLabel(
+  catalog: { roles: { id: string; name: string }[] },
+  id: string,
+) {
+  return catalog.roles.find((item) => item.id === id)?.name ?? id;
+}
+
+function HostSources() {
+  const { state, catalog } = useGame();
+  const host = state?.host;
+  if (!state || !host) return null;
+  const seatName = (id: string | undefined) =>
+    id ? seatLabel(state, id) : "—";
+  const declarations = host.declarations ?? [];
+  const nominations = host.nominations ?? [];
+  const voteRounds = host.vote_rounds ?? [];
+  const photos = host.photos ?? [];
+  const balloon = host.balloon_choices ?? {};
+  const ballot = host.balloon_votes ?? {};
+  const brainwash = host.brainwash ?? {};
+  const water = host.water;
+  const warnings = host.warnings ?? {};
+  const votes = host.votes ?? {};
+  const now = Date.now() / 1000;
+  return (
+    <>
+      <details className="record-section" open>
+        <summary>技能声明</summary>
+        {declarations.length ? (
+          <ul className="source-list">
+            {declarations.map((item) => (
+              <li key={item.id}>
+                {item.day}日 · {seatName(item.seat_id)} 声称「
+                <RecordView value={item.ability} />」 ·{" "}
+                {item.fake ? "伪装" : "真实"} ·{" "}
+                <RecordView value={item.status} />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">本局尚无技能声明。</p>
+        )}
+      </details>
+      <details className="record-section">
+        <summary>提名与投票</summary>
+        {nominations.length ? (
+          <ul className="source-list">
+            {nominations.map((item, index) => (
+              <li key={`${item.seat_id}:${index}`}>
+                {seatName(item.by)} 提名 {seatName(item.seat_id)}（
+                {roleLabel(catalog, item.card_id)}）
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">尚无提名记录。</p>
+        )}
+        <p className="hint">
+          已提名：
+          {host.nomination_done?.length
+            ? host.nomination_done.join("、")
+            : "无"}
+        </p>
+        {voteRounds.map((round, index) => (
+          <p key={index}>
+            第{index + 1}轮 · 候选 {seatName(round.candidate)} · 同意{" "}
+            {round.yes}/{round.denominator}（门槛 {round.threshold}）·
+            {round.passed ? "通过" : "未通过"}
+          </p>
+        ))}
+        {Boolean(Object.keys(votes).length) && (
+          <p>
+            当前票型：
+            <RecordView value={votes} />
+          </p>
+        )}
+      </details>
+      <details className="record-section">
+        <summary>热气球</summary>
+        <p>
+          提交情况：
+          <RecordView value={balloon} />
+        </p>
+        <p>
+          表决：
+          <RecordView value={ballot} />
+        </p>
+        <p>
+          结果：
+          <RecordView value={state.public.balloon} />
+        </p>
+      </details>
+      <details className="record-section">
+        <summary>注视与洗脑</summary>
+        <p>
+          注视名单：
+          <RecordView value={host.gaze} />
+        </p>
+        <p>
+          洗脑：
+          <RecordView value={brainwash} />
+        </p>
+      </details>
+      <details className="record-section">
+        <summary>13水与警告</summary>
+        <p>
+          13水持有人：{water?.holder ? seatLabel(state, water.holder) : "无"}
+          {water?.used ? "（已使用）" : ""}
+        </p>
+        {Object.keys(warnings).length ? (
+          <ul className="source-list">
+            {Object.entries(warnings).map(([id, deadline]) => (
+              <li key={id}>
+                {seatLabel(state, id)} · 剩余{" "}
+                {Math.max(0, Math.ceil(deadline - now))} 秒
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">当前没有生效中的警告。</p>
+        )}
+      </details>
+      <details className="record-section">
+        <summary>照片与画作收发</summary>
+        {photos.length ? (
+          <ul className="source-list">
+            {photos.map((item) => (
+              <li key={item.id}>
+                {seatName(item.sender)} → {seatName(item.recipient)} ·{" "}
+                {item.allowed ? "已送达" : "被拒收"}
+                {item.text ? ` · ${item.text}` : ""}
+                {item.image_id && <Evidence id={item.image_id} />}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">尚无照片或画作往来。</p>
+        )}
+      </details>
+    </>
+  );
+}
+
+function SeatInspector({ seatId }: { seatId: string }) {
+  const { state } = useGame();
+  const [data, setData] = useState<SeatView | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const version = state?.version;
+  useEffect(() => {
+    if (!state) return;
+    let cancelled = false;
+    setLoading(true);
+    api<SeatView>(`/games/${state.id}/seats/${seatId}/view`)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((failure) => {
+        if (!cancelled) setError(errorText(failure));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state, seatId, version]);
+  return (
+    <>
+      <p className="hint">
+        这里显示 {seatId}{" "}
+        号玩家自己看到的界面。代操作只能以该席位可用的行动提交，操作内容不会向其他玩家公开，仅留下「主持人代为处理」的公开提示。
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {loading && !data && <p className="hint">正在读取该席位视角…</p>}
+      {data && (
+        <div className="inspector">
+          <SeatViewCard view={data.view} />
+          <ActionPanel
+            actions={data.view.actions}
+            title={`以 ${seatId} 号席位的身份操作`}
+            asSeat={seatId}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+function SeatViewCard({ view }: { view: GameView }) {
+  const { catalog } = useGame();
+  return (
+    <section className="public-record">
+      <div className="section-heading">
+        <h2>
+          {view.self.seat_id ? seatLabel(view, view.self.seat_id) : "该席位"}
+        </h2>
+        <span className="tag">{view.phase_label}</span>
+      </div>
+      <div className="private-cards">
+        {view.self.cards.map((card, index) => (
+          <div
+            className={`mini-card ${card.alive ? "" : "dead-seat"}`}
+            key={card.id}
+          >
+            <small>
+              {index === 0 ? "上层" : "下层"}
+              {card.id === view.self.current_card_id ? " · 当前使用" : ""}
+            </small>
+            <strong>{roleLabel(catalog, card.role_id)}</strong>
+            <small>
+              {card.witch ? "魔女化" : "普通"}
+              {card.alive ? "" : " · 出局"}
+              {card.injured ? " · 负伤" : ""}
+            </small>
+          </div>
+        ))}
+      </div>
+      {view.self.warning_deadline ? (
+        <Countdown deadline={view.self.warning_deadline} label="该席位被警告" />
+      ) : null}
+      <h3>该席位当前可提交的操作</h3>
+      {view.actions.length ? (
+        <div className="tags">
+          {view.actions.map((item) => (
+            <span className="tag" key={item.id}>
+              {item.label}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="hint">当前没有轮到该席位提交的操作。</p>
+      )}
+      {view.self.honoka_upper && (
+        <>
+          <h3>穗乃香可见的上层角色</h3>
+          <ul className="source-list">
+            {view.self.honoka_upper.map((item) => (
+              <li key={item.seat_id}>
+                {item.seat_id}号 {item.name} ·{" "}
+                {roleLabel(catalog, item.role_id)}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <h3>仅发给他/她的信息</h3>
+      {view.information.length ? (
+        view.information.map((item) => (
+          <article className="information-card" key={item.id}>
+            <h3>{item.title}</h3>
+            <p>{item.text}</p>
+            {item.image_id && <Evidence id={item.image_id} />}
+          </article>
+        ))
+      ) : (
+        <p className="hint">目前没有只发给该席位的裁定或线索。</p>
+      )}
     </section>
   );
 }
@@ -1070,7 +1645,13 @@ function Codex() {
   );
 }
 
-function HostManagement({ onRole }: { onRole: (id: string) => void }) {
+function HostManagement({
+  onRole,
+  onInspect,
+}: {
+  onRole: (id: string) => void;
+  onInspect?: (id: string) => void;
+}) {
   const { state, session, catalog, refresh } = useGame();
   const [invites, setInvites] = useState<Record<string, Invite>>({});
   const [busy, setBusy] = useState("");
@@ -1166,8 +1747,16 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
       {state.phase === "lobby" && state.status === "lobby" && (
         <section className="spectator-invite">
           <h3>统一玩家入口</h3>
-          <button className="secondary" disabled={!!busy} onClick={() => void issue("player")}>
-            {busy === "player" ? "生成中…" : invites.player ? "重新生成统一玩家邀请码" : "生成统一玩家邀请码"}
+          <button
+            className="secondary"
+            disabled={!!busy}
+            onClick={() => void issue("player")}
+          >
+            {busy === "player"
+              ? "生成中…"
+              : invites.player
+                ? "重新生成统一玩家邀请码"
+                : "生成统一玩家邀请码"}
           </button>
           {inviteControls("player")}
         </section>
@@ -1182,6 +1771,14 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
               <span className="tag">
                 {seat.occupied ? (seat.online ? "在线" : "离线") : "空席"}
               </span>
+              {onInspect && seat.occupied && (
+                <button
+                  className="quiet tiny"
+                  onClick={() => onInspect(seat.id)}
+                >
+                  视角
+                </button>
+              )}
             </div>
             <div className="invite-pair">
               {seat.cards?.map((card, index) => (
@@ -1211,8 +1808,14 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
               ))}
             </div>
             <details>
-              <summary>完整双牌状态与剩余次数</summary>
-              <RecordView value={seat.cards} />
+              <summary>双牌状态与剩余次数</summary>
+              {seat.cards?.map((card, index) => (
+                <p className="hint" key={card.id}>
+                  {index === 0 ? "上层" : "下层"} ·{" "}
+                  {roleLabel(catalog, card.role_id)} · 剩余次数：
+                  <RecordView value={card.uses} />
+                </p>
+              ))}
             </details>
           </article>
         ))}
@@ -1228,7 +1831,11 @@ function HostManagement({ onRole }: { onRole: (id: string) => void }) {
             disabled={!!busy}
             onClick={() => void issue("spectator")}
           >
-            {busy === "spectator" ? "生成中…" : invites.spectator ? "重新生成统一观战邀请码" : "生成统一观战邀请码"}
+            {busy === "spectator"
+              ? "生成中…"
+              : invites.spectator
+                ? "重新生成统一观战邀请码"
+                : "生成统一观战邀请码"}
           </button>
         )}
         {inviteControls("spectator")}

@@ -30,7 +30,10 @@ export function Drawing({
       };
       image.onerror = () => setRestoring(false);
       image.src = value;
-      return () => { image.onload = null; image.onerror = null; };
+      return () => {
+        image.onload = null;
+        image.onerror = null;
+      };
     }
   }, []);
   const point = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -150,7 +153,9 @@ export function Drawing({
         aria-busy={restoring}
       />
       <p className="hint">
-        {restoring ? "正在恢复画作…" : "画作是本机私密草稿；确认提交后才发送给服务器。可手绘，或导入自己准备的图片。"}
+        {restoring
+          ? "正在恢复画作…"
+          : "画作是本机私密草稿；确认提交后才发送给服务器。可手绘，或导入自己准备的图片。"}
       </p>
       <label className="file-field">
         导入画作

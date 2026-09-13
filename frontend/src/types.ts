@@ -63,8 +63,60 @@ export interface UIAction {
   description?: string;
   group?: string;
   danger?: boolean;
+  blocking?: boolean;
   payload?: Record<string, unknown>;
   fields: Field[];
+}
+export interface HostTask {
+  id: string;
+  kind: string;
+  title: string;
+  detail?: string;
+  seats: string[];
+  action?: string;
+  payload?: Record<string, unknown>;
+  blocking?: boolean;
+}
+export interface CurrentActor {
+  phase: string;
+  seat_id: string | null;
+  label: string;
+}
+export interface HostDeclaration {
+  id: string;
+  day: number;
+  seat_id: string;
+  card_id: string;
+  ability: string;
+  fake: boolean;
+  status: string;
+}
+export interface HostNomination {
+  seat_id: string;
+  card_id: string;
+  by: string;
+}
+export interface HostPhoto {
+  id: string;
+  sender: string;
+  recipient: string;
+  allowed: boolean;
+  text?: string;
+  image_id?: string | null;
+}
+export interface HostGaze {
+  cards: string[];
+  night_day: number;
+}
+export interface HostParticipant {
+  id: string;
+  kind: string;
+  seat_id: string | null;
+  name: string;
+  active: boolean;
+  blocked: boolean;
+  muted: boolean;
+  online: boolean;
 }
 export interface Information {
   id: string;
@@ -84,7 +136,16 @@ export interface NightAction {
   card_id: string;
   ability: string;
   target_seat?: string;
+  target_card?: string;
+  guess?: string[];
   confirmed?: boolean;
+  by_host?: boolean;
+  effective?: boolean;
+  roll?: number;
+  denominator?: number;
+  hit?: boolean;
+  correct?: number;
+  image_id?: string | null;
   [key: string]: unknown;
 }
 export interface GameView {
@@ -108,16 +169,40 @@ export interface GameView {
     vote?: string | null;
     balloon_choice?: string | null;
     warning_deadline?: number | null;
+    honoka_upper?: { seat_id: string; name: string; role_id: string }[];
   };
   actions: UIAction[];
   information: Information[];
-  public: Record<string, unknown>;
+  public: { current_actor?: CurrentActor } & Record<string, unknown>;
   host?: {
     codex: string[];
     pending: Record<string, unknown>[];
     night_actions: NightAction[];
     night_confirmed: string[];
     snapshots: Record<string, unknown>[];
+    tasks?: HostTask[];
+    declarations?: HostDeclaration[];
+    nominations?: HostNomination[];
+    nomination_done?: string[];
+    vote_rounds?: {
+      candidate: string;
+      yes: number;
+      denominator: number;
+      threshold: number;
+      passed: boolean;
+    }[];
+    votes?: Record<string, string>;
+    photos?: HostPhoto[];
+    gaze?: HostGaze | null;
+    balloon_choices?: Record<string, string>;
+    balloon_votes?: Record<string, boolean>;
+    brainwash?: Record<string, string>;
+    water?: { holder: string | null; used: boolean };
+    warnings?: Record<string, number>;
+    winner_candidate?: { winner: string; reason: string } | null;
+    surrenders?: string[];
+    participants?: HostParticipant[];
+    night_preview?: unknown;
     [key: string]: unknown;
   };
   result: null | {
@@ -129,6 +214,11 @@ export interface GameView {
   channels?: Channel[];
   can_chat?: boolean;
   chat_reason?: string;
+}
+export interface SeatView {
+  seat_id: string;
+  name: string;
+  view: GameView;
 }
 export interface Message {
   id: number;

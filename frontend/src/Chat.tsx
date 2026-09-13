@@ -12,7 +12,8 @@ import { useGame } from "./state";
 import type { Message, MessagePage } from "./types";
 
 export function Chat({ onRole }: { onRole: (id: string) => void }) {
-  const { state, session, messages, mergeMessages, connection } = useGame();
+  const { state, session, messages, mergeMessages, connection, catalog } =
+    useGame();
   const [channelId, setChannelId] = useState("public");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -33,11 +34,20 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
   ];
   const channel = channels.find((item) => item.id === channelId) ?? channels[0];
   const activeId = channel?.id ?? "public";
-  const scope = draftKey(state?.id ?? null, session.actor?.id ?? null, "chat", activeId);
+  const scope = draftKey(
+    state?.id ?? null,
+    session.actor?.id ?? null,
+    "chat",
+    activeId,
+  );
   const [draft, setDraft, clearDraft, draftError] = useDraft(scope, "");
   const currentChannel = useRef(scope);
   currentChannel.current = scope;
-  const rows = messages.filter((message) => message.channel_id === activeId);
+  const rows = messages.filter((message) =>
+    activeId === "system"
+      ? message.channel_id === "information"
+      : message.channel_id === activeId,
+  );
   const lastId = rows.at(-1)?.id ?? 0;
   const scrollBottom = () => {
     const node = scroller.current;
@@ -149,22 +159,26 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
         requestAnimationFrame(scrollBottom);
       }
     } catch (failure) {
-      if (scope === currentChannel.current) setError(
-        `${errorText(failure)} 草稿已保留；如响应丢失，请先检查记录是否已有此消息，再决定是否重发。`,
-      );
+      if (scope === currentChannel.current)
+        setError(
+          `${errorText(failure)} 草稿已保留；如响应丢失，请先检查记录是否已有此消息，再决定是否重发。`,
+        );
     } finally {
       setSending(false);
     }
   };
-  const privateChannel = activeId !== "public";
+  const systemChannel = activeId === "system";
+  const privateChannel = activeId !== "public" && !systemChannel;
   return (
     <section className="chat-panel" aria-label="聊天记录与输入">
       <div className={`chat-header ${privateChannel ? "private-channel" : ""}`}>
         <div>
           <span className="eyebrow">
-            {privateChannel
-              ? "仅授权成员可见 · 私密频道"
-              : "全体成员可见 · 公开频道"}
+            {systemChannel
+              ? "发给你的通知与裁定 · 只读"
+              : privateChannel
+                ? "仅授权成员可见 · 私密频道"
+                : "全体成员可见 · 公开频道"}
           </span>
           <h2>{channel?.label ?? "公共讨论"}</h2>
         </div>
@@ -176,7 +190,12 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
           >
             {channels.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.id === "public" ? "公开" : "私密"} · {item.label}
+                {item.id === "public"
+                  ? "公开"
+                  : item.id === "system"
+                    ? "系统"
+                    : "私密"}{" "}
+                · {item.label}
               </option>
             ))}
           </select>
@@ -185,6 +204,10 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       <div
         className="chat-scroll"
         ref={scroller}
+        onPointerDown={() => {
+          const active = document.activeElement;
+          if (active instanceof HTMLTextAreaElement) active.blur();
+        }}
         onScroll={() => {
           const node = scroller.current!;
           nearBottom.current =
@@ -206,9 +229,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             <span className="seal">言</span>
             <h3>{loading ? "正在读取对话" : "故事从第一句话开始"}</h3>
             <p>
-              {privateChannel
-                ? "这个频道的内容仅发送给获准成员。主持人可查看所有频道。"
-                : "只使用公开身份发言。你的另一张牌，仍属于你自己的秘密。"}
+              {systemChannel
+                ? "这里集中显示发给你一个人的通知、裁定与私密信息；其他玩家看不到。"
+                : privateChannel
+                  ? "这个频道的内容仅发送给获准成员。主持人可查看所有频道。"
+                  : "只使用公开身份发言。你的另一张牌，仍属于你自己的秘密。"}
             </p>
           </div>
         )}
@@ -237,7 +262,16 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
               />
               <div className="message-main">
                 <div className="message-meta">
-                  <strong>{message.sender_name}</strong>
+                  <strong>
+                    {message.sender_name}
+                    {message.avatar_role_id &&
+                      message.sender_id !== "host" &&
+                      `（${
+                        catalog.roles.find(
+                          (role) => role.id === message.avatar_role_id,
+                        )?.name ?? message.avatar_role_id
+                      }）`}
+                  </strong>
                   <time dateTime={message.created_at}>
                     {formatTime(message.created_at)}
                   </time>
@@ -262,9 +296,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       <form className="chat-compose" onSubmit={(event) => void send(event)}>
         <div className="compose-caption">
           <span>
-            {privateChannel
-              ? `私密发送至：${channel?.label}`
-              : "发送至：公共讨论"}
+            {systemChannel
+              ? "系统信息只读，不能在此发言"
+              : privateChannel
+                ? `私密发送至：${channel?.label}`
+                : "发送至：公共讨论"}
           </span>
           <span>{draft.length}/2000</span>
         </div>
@@ -273,7 +309,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             {error}
           </p>
         )}
-        {draftError && <p className="warning" role="alert">{draftError}</p>}
+        {draftError && (
+          <p className="warning" role="alert">
+            {draftError}
+          </p>
+        )}
         <div className="compose-controls">
           <textarea
             aria-label={`发消息到${channel?.label}`}

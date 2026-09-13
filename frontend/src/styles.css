@@ -1771,6 +1771,165 @@ button.avatar:hover {
 .management-content > .codex-record ol {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
+.phase-actor {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 5px;
+  background: #33293c;
+  border: 1px solid #57456a;
+  color: #dcc9f0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.phase-actor.own-turn {
+  background: #453a24;
+  border-color: var(--gold);
+  color: #f0d9a6;
+}
+.advance-button {
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.urgent-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  border-bottom: 1px solid #6b4a22;
+  background: linear-gradient(90deg, #4a3520, #6b4a22, #4a3520);
+  color: #fdf0d5;
+  font-size: 14px;
+  text-align: center;
+  cursor: pointer;
+  animation: urgent-in 200ms ease-out;
+}
+.urgent-banner strong {
+  font-weight: 600;
+}
+.urgent-banner.warned {
+  background: linear-gradient(90deg, #5b2323, #7d3030, #5b2323);
+  border-bottom-color: #8d3a3a;
+}
+.urgent-banner .countdown {
+  color: #ffe2b0;
+}
+.urgent-banner .urgent-hint {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.phase-flash {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #2c2434;
+  border-bottom: 1px solid #4c3d5c;
+  color: #e7d8f5;
+  font-size: 13px;
+}
+.phase-flash .eyebrow {
+  margin: 0;
+}
+@keyframes urgent-in {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.pending-item.blocking {
+  border-left: 2px solid #8d6a33;
+  padding-left: 10px;
+}
+.pending-item .primary {
+  margin-top: 8px;
+}
+.pending-item h3 {
+  font-size: 14px;
+}
+button.tiny {
+  font-size: 10px;
+  padding: 3px 8px;
+  min-height: 0;
+}
+.seat-info .witch-mark {
+  color: #ddb2ef;
+  font-style: normal;
+}
+.witch-seat .seat-number {
+  color: #f0c8ff;
+  border-color: #7d4f96;
+}
+.mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #534134;
+  border-radius: 6px;
+  background: #2a2430;
+}
+.mini-card strong {
+  font-size: 14px;
+  color: #eddcf8;
+}
+.mini-card small {
+  font-size: 10px;
+  color: #a992bc;
+}
+.honoka-roster {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #6b4a22;
+  border-radius: 6px;
+  background: #322a22;
+}
+.honoka-roster h3 {
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: #e1c793;
+}
+.honoka-roster ul,
+.source-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #d5c6df;
+}
+.honoka-roster small {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #a992bc;
+}
+.inspector .public-record + .actions-section,
+.inspector .actions-section {
+  margin-top: 12px;
+}
+.bottom-nav button.urgent span {
+  color: #ffdca8;
+}
+.bottom-nav button small.urgent {
+  background: #8d3a3a;
+  color: #ffe1e1;
+  animation: nadge 1.6s ease-in-out infinite;
+}
+@keyframes nadge {
+  50% {
+    transform: scale(1.12);
+  }
+}
 @media (min-width: 1400px) {
   .room {
     grid-template-columns: 220px minmax(0, 1fr) 350px;
@@ -2529,6 +2688,36 @@ button.avatar:hover {
   .warning,
   .error {
     font-size: 15px;
+  }
+
+  /* 软键盘模式：键盘弹起时收窄空隙，输入法与多行输入都更稳。 */
+  html:has(.chat-compose textarea:focus) .chat-scroll {
+    scroll-padding-bottom: 8px;
+  }
+  html:has(.chat-compose textarea:focus) .chat-panel {
+    padding-bottom: 0;
+  }
+  html:has(.chat-compose textarea:focus) .bottom-nav {
+    display: none;
+  }
+  .urgent-banner {
+    font-size: 13px;
+    padding: 9px 12px;
+  }
+  .phase-meta {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .advance-button {
+    font-size: 11px;
+    padding: 7px 10px;
+  }
+  .pending-item h3 {
+    font-size: 13px;
+  }
+  .source-list {
+    font-size: 12px;
   }
 }
 @media (max-width: 380px) {

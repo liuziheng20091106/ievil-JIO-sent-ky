@@ -421,6 +421,16 @@ const words: Record<string, string> = {
   voluntary: "主动出局",
   card: "跟随角色牌",
   seat: "跟随原席位",
+  good_vote: "好人组织投票",
+  makers: "制作人数",
+  breakers: "破坏席位",
+  unsubmitted: "未提交席位",
+  delta: "本次增量",
+  correct: "猜对数",
+  progress: "当前进度",
+  last: "上次结算",
+  nominate: "提名",
+  pass: "放弃提名",
 };
 export function labelFor(key: string): string {
   return labels[key] ?? key;

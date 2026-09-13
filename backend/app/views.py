@@ -50,6 +50,14 @@ def channels_for(db, game, actor, domain_view):
                     "reason": reason or ("仅可查看获准继承的历史" if not current else ""),
                 }
             )
+    result.append(
+        {
+            "id": "system",
+            "label": "系统与私密信息",
+            "can_send": False,
+            "reason": "系统信息只用于告知，不能在此发言",
+        }
+    )
     return result
 
 

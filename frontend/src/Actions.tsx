@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { errorText } from "./api";
 import { Drawing } from "./Drawing";
 import { draftKey, useDraft } from "./drafts";
@@ -23,18 +23,34 @@ const groups: Record<string, string> = {
 };
 
 function actionIdentity(action: UIAction) {
-  return JSON.stringify([action.id, action.payload ?? {}], (_key, value: unknown) =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
-      : value,
+  return JSON.stringify(
+    [action.id, action.payload ?? {}],
+    (_key, value: unknown) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+          )
+        : value,
   );
 }
+export type PanelRequest = {
+  id: string;
+  payload?: Record<string, unknown>;
+  values?: Record<string, unknown>;
+  token: number;
+};
 export function ActionPanel({
   actions,
   title = "本阶段行动",
+  asSeat,
+  request,
+  onRequestHandled,
 }: {
   actions: UIAction[];
   title?: string;
+  asSeat?: string;
+  request?: PanelRequest | null;
+  onRequestHandled?: () => void;
 }) {
   const { state, session } = useGame();
   const [selected, setSelected] = useState<{
@@ -43,8 +59,44 @@ export function ActionPanel({
     key: string;
     actorId: string | undefined;
     gameId: string;
+    asSeat?: string;
+    values?: Record<string, unknown>;
   } | null>(null);
   const [query, setQuery] = useState("");
+  const select = (action: UIAction, values?: Record<string, unknown>) => {
+    if (!state) return;
+    setSelected({
+      action,
+      version: state.version,
+      key: draftKey(
+        state.id,
+        session.actor?.id ?? null,
+        "action",
+        state.day,
+        state.half,
+        state.phase,
+        actionIdentity(action),
+      ),
+      actorId: session.actor?.id,
+      gameId: state.id,
+      asSeat,
+      values,
+    });
+  };
+  const requestToken = request?.token;
+  useEffect(() => {
+    if (!request) return;
+    const match = actions.find(
+      (action) =>
+        action.id === request.id &&
+        Object.entries(request.payload ?? {}).every(
+          ([name, value]) => action.payload?.[name] === value,
+        ),
+    );
+    if (match) select(match, request.values);
+    onRequestHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestToken]);
   const grouped = useMemo(() => {
     const result = new Map<string, UIAction[]>();
     actions
@@ -96,13 +148,7 @@ export function ActionPanel({
               <button
                 className={`action-tile ${action.danger ? "danger-action" : ""}`}
                 key={`${action.id}:${index}`}
-                onClick={() => setSelected({
-                  action,
-                  version: state!.version,
-                  key: draftKey(state!.id, session.actor?.id ?? null, "action", state!.day, state!.half, state!.phase, actionIdentity(action)),
-                  actorId: session.actor?.id,
-                  gameId: state!.id,
-                })}
+                onClick={() => select(action)}
               >
                 <span>{action.label}</span>
                 {action.description && <small>{action.description}</small>}
@@ -114,15 +160,19 @@ export function ActionPanel({
           </div>
         </details>
       ))}
-      {selected && selected.actorId === session.actor?.id && selected.gameId === state?.id && (
-        <ActionForm
-          key={selected.key}
-          storageKey={selected.key}
-          action={selected.action}
-          version={selected.version}
-          onClose={() => setSelected(null)}
-        />
-      )}
+      {selected &&
+        selected.actorId === session.actor?.id &&
+        selected.gameId === state?.id && (
+          <ActionForm
+            key={selected.key}
+            storageKey={selected.key}
+            action={selected.action}
+            version={selected.version}
+            asSeat={selected.asSeat}
+            initial={selected.values}
+            onClose={() => setSelected(null)}
+          />
+        )}
     </section>
   );
 }
@@ -138,19 +188,30 @@ function ActionForm({
   version,
   onClose,
   storageKey,
+  asSeat,
+  initial,
 }: {
   action: UIAction;
   version: number;
   onClose: () => void;
   storageKey: string;
+  asSeat?: string;
+  initial?: Record<string, unknown>;
 }) {
   const { command, busy, state } = useGame();
   const [expectedVersion, setExpectedVersion] = useState(version);
   const [descriptor, setDescriptor] = useState(action);
   action = descriptor;
-  const [savedValues, setValues, clearDraft, draftError] = useDraft<Record<string, unknown>>(storageKey, () =>
+  const [savedValues, setValues, clearDraft, draftError] = useDraft<
+    Record<string, unknown>
+  >(storageKey, () =>
     Object.fromEntries(
-      action.fields.filter((field) => field.name !== "confirm").map((field) => [field.name, initialValue(field)]),
+      action.fields
+        .filter((field) => field.name !== "confirm")
+        .map((field) => [
+          field.name,
+          initial?.[field.name] ?? initialValue(field),
+        ]),
     ),
   );
   const [confirmed, setConfirmed] = useState(false);
@@ -182,8 +243,14 @@ function ActionForm({
         }
         if (
           field.options &&
-          (Array.isArray(value) ? value : value === "" || value == null ? [] : [value])
-            .some((item) => !field.options!.some((option) => option.value === item))
+          (Array.isArray(value)
+            ? value
+            : value === "" || value == null
+              ? []
+              : [value]
+          ).some(
+            (item) => !field.options!.some((option) => option.value === item),
+          )
         ) {
           setError(`「${field.label}」的选项已失效，请重新选择。`);
           return;
@@ -216,7 +283,7 @@ function ActionForm({
       }
     }
     try {
-      await command(action, payload, expectedVersion);
+      await command(action, payload, expectedVersion, asSeat);
       clearDraft();
       onClose();
     } catch (failure) {
@@ -340,7 +407,11 @@ function ActionForm({
             )}
           </div>
         )}
-        {draftError && <p className="warning" role="alert">{draftError}</p>}
+        {draftError && (
+          <p className="warning" role="alert">
+            {draftError}
+          </p>
+        )}
         {error && (
           <p className="error" role="alert">
             {error}

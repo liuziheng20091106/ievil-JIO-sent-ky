@@ -4,11 +4,10 @@ from copy import deepcopy
 from random import SystemRandom
 from time import time
 
-from .actions import actions_for, can_day_ability, night_abilities
+from .actions import actions_for, can_day_ability, night_abilities, outstanding_seats
 from .catalog import DAY_ABILITIES, PHASES, ROLES
 from .resolution import (
     begin_night,
-    coco_seat,
     damage_preview,
     death_batch,
     information,
@@ -186,6 +185,14 @@ def open_balloon(game, events, organizer, participants):
     )
     game["balloon_choices"] = {}
     notify(game, events, f"热气球开始制作，参加席位：{'、'.join(participants)}。")
+    for sid in participants:
+        card = current(game, sid)
+        if card and not card["witch"] and card["role_id"] != "annan":
+            # Good, non-Annan participants have no other legal choice; skip the ceremony.
+            game["balloon_choices"][sid] = "make"
+            notify(game, events, "你只能选择制作，已自动提交。", [sid])
+    if set(participants).issubset(game["balloon_choices"]):
+        settle_balloon(game, events)
 
 
 def settle_balloon(game, events):
@@ -194,12 +201,26 @@ def settle_balloon(game, events):
         set(balloon["participants"]).issubset(game["balloon_choices"]),
         "热气球仍有人未确认，可先警告",
     )
-    choices = game["balloon_choices"].values()
-    balloon["progress"] = (
-        0 if "break" in choices else balloon["progress"] + sum(v == "make" for v in choices)
-    )
+    choices = {sid: game["balloon_choices"].get(sid, "skip") for sid in balloon["participants"]}
+    makers = sum(value == "make" for value in choices.values())
+    breakers = [sid for sid, value in choices.items() if value == "break"]
+    skipped = [sid for sid, value in choices.items() if value == "skip"]
+    delta = 0 if breakers else makers
+    balloon["progress"] = 0 if breakers else balloon["progress"] + makers
+    balloon["last"] = {
+        "day": game["day"],
+        "makers": makers,
+        "breakers": breakers,
+        "skipped": skipped,
+        "delta": delta,
+    }
     balloon["status"] = "complete"
-    notify(game, events, f"热气球当前进度：{balloon['progress']}/13。")
+    notify(
+        game,
+        events,
+        f"热气球结算：制作{makers}人、破坏{len(breakers)}人、未提交{len(skipped)}人；"
+        f"本次+{delta}，当前进度{balloon['progress']}/13。",
+    )
     if (
         balloon["progress"] >= 13
         and present(game, "arisa")
@@ -544,7 +565,9 @@ def resolve_pending(game, events, data):
             [item["seat_id"]],
             "夜间目击名单",
         )
-        game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
+        victim_seat = seat(game, item["seat_id"])
+        if not current(game, victim_seat):
+            game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
     elif kind == "lower_entry":
         if (
             data.get("allow")
@@ -569,34 +592,6 @@ def resolve_pending(game, events, data):
             )
             return
         declaration["status"] = "complete" if outcome == "complete" else "stopped"
-        sync_declarations(game)
-    elif kind == "challenge":
-        require(data["confirm"] is True, "请确认质疑结算")
-        declaration = next(d for d in game["declarations"] if d["id"] == item["declaration_id"])
-        require(declaration["status"] == "open", "该技能声明已结束")
-        if declaration["fake"]:
-            declaration["status"] = "stopped"
-            game["pending"] = [
-                p for p in game["pending"] if p.get("declaration_id") != declaration["id"]
-            ]
-            notify(
-                game, events, f"{item['seat_id']}号质疑成功：尚未完成的技能停止，已执行部分不撤销。"
-            )
-        else:
-            s = seat(game, item["seat_id"])
-            if s["occupant_id"] not in game["spiritual"]["personal_losses"]:
-                game["spiritual"]["personal_losses"].append(s["occupant_id"])
-            c = current(game, s)
-            if c:
-                apply_damage(
-                    game,
-                    events,
-                    damage_preview(
-                        game,
-                        [{"target_card": c["id"], "cause": "challenge", "unconditional": True}],
-                    ),
-                )
-            notify(game, events, f"{item['seat_id']}号质疑失败，因犯规出局且本局个人判负。")
         sync_declarations(game)
     elif kind == "water":
         outcome = data["outcome"]
@@ -700,12 +695,17 @@ def host_command(game, events, action, data):
             "需要7名玩家全部入座、确认上下牌并准备",
         )
         for s in game["seats"]:
-            if not s["avatar_role_id"]:
-                s["avatar_role_id"] = current(game, s)["role_id"]
+            s["avatar_role_id"] = current(game, s)["role_id"]
+        honoka = role_card(game, "honoka")
+        honoka_seat = owner(game, "honoka")
+        if current(game, honoka_seat)["id"] == "honoka" and honoka["states"].get("disguise"):
+            honoka_seat["avatar_role_id"] = honoka["states"]["disguise"]
+            honoka["states"]["disguise_locked"] = True
+        else:
+            honoka["states"].pop("disguise", None)
         game["status"] = "playing"
         game["phase"] = "witch"
-        honoka = role_card(game, "honoka")
-        sid = owner(game, "honoka")["id"]
+        sid = honoka_seat["id"]
         information(
             game,
             events,
@@ -731,41 +731,38 @@ def host_command(game, events, action, data):
         game["codex"] = list(data["roles"])
         notify(game, events, data["reason"], [], "魔典裁定")
     elif action == "host.speech":
-        game["public"]["speech_order"] = list(data["order"])
+        ids = [s["id"] for s in game["seats"]]
+        index = ids.index(data["start"])
+        order = ids[index:] + ids[:index]
+        if data["direction"] == "desc":
+            order = [order[0]] + order[1:][::-1]
+        game["public"]["speech_order"] = order
         if game["phase"] == "speech":
-            game["public"]["speaker"] = data["order"][0]
-        notify(game, events, "发言顺序：" + " → ".join(data["order"]))
+            game["public"]["speaker"] = order[0]
+        notify(game, events, "发言顺序：" + " → ".join(order))
     elif action == "host.warn":
-        sid = data["seat_id"]
-        require(sid not in game["warnings"], "该玩家已经处于30秒警告倒计时")
-        phase = game["phase"]
-        outstanding = (
-            phase in {"night", "night_coco"}
-            and sid in game["night"]["actors"]
-            and sid not in game["night"]["confirmed"]
-            and (sid != coco_seat(game) or phase == "night_coco")
+        outstanding = outstanding_seats(game)
+        if data.get("all"):
+            targets = outstanding
+        else:
+            targets = [data["seat_id"]] if data.get("seat_id") else []
+        require(
+            targets and all(sid in outstanding for sid in targets),
+            "该席位当前没有可超时的待确认操作",
         )
-        outstanding |= phase == "speech" and game["public"]["speaker"] == sid
-        outstanding |= phase == "nomination" and next_nominator(game) == sid
-        outstanding |= (
-            phase == "voting"
-            and seat(game, sid) in eligible_voters(game)
-            and sid not in game["votes"]
-        )
-        outstanding |= (
-            phase == "execution"
-            and any(owner(game, cid)["id"] == sid for cid in game["execution"])
-            and sid not in game["execution_ready"]
-        )
-        outstanding |= (
-            game["public"]["balloon"]["status"] == "collecting"
-            and sid in game["public"]["balloon"]["participants"]
-            and sid not in game["balloon_choices"]
-        )
-        require(outstanding, "该席位当前没有可超时的待确认操作")
-        game["warnings"][sid] = time() + 30
+        for sid in targets:
+            game["warnings"][sid] = time() + 30
         game["deadline"] = min(game["warnings"].values())
-        notify(game, events, f"{sid}号玩家请在30秒内完成当前操作，逾期视为未操作。")
+        if len(targets) > 1:
+            notify(
+                game,
+                events,
+                "已警告下列席位："
+                + "、".join(f"{sid}号" for sid in targets)
+                + "，请在30秒内完成操作。",
+            )
+        else:
+            notify(game, events, f"已警告{targets[0]}号玩家：请在30秒内完成操作。")
     elif action == "host.water":
         require(not game["water"]["used"], "本局唯一13水已使用")
         require(not any(p["kind"] == "water" for p in game["pending"]), "13水正在裁定使用")
@@ -891,17 +888,18 @@ def host_command(game, events, action, data):
         finish(game, events, data["winner"], data["reason"])
 
 
-def player_command(game, actor, events, action, data):
+def player_command(game, actor, events, action, data, *, by_host=False):
     s = player_seat(game, actor)
     sid = s["id"]
     card = current(game, s)
     if action == "lobby.order":
         require(game["status"] == "lobby" and game["phase"] == "ordering", "发牌后才能调整上下牌")
+        require(not s["ready"], "下层牌已确定，不能再改上层角色")
         s["cards"] = [data["top"]] + [cid for cid in s["cards"] if cid != data["top"]]
         s["ready"] = False
     elif action == "lobby.ready":
         require(game["status"] == "lobby" and game["phase"] in {"lobby", "ordering"})
-        s["ready"] = not s["ready"]
+        s["ready"] = True if game["phase"] == "ordering" else not s["ready"]
         if game["phase"] == "lobby" and all(
             other["occupant_id"] and other["ready"] for other in game["seats"]
         ):
@@ -910,7 +908,6 @@ def player_command(game, actor, events, action, data):
     elif action == "player.profile":
         require(1 <= len(data["name"].strip()) <= 30, "公开称呼需为1至30字")
         s["name"] = data["name"].strip()
-        s["avatar_role_id"] = data.get("avatar") or None
     elif action == "night.submit":
         ability = data["ability"]
         cid = game["night"]["actors"][sid]
@@ -925,6 +922,7 @@ def player_command(game, actor, events, action, data):
             "card_id": cid,
             "ability": ability,
             "confirmed": False,
+            "by_host": by_host,
             "title": f"{sid}号夜间选择",
             **deepcopy({k: v for k, v in data.items() if k != "ability"}),
         }
@@ -1013,6 +1011,7 @@ def player_command(game, actor, events, action, data):
             "card_id": card["id"],
             "ability": ability,
             "fake": fake,
+            "by_host": by_host,
             "data": deepcopy(data),
             "status": "open",
             "executed": False,
@@ -1028,18 +1027,44 @@ def player_command(game, actor, events, action, data):
         notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。")
     elif action == "day.challenge":
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])
+        require(d["status"] == "open", "该技能声明已结束")
         require(d["seat_id"] != sid, "不可质疑自己")
-        pending(
-            game,
-            "challenge",
-            f"{sid}号质疑{d['seat_id']}号声明，主持人确认按真伪结算",
-            declaration_id=d["id"],
-            seat_id=sid,
-        )
-        notify(game, events, f"{sid}号质疑{d['seat_id']}号的技能声明，等待主持人结算。")
+        if d["fake"]:
+            d["status"] = "stopped"
+            game["pending"] = [p for p in game["pending"] if p.get("declaration_id") != d["id"]]
+            notify(game, events, f"{sid}号质疑成功：伪装技能尚未完成的部分停止，已执行部分不撤销。")
+        else:
+            if s["occupant_id"] not in game["spiritual"]["personal_losses"]:
+                game["spiritual"]["personal_losses"].append(s["occupant_id"])
+            if card:
+                apply_damage(
+                    game,
+                    events,
+                    damage_preview(
+                        game,
+                        [{"target_card": card["id"], "cause": "challenge", "unconditional": True}],
+                    ),
+                )
+            notify(game, events, f"{sid}号质疑失败，因犯规出局且本局个人判负。")
+        sync_declarations(game)
     elif action == "honoka.disguise":
-        s["avatar_role_id"] = data["role"]
-        notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
+        hc = game["cards"]["honoka"]
+        require(owner(game, "honoka")["id"] == sid, "只有穗乃香可以选择示人角色")
+        if game["status"] == "lobby":
+            hc["states"]["disguise"] = data["role"]
+            notify(
+                game,
+                events,
+                f"开局前示人选择已记录：{ROLES[data['role']]['name']}（仅当穗乃香在上层时生效）。",
+                [sid],
+                "穗乃香示人",
+            )
+        else:
+            require(card is not None and card["id"] == "honoka", "只有穗乃香登场时可以选择示人角色")
+            require(not hc["states"].get("disguise_locked"), "示人角色已经确定，不能再更改")
+            hc["states"]["disguise_locked"] = True
+            s["avatar_role_id"] = data["role"]
+            notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
     elif action == "honoka.witness":
         card["states"]["witness_role"] = data["role"]
     elif action == "hiro.exit":
@@ -1177,14 +1202,16 @@ def player_command(game, actor, events, action, data):
         game["deadline"] = min(game["warnings"].values(), default=None)
 
 
-def apply_command(game, actor, action, payload):
+def apply_command(game, actor, action, payload, *, by_host=False):
     require(game["status"] != "ended", "对局已结束，不能再操作")
     validate_command(game, actor, action, payload)
     events = []
     if actor["kind"] == "host":
         host_command(game, events, action, payload)
     else:
-        player_command(game, actor, events, action, payload)
+        player_command(game, actor, events, action, payload, by_host=by_host)
+    if by_host and actor["kind"] == "player":
+        notify(game, events, f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。")
     game["version"] += 1
     return events
 

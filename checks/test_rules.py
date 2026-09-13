@@ -122,7 +122,7 @@ class SetupRules(unittest.TestCase):
             apply_command(game, actors[0], "lobby.order", {"top": "emma"})
         with self.assertRaises(GameError):
             apply_command(game, HOST, "host.start", {})
-        apply_command(game, actors[0], "player.profile", {"name": "甲", "avatar": "emma"})
+        apply_command(game, actors[0], "player.profile", {"name": "甲"})
         for actor in actors[:-1]:
             apply_command(game, actor, "lobby.ready", {})
             self.assertEqual(game["phase"], "lobby")
@@ -153,13 +153,13 @@ class SetupRules(unittest.TestCase):
         with self.assertRaises(GameError):
             apply_command(game, HOST, "host.start", {})
         apply_command(game, actors[-1], "lobby.ready", {})
-        own = game_view(game, actors[1])["self"]
-        apply_command(game, actors[1], "lobby.order", {"top": own["cards"][1]["id"]})
-        self.assertFalse(game["seats"][1]["ready"])
-        with self.assertRaises(GameError):
-            apply_command(game, HOST, "host.start", {})
         pairs = [list(seat["cards"]) for seat in game["seats"]]
-        apply_command(game, actors[1], "lobby.ready", {})
+        own = game_view(game, actors[1])["self"]
+        with self.assertRaises(GameError):
+            apply_command(game, actors[1], "lobby.order", {"top": own["cards"][1]["id"]})
+        with self.assertRaises(GameError):
+            apply_command(game, actors[1], "lobby.ready", {})
+        self.assertTrue(game["seats"][1]["ready"])
         self.assertEqual([seat["cards"] for seat in game["seats"]], pairs)
         self.assertEqual(game["phase"], "ordering")
         self.assertTrue(
@@ -169,7 +169,7 @@ class SetupRules(unittest.TestCase):
         self.assertEqual((game["status"], game["phase"]), ("playing", "witch"))
         self.assertEqual(
             [seat["avatar_role_id"] for seat in game_view(game, observer)["seats"]],
-            ["emma", *[game["cards"][pair[0]]["role_id"] for pair in pairs[1:]]],
+            [game["cards"][pair[0]]["role_id"] for pair in pairs],
         )
         with self.assertRaises(GameError):
             apply_command(game, actors[0], "lobby.order", {"top": pairs[0][1]})
