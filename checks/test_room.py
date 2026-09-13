@@ -453,6 +453,14 @@ class HostWorkbench(unittest.TestCase):
         self.assertEqual(started.status_code, 200, started.text)
         self.assertEqual(started.json()["status"], "playing")
 
+    def test_host_state_lists_the_phase_advance_todo(self):
+        self.start_game()
+        tasks = self.state()["host"]["tasks"]
+        advance = [item for item in tasks if item["id"] == "advance"]
+        self.assertEqual(len(advance), 1, tasks)
+        self.assertEqual(advance[0]["action"], "host.advance")
+        self.assertTrue(advance[0]["blocking"])
+
     def test_information_channel_returns_private_notices_to_the_right_player(self):
         actor, headers = self.players["1"]
         _, stranger = self.players["2"]

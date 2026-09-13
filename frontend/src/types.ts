@@ -64,6 +64,7 @@ export interface UIAction {
   group?: string;
   danger?: boolean;
   blocking?: boolean;
+  instant?: boolean;
   payload?: Record<string, unknown>;
   fields: Field[];
 }

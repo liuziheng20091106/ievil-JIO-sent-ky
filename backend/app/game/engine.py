@@ -249,9 +249,35 @@ def brainwash_targets(game):
     return set(active.values())
 
 
+def nomination_rounds(game):
+    """同一张牌被多人提名只投一轮，先提名者排在前面。"""
+    rounds, seen = [], set()
+    for item in game["nominations"]:
+        if item["card_id"] in seen:
+            continue
+        seen.add(item["card_id"])
+        rounds.append(item)
+    return rounds
+
+
+def nomination_votes(game, nominee):
+    """提名过本候选的玩家直接投同意票，省掉一次重复点击。"""
+    voters = {s["id"] for s in eligible_voters(game)}
+    forced = brainwash_targets(game)
+    bound = game["spiritual"]["sherry_bound"] and nominee["card_id"] == "hanna"
+    return {
+        item["by"]: "abstain" if item["by"] in forced else "yes"
+        for item in game["nominations"]
+        if item["card_id"] == nominee["card_id"]
+        and item["by"] in voters
+        and not (bound and current(game, item["by"])["id"] == "sherry")
+    }
+
+
 def open_vote(game, events):
+    rounds = nomination_rounds(game)
     index = len(game["vote_rounds"])
-    if index >= len(game["nominations"]):
+    if index >= len(rounds):
         for cid, day in game["spiritual"]["annan_penalty"].items():
             if day == game["day"] and game["cards"][cid]["alive"] and cid not in game["execution"]:
                 game["execution"].append(cid)
@@ -263,12 +289,20 @@ def open_vote(game, events):
         )
         return
     game["phase"] = "voting"
-    game["votes"] = {}
-    nominee = game["nominations"][index]
+    nominee = rounds[index]
+    game["votes"] = nomination_votes(game, nominee)
+    for sid in game["votes"]:
+        notify(
+            game,
+            events,
+            f"{nominee['seat_id']}号就是你先前提名的候选，已按提名自动投票。",
+            [sid],
+            "自动投票",
+        )
     game["public"]["votes"] = {
         "candidate": nominee["seat_id"],
         "round": index + 1,
-        "total": len(game["nominations"]),
+        "total": len(rounds),
         "results": deepcopy(game["vote_rounds"]),
     }
     notify(
@@ -283,7 +317,7 @@ def close_vote(game, events):
     voters = eligible_voters(game)
     require(all(s["id"] in game["votes"] for s in voters), "仍有玩家未投票，可先警告")
     forced = brainwash_targets(game)
-    nominee = game["nominations"][len(game["vote_rounds"])]
+    nominee = nomination_rounds(game)[len(game["vote_rounds"])]
     yes = sum(
         game["votes"].get(s["id"]) == "yes"
         and s["id"] not in forced
@@ -349,6 +383,7 @@ def advance(game, events):
         game["public"]["speaker"] = order[0] if order else None
         game["brainwash"] = {}
         game["nominations"] = []
+        game["nomination_done"] = []
         game["vote_rounds"] = []
         game["execution"] = []
         game["balloon_votes"] = {}
@@ -362,7 +397,6 @@ def advance(game, events):
             settle_balloon(game, events)
         if game["status"] != "ended":
             game["phase"] = "nomination"
-            game["nomination_done"] = []
     elif phase == "nomination":
         require(
             not pending_nominators(game), "仍有玩家未提名或放弃，可警告后等待30秒"
@@ -904,10 +938,23 @@ def host_command(game, events, action, data):
         finish(game, events, data["winner"], data["reason"])
 
 
+# 警告只对“当前阶段卡住的这个行动”有效，提前做别的事不算完成本阶段。
+PHASE_ACTIONS = {
+    "night": {"night.confirm"},
+    "night_coco": {"night.confirm"},
+    "speech": {"speech.done"},
+    "balloon": {"balloon.choose"},
+    "nomination": {"vote.nominate", "vote.pass"},
+    "voting": {"vote.cast"},
+    "execution": {"execution.shoot", "execution.confirm"},
+}
+
+
 def player_command(game, actor, events, action, data, *, by_host=False):
     s = player_seat(game, actor)
     sid = s["id"]
     card = current(game, s)
+    phase = game["phase"]
     if action == "lobby.order":
         require(game["status"] == "lobby" and game["phase"] == "ordering", "发牌后才能调整上下牌")
         require(not s["ready"], "下层牌已确定，不能再改上层角色")
@@ -1101,9 +1148,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         speech_done(game)
     elif action == "vote.nominate":
         target = current(game, data["target"])
-        require(
-            not any(n["card_id"] == target["id"] for n in game["nominations"]), "该角色已经被提名"
-        )
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
         game["public"]["nominations"] = [
             {"seat_id": n["seat_id"], "by": n["by"]} for n in game["nominations"]
@@ -1114,7 +1158,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         game.setdefault("nomination_done", []).append(sid)
         notify(game, events, f"{sid}号放弃本次提名。")
     elif action == "vote.cast":
-        target = game["nominations"][len(game["vote_rounds"])]["card_id"]
+        target = nomination_rounds(game)[len(game["vote_rounds"])]["card_id"]
         require(
             not (
                 data["choice"] == "yes"
@@ -1211,16 +1255,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         if sid not in game["surrenders"]:
             game["surrenders"].append(sid)
         notify(game, events, "交牌意向已私信主持人；未满足集体条件前继续游戏。", [sid], "交牌申请")
-    if sid in game["warnings"] and action in {
-        "night.confirm",
-        "speech.done",
-        "vote.nominate",
-        "vote.pass",
-        "vote.cast",
-        "execution.shoot",
-        "execution.confirm",
-        "balloon.choose",
-    }:
+    if sid in game["warnings"] and action in PHASE_ACTIONS.get(phase, ()):
         del game["warnings"][sid]
         game["deadline"] = min(game["warnings"].values(), default=None)
 

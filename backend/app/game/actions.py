@@ -817,7 +817,18 @@ def actions_for(game, actor):
             action("vote.nominate", "提名候选", [target_field(game)], group="投票", blocking=True)
         )
         result.append(action("vote.pass", "放弃本次提名", group="投票", blocking=True))
-    if phase == "voting" and s in eligible_voters(game):
+    elif game["half"] == "day" and card and sid not in game.get("nomination_done", []):
+        result.append(
+            action(
+                "vote.nominate",
+                "提名候选（可提前）",
+                [target_field(game)],
+                group="投票",
+                instant=True,
+            )
+        )
+        result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票", instant=True))
+    if phase == "voting" and s in eligible_voters(game) and sid not in game["votes"]:
         result.append(
             action(
                 "vote.cast",

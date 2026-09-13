@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from .actions import actions_for
+from .actions import actions_for, outstanding_seats
 from .catalog import PHASES
 from .resolution import coco_seat
 from .state import (
@@ -120,6 +120,22 @@ def host_tasks(game):
                 "action": "host.surrender",
                 "payload": {},
                 "blocking": True,
+            }
+        )
+    if game["phase"] != "night_review":
+        waiting = outstanding_seats(game)
+        ready = not game["pending"] and not waiting and not game["winner_candidate"]
+        tasks.append(
+            {
+                "id": "advance",
+                "kind": "advance",
+                "title": "完成当前阶段 / 推进",
+                "detail": PHASES[game["phase"]]
+                + ("：现在可以推进" if ready else "：先处理上方待办，或等待玩家完成行动"),
+                "seats": [],
+                "action": "host.advance",
+                "payload": {},
+                "blocking": ready,
             }
         )
     return tasks

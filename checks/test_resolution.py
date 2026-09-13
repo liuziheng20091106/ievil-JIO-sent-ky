@@ -14,7 +14,7 @@ from backend.app.game import (
 )
 from backend.app.game.actions import actions_for
 from backend.app.game.resolution import begin_night, damage_preview, death_batch, revive
-from backend.app.game.state import check_winner, pending, rewind, save_snapshot
+from backend.app.game.state import check_winner, pending, pending_nominators, rewind, save_snapshot
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
 PAIRS = [
@@ -174,10 +174,8 @@ class ResolutionEdges(unittest.TestCase):
         game = arranged_game("nomination")
         self.assertIn("vote.nominate", [item["id"] for item in actions_for(game, player(game, "2"))])
         command(game, player(game, "2"), "vote.nominate", {"target": "3"})
-        with self.assertRaises(GameError):
-            command(game, player(game, "4"), "vote.nominate", {"target": "3"})
+        command(game, player(game, "4"), "vote.nominate", {"target": "3"})
         command(game, player(game, "1"), "vote.pass")
-        command(game, player(game, "4"), "vote.nominate", {"target": "5"})
         self.assertNotIn("vote.nominate", [item["id"] for item in actions_for(game, player(game, "4"))])
         with self.assertRaises(GameError):
             command(game, HOST, "host.advance")
@@ -185,6 +183,7 @@ class ResolutionEdges(unittest.TestCase):
             command(game, player(game, sid), "vote.pass")
         command(game, HOST, "host.advance")
         self.assertEqual(game_view(game, player(game, "1"))["public"]["votes"]["candidate"], "3")
+        self.assertEqual(game_view(game, player(game, "1"))["public"]["votes"]["total"], 1)
 
     def test_lower_card_waits_for_host_and_denial_expires_next_phase(self):
         game = arranged_game()
@@ -461,6 +460,81 @@ class AutoAdvance(unittest.TestCase):
         command(discussion, HOST, "host.water", {"seat_id": "1"})
         self.assertNotIn("auto_advance_at", discussion["public"])
         self.assertNotIn("host.auto", [item["id"] for item in actions_for(discussion, HOST)])
+
+
+class NominationFlow(unittest.TestCase):
+    """提名可提前提交、重复提名不失败、提名人自动投同意票。"""
+
+    def test_pre_nominations_confirm_themselves_when_the_phase_opens(self):
+        game = arranged_game("discussion")
+        command(game, player(game, "1"), "vote.nominate", {"target": "3"})
+        command(game, HOST, "host.advance", {})
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "nomination")
+        self.assertEqual(game["nominations"][0]["by"], "1")
+        self.assertNotIn("1", pending_nominators(game))
+
+    def test_two_players_nominating_the_same_person_share_one_vote_round(self):
+        game = arranged_game("nomination")
+        command(game, player(game, "1"), "vote.nominate", {"target": "3"})
+        command(game, player(game, "2"), "vote.nominate", {"target": "3"})
+        for sid in ["3", "4", "5", "6", "7"]:
+            command(game, player(game, sid), "vote.pass", {})
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "voting")
+        self.assertEqual(game["public"]["votes"]["candidate"], "3")
+        self.assertEqual(game["public"]["votes"]["total"], 1)
+        self.assertEqual(game["votes"], {"1": "yes", "2": "yes"})
+        for sid in ["3", "4", "5", "6", "7"]:
+            command(game, player(game, sid), "vote.cast", {"choice": "no"})
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(len(game["vote_rounds"]), 1)
+        self.assertEqual(game["phase"], "execution")
+
+    def test_nomination_is_offered_all_day_but_not_at_night(self):
+        day = arranged_game("speech")
+        actions = actions_for(day, player(day, "1"))
+        nomination = next(item for item in actions if item["id"] == "vote.nominate")
+        self.assertTrue(nomination["instant"])
+        self.assertFalse(nomination.get("blocking"))
+        night = arranged_game("night", "night")
+        self.assertNotIn("vote.nominate", [item["id"] for item in actions_for(night, player(night, "1"))])
+
+    def test_nominating_early_does_not_clear_the_phases_warning(self):
+        game = arranged_game("speech")
+        game["public"]["speaker"] = "1"
+        command(game, HOST, "host.warn", {"seat_id": "1"})
+        command(game, player(game, "1"), "vote.nominate", {"target": "3"})
+        self.assertIn("1", game["warnings"])
+        command(game, player(game, "1"), "speech.done", {})
+        self.assertNotIn("1", game["warnings"])
+
+
+class HostTodo(unittest.TestCase):
+    """「完成当前阶段 / 推进」始终在主持人待办里，并标出现在是否可以推进。"""
+
+    def test_the_host_todo_lists_the_phase_advance_with_its_readiness(self):
+        game = arranged_game("speech")
+        game["public"]["speaker"] = "2"
+        waiting = next(
+            item for item in game_view(game, HOST)["host"]["tasks"] if item["id"] == "advance"
+        )
+        self.assertEqual(waiting["action"], "host.advance")
+        self.assertFalse(waiting["blocking"])
+        game["public"]["speaker"] = None
+        ready = next(
+            item for item in game_view(game, HOST)["host"]["tasks"] if item["id"] == "advance"
+        )
+        self.assertTrue(ready["blocking"])
+        self.assertEqual(ready["detail"], "顺序发言：现在可以推进")
+
+    def test_a_pending_ruling_marks_the_advance_as_not_ready(self):
+        game = arranged_game("discussion")
+        pending(game, "reaction", "夜前互动裁定", seat_id="1")
+        advance = next(
+            item for item in game_view(game, HOST)["host"]["tasks"] if item["id"] == "advance"
+        )
+        self.assertFalse(advance["blocking"])
 
 
 if __name__ == "__main__":

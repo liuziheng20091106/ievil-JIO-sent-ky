@@ -1283,6 +1283,7 @@ const taskLabels: Record<string, string> = {
   execution: "处决",
   balloon: "热气球",
   review: "阶段推进",
+  advance: "阶段推进",
   winner: "胜利宣判",
   surrender: "交牌审阅",
 };
@@ -1308,6 +1309,7 @@ function HostTasks({
     execution: "前往警告",
     balloon: "前往警告",
     review: "前往推进",
+    advance: "前往推进",
     winner: "前往宣判",
     surrender: "前往审阅",
   };

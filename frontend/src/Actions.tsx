@@ -267,8 +267,10 @@ function ActionForm({
           return;
         }
       }
-      setReview(true);
-      return;
+      if (!action.instant) {
+        setReview(true);
+        return;
+      }
     }
     const payload = { ...values };
     for (const field of action.fields) {
@@ -433,7 +435,13 @@ function ActionForm({
             className={action.danger ? "danger-button" : "primary"}
             disabled={busy || stale}
           >
-            {busy ? "正在提交…" : review ? "确认提交" : "核对并继续"}
+            {busy
+              ? "正在提交…"
+              : review
+                ? "确认提交"
+                : action.instant
+                  ? "直接提交"
+                  : "核对并继续"}
           </button>
         </div>
       </form>
