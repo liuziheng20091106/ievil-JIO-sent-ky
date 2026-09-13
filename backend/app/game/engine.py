@@ -293,6 +293,29 @@ def next_speaker(game, current_speaker, events):
     return order[index] if index < len(order) else None
 
 
+def speech_plan(game, dead_first):
+    """死者先发言；其余在顺序与逆序间取让魔女化玩家更早发言的一侧。"""
+    seats = [s["id"] for s in game["seats"]]
+    dead = [sid for sid in seats if sid in set(dead_first)]
+    anchor = seats.index(dead[-1] if dead else seats[0])
+    witches = {
+        s["id"]
+        for s in game["seats"]
+        if (card := current(game, s)) is not None and card["witch"]
+    }
+
+    def walk(step):
+        visited = [seats[(anchor + step * k) % len(seats)] for k in range(len(seats))]
+        return dead + [sid for sid in visited if sid not in set(dead)]
+
+    def rank(order):
+        found = [order.index(sid) for sid in witches if sid in order]
+        return min(found) if found else len(order)
+
+    ascending, descending = walk(1), walk(-1)
+    return ascending if rank(ascending) <= rank(descending) else descending
+
+
 def brainwash_targets(game):
     active = game["brainwash"]
     if "annan" in active and "marg" in active:
@@ -427,9 +450,7 @@ def advance(game, events):
         dead_first = [
             d["seat_id"] for d in game["deaths"] if d["day"] == game["day"] and d["half"] == "night"
         ]
-        order = game["public"]["speech_order"] or list(
-            dict.fromkeys(dead_first + [s["id"] for s in game["seats"]])
-        )
+        order = game["public"]["speech_order"] or speech_plan(game, dead_first)
         game["public"]["speech_order"] = order
         game["public"]["speaker"] = next_speaker(game, None, events)
         for notice in game["queued_notices"]:

@@ -646,6 +646,42 @@ class SpeechOrder(unittest.TestCase):
         )
         self.assertEqual(default["fields"][0]["default"], "1")
 
+    def test_the_day_start_picks_the_side_where_the_witch_speaks_earlier(self):
+        cases = {
+            "4": ["3", "4", "5", "6", "7", "1", "2"],
+            "2": ["3", "2", "1", "7", "6", "5", "4"],
+        }
+        for witch_seat, expected in cases.items():
+            game = arranged_game("night_review", "night")
+            game["night"]["reactions"] = []
+            game["night"]["preview"] = damage_preview(
+                game,
+                [{"target_card": "meruru", "source_card": "emma", "cause": "knife"}],
+            )
+            game["seats"][2]["avatar_role_id"] = "meruru"
+            for card in game["cards"].values():
+                card["witch"] = False
+            seat = game["seats"][int(witch_seat) - 1]
+            game["cards"][seat["cards"][0]]["witch"] = True
+            command(game, HOST, "host.advance")
+            game["pending"] = []
+            command(game, HOST, "host.advance")
+            self.assertEqual(game["public"]["speech_order"], expected)
+            self.assertEqual(game["public"]["speaker"], expected[0])
+
+    def test_the_plan_falls_back_to_ascending_order(self):
+        game = arranged_game("night_review", "night")
+        game["night"]["reactions"] = []
+        game["night"]["preview"] = damage_preview(game, [])
+        for card in game["cards"].values():
+            card["witch"] = False
+        game["cards"][game["seats"][5]["cards"][0]]["witch"] = True
+        command(game, HOST, "host.advance")
+        game["pending"] = []
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["public"]["speech_order"], ["1", "7", "6", "5", "4", "3", "2"])
+        self.assertEqual(game["public"]["speaker"], "1")
+
     def test_a_seat_can_confirm_its_speech_before_its_turn(self):
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
