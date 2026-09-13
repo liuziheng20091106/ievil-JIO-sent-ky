@@ -221,6 +221,8 @@ def game_view(game, actor):
         if host or item["audience"] is None or access.intersection(item["audience"])
     ]
     public = deepcopy(game["public"])
+    # 制作过程只给主持人看：对外不带制作/破坏/未提交的人头与席位明细
+    public["balloon"].pop("last", None)
     phase = game["phase"]
     if phase == "speech":
         public["current_actor"] = {
@@ -301,11 +303,7 @@ def game_view(game, actor):
         view["self"]["balloon_choice"] = game["balloon_choices"].get(own_id)
         view["self"]["vote"] = game["votes"].get(own_id)
         view["self"]["warning_deadline"] = game["warnings"].get(own_id)
-        if (
-            game["status"] == "lobby"
-            and game["phase"] == "ordering"
-            and "honoka" in own["cards"]
-        ):
+        if game["status"] == "lobby" and game["phase"] == "ordering" and "honoka" in own["cards"]:
             # 穗乃香规则：开局前获知其他人的上层角色（仅文字角色名，不带头像）。
             view["self"]["honoka_upper"] = [
                 {

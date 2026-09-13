@@ -236,8 +236,7 @@ def settle_balloon(game, events):
     notify(
         game,
         events,
-        f"热气球结算：制作{makers}人、破坏{len(breakers)}人、未提交{len(skipped)}人；"
-        f"本次+{delta}，当前进度{balloon['progress']}/13。",
+        f"热气球制作结束：当前进度{balloon['progress']}/13。",
         alert=True,
     )
     if (
@@ -299,9 +298,7 @@ def speech_plan(game, dead_first):
     dead = [sid for sid in seats if sid in set(dead_first)]
     anchor = seats.index(dead[-1] if dead else seats[0])
     witches = {
-        s["id"]
-        for s in game["seats"]
-        if (card := current(game, s)) is not None and card["witch"]
+        s["id"] for s in game["seats"] if (card := current(game, s)) is not None and card["witch"]
     }
 
     def walk(step):

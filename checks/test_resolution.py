@@ -208,11 +208,15 @@ class ResolutionEdges(unittest.TestCase):
 
     def test_players_nominate_at_the_same_time_and_the_phase_waits_for_all(self):
         game = arranged_game("nomination")
-        self.assertIn("vote.nominate", [item["id"] for item in actions_for(game, player(game, "2"))])
+        self.assertIn(
+            "vote.nominate", [item["id"] for item in actions_for(game, player(game, "2"))]
+        )
         command(game, player(game, "2"), "vote.nominate", {"target": "3"})
         command(game, player(game, "4"), "vote.nominate", {"target": "3"})
         command(game, player(game, "1"), "vote.pass")
-        self.assertNotIn("vote.nominate", [item["id"] for item in actions_for(game, player(game, "4"))])
+        self.assertNotIn(
+            "vote.nominate", [item["id"] for item in actions_for(game, player(game, "4"))]
+        )
         with self.assertRaises(GameError):
             command(game, HOST, "host.advance")
         for sid in ("3", "5", "6", "7"):
@@ -234,7 +238,9 @@ class ResolutionEdges(unittest.TestCase):
         command(game, HOST, "host.advance")
         command(game, actor, "honoka.disguise", {"role": "emma"})
         self.assertEqual(game_view(game, actor)["seats"][6]["avatar_role_id"], "emma")
-        self.assertTrue(any("示人" in item["text"] for item in game_view(game, HOST)["information"]))
+        self.assertTrue(
+            any("示人" in item["text"] for item in game_view(game, HOST)["information"])
+        )
         for viewer in (player(game, "1"), player(game, "7")):
             self.assertFalse(
                 any("示人" in item["text"] for item in game_view(game, viewer)["information"])
@@ -311,7 +317,9 @@ class PlaytestFixes(unittest.TestCase):
             },
         )
         self.assertTrue(game["cards"]["hanna"]["states"]["evidence_allowed"])
-        self.assertIn("evidence.submit", [a["id"] for a in game_view(game, player(game, "3"))["actions"]])
+        self.assertIn(
+            "evidence.submit", [a["id"] for a in game_view(game, player(game, "3"))["actions"]]
+        )
 
     def test_challenge_settles_on_the_spot_instead_of_waiting_for_the_host(self):
         game = arranged_game("discussion")
@@ -333,9 +341,7 @@ class PlaytestFixes(unittest.TestCase):
         command(game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
         declaration = game["declarations"][0]
         self.assertFalse(declaration["fake"])
-        self.assertIn(
-            "day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))]
-        )
+        self.assertIn("day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))])
         challenged_cards = list(game["seats"][2]["cards"])
         command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
         # 质疑失败整席出局：两张牌一起作废，跳过亡语、回溯、证物与疑似凶手
@@ -347,14 +353,10 @@ class PlaytestFixes(unittest.TestCase):
         self.assertIsNone(game_view(game, player(game, "3"))["self"]["current_card_id"])
         self.assertIn("p3", game["spiritual"]["personal_losses"])
         self.assertEqual(game["declarations"][0]["status"], "open")
-        self.assertNotIn(
-            "day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))]
-        )
+        self.assertNotIn("day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))])
         with self.assertRaises(GameError):
             command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
-        self.assertIn(
-            "day.challenge", [a["id"] for a in actions_for(game, player(game, "4"))]
-        )
+        self.assertIn("day.challenge", [a["id"] for a in actions_for(game, player(game, "4"))])
 
     def test_must_notice_events_are_marked_as_alerts_only_when_needed(self):
         game = arranged_game("discussion")
@@ -368,10 +370,7 @@ class PlaytestFixes(unittest.TestCase):
             game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]}
         )
         self.assertTrue(
-            any(
-                event["kind"] == "alert" and "质疑失败" in event["text"]
-                for event in events
-            )
+            any(event["kind"] == "alert" and "质疑失败" in event["text"] for event in events)
         )
         events = command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         self.assertEqual(
@@ -444,9 +443,7 @@ class PlaytestFixes(unittest.TestCase):
         command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
         self.assertEqual(game["cards"]["honoka"]["states"]["disguise"], "emma")
         command(game, HOST, "host.start")
-        self.assertEqual(
-            game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "emma"
-        )
+        self.assertEqual(game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "emma")
         self.assertTrue(game["cards"]["honoka"]["states"]["disguise_locked"])
         with self.assertRaises(GameError):
             command(game, player(game, "7"), "honoka.disguise", {"role": "noah"})
@@ -459,9 +456,7 @@ class PlaytestFixes(unittest.TestCase):
             seat["ready"] = True
         command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
         command(game, HOST, "host.start")
-        self.assertEqual(
-            game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "nanoka"
-        )
+        self.assertEqual(game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "nanoka")
         self.assertNotIn("disguise", game["cards"]["honoka"]["states"])
         game["half"] = "day"
         death_batch(
@@ -471,15 +466,11 @@ class PlaytestFixes(unittest.TestCase):
                 game, [{"target_card": "nanoka", "cause": "host", "unconditional": True}]
             ),
         )
-        self.assertEqual(
-            game_view(game, player(game, "7"))["seats"][6]["avatar_role_id"], "honoka"
-        )
+        self.assertEqual(game_view(game, player(game, "7"))["seats"][6]["avatar_role_id"], "honoka")
         item = next(p for p in game["pending"] if p["kind"] == "lower_entry")
         command(game, HOST, "host.resolve", {"pending_id": item["id"], "allow": True})
         command(game, player(game, "7"), "honoka.disguise", {"role": "noah"})
-        self.assertEqual(
-            game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "noah"
-        )
+        self.assertEqual(game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "noah")
         with self.assertRaises(GameError):
             command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
 
@@ -510,9 +501,7 @@ class NightReveal(unittest.TestCase):
         )
         game["seats"][2]["avatar_role_id"] = "meruru"
         events = command(game, HOST, "host.advance")
-        self.assertNotIn(
-            "3号玩家一张角色牌出局。", [item["text"] for item in events]
-        )
+        self.assertNotIn("3号玩家一张角色牌出局。", [item["text"] for item in events])
         self.assertFalse(game["cards"]["meruru"]["alive"])
         self.assertEqual(game["queued_notices"], ["3号玩家一张角色牌出局。"])
         # 夜间结算时对外仍是出局前的位置，避免头像与出局标记提前泄露
@@ -556,7 +545,9 @@ class HostFreeAdjudication(unittest.TestCase):
         self.assertFalse(declaration["fake"])
         self.assertTrue(declaration["executed"])
         self.assertEqual(declaration["status"], "open")
-        self.assertIn("day.challenge", [item["id"] for item in actions_for(game, player(game, "3"))])
+        self.assertIn(
+            "day.challenge", [item["id"] for item in actions_for(game, player(game, "3"))]
+        )
 
     def test_disguised_day_skill_still_waits_for_the_host(self):
         game = arranged_game()
@@ -580,7 +571,9 @@ class HostFreeAdjudication(unittest.TestCase):
         command(game, HOST, "host.advance")
         self.assertEqual(game["phase"], "speech")
         self.assertEqual(game["declarations"][0]["status"], "complete")
-        self.assertNotIn("day.challenge", [item["id"] for item in actions_for(game, player(game, "1"))])
+        self.assertNotIn(
+            "day.challenge", [item["id"] for item in actions_for(game, player(game, "1"))]
+        )
 
     def test_hiro_decides_his_own_rewind(self):
         game = arranged_game()
@@ -594,7 +587,9 @@ class HostFreeAdjudication(unittest.TestCase):
         self.assertEqual(item["seat_id"], "2")
         actions = [entry["id"] for entry in actions_for(game, player(game, "2"))]
         self.assertEqual(actions[0], "hiro.decline")
-        self.assertNotIn("hiro.decline", [entry["id"] for entry in actions_for(game, player(game, "1"))])
+        self.assertNotIn(
+            "hiro.decline", [entry["id"] for entry in actions_for(game, player(game, "1"))]
+        )
         command(game, player(game, "2"), "hiro.decline")
         self.assertFalse(any(p["kind"] == "hiro" for p in game["pending"]))
         self.assertFalse(game["cards"]["hiro"]["alive"])
@@ -640,9 +635,7 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["public"]["speech_order"], ["4", "3", "2", "1", "7", "6", "5"])
         self.assertEqual(game["public"]["speaker"], "4")
         default = next(
-            item
-            for item in game_view(game, HOST)["actions"]
-            if item["id"] == "host.speech"
+            item for item in game_view(game, HOST)["actions"] if item["id"] == "host.speech"
         )
         self.assertEqual(default["fields"][0]["default"], "1")
 
@@ -686,9 +679,7 @@ class SpeechOrder(unittest.TestCase):
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         early = next(
-            item
-            for item in actions_for(game, player(game, "3"))
-            if item["id"] == "speech.done"
+            item for item in actions_for(game, player(game, "3")) if item["id"] == "speech.done"
         )
         self.assertEqual(early["label"], "本轮不发言（跳过我的顺序）")
         self.assertTrue(early["instant"])
@@ -704,9 +695,7 @@ class SpeechOrder(unittest.TestCase):
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         speak = next(
-            item
-            for item in actions_for(game, player(game, "4"))
-            if item["id"] == "speech.speak"
+            item for item in actions_for(game, player(game, "4")) if item["id"] == "speech.speak"
         )
         self.assertTrue(speak["instant"])
         self.assertEqual([(f["name"], f["type"]) for f in speak["fields"]], [("text", "textarea")])
@@ -779,9 +768,7 @@ class BalloonFlow(unittest.TestCase):
         self.assertTrue(declaration["executed"])
         self.assertEqual(declaration["status"], "open")
         options = next(
-            item
-            for item in actions_for(game, player(game, "2"))
-            if item["id"] == "balloon.choose"
+            item for item in actions_for(game, player(game, "2")) if item["id"] == "balloon.choose"
         )
         self.assertEqual(
             [item["value"] for item in options["fields"][0]["options"]], ["make", "skip"]
@@ -795,6 +782,30 @@ class BalloonFlow(unittest.TestCase):
             "complete",
         )
         self.assertEqual(game["pending"], [])
+
+    def test_players_only_see_the_result_not_the_making_details(self):
+        game = arranged_game()
+        game["seats"][4].update(cards=["arisa", "leia"])
+        game["seats"][2].update(cards=["annan", "hanna"])
+        command(
+            game,
+            player(game, "5"),
+            "day.skill",
+            {"ability": "balloon", "participants": ["3", "4"]},
+        )
+        command(game, player(game, "4"), "balloon.choose", {"choice": "make"})
+        events = command(game, player(game, "5"), "balloon.choose", {"choice": "make"})
+        self.assertEqual(game["public"]["balloon"]["last"]["breakers"], ["3"])
+        self.assertEqual(game["public"]["balloon"]["progress"], 0)
+        public = "".join(event["text"] for event in events if event["audience"] is None)
+        self.assertEqual(public, "热气球制作结束：当前进度0/13。")
+        detail = game_view(game, player(game, "4"))["public"]["balloon"]
+        self.assertIsNone(detail.get("last"))
+        self.assertEqual(detail["progress"], 0)
+        self.assertEqual(
+            game_view(game, HOST)["host"]["balloon_choices"],
+            {"3": "break", "4": "make", "5": "make"},
+        )
 
     def test_good_players_cannot_break_the_balloon(self):
         game = arranged_game()
@@ -937,7 +948,9 @@ class NominationFlow(unittest.TestCase):
         self.assertTrue(nomination["instant"])
         self.assertFalse(nomination.get("blocking"))
         night = arranged_game("night", "night")
-        self.assertNotIn("vote.nominate", [item["id"] for item in actions_for(night, player(night, "1"))])
+        self.assertNotIn(
+            "vote.nominate", [item["id"] for item in actions_for(night, player(night, "1"))]
+        )
 
     def test_nominating_early_does_not_clear_the_phases_warning(self):
         game = arranged_game("speech")
