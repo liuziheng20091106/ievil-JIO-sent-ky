@@ -41,7 +41,6 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     state?.id ?? null,
     session.actor?.id ?? null,
     "chat",
-    activeId,
   );
   const [draft, setDraft, clearDraft, draftError] = useDraft(scope, "");
   const rows = messages;
@@ -306,12 +305,12 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
         )}
         <div className="compose-controls">
           <textarea
-            aria-label={`草稿：发送至${channel?.label ?? "公共讨论"}`}
+            aria-label="消息草稿"
             placeholder={
               ended
                 ? "本局已结束，记录只读"
                 : channel?.can_send
-                  ? "说点什么…（草稿按频道分别保存）"
+                  ? "说点什么…（草稿整局保留，换频道也不丢）"
                   : "当前不可发言，仍可先写草稿"
             }
             maxLength={2000}
@@ -348,7 +347,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             : !channel?.can_send
               ? channel?.reason ||
                 state?.chat_reason ||
-                "当前没有可以发言的频道；草稿会按频道保留。"
+                "当前没有可以发言的频道；草稿会保留到本局结束。"
               : connection !== "online"
                 ? "实时连接正在恢复；发送前请留意最新阶段。"
                 : "文字可以复制、粘贴与转述；不提供来源引用认证。"}
