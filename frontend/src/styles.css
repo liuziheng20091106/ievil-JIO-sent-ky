@@ -947,21 +947,17 @@ button.avatar:hover {
   margin: 0;
   font-weight: 500;
 }
-.channel-picker {
-  max-width: 46%;
+.send-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
-.channel-picker select {
+.send-target select {
   font-size: 12px;
-  min-height: 36px;
-  padding: 7px 25px 7px 10px;
-}
-.private-channel {
-  background: #322934;
-  border-bottom-color: #755e3e;
-}
-.private-channel .eyebrow {
-  color: #e0bc78;
+  min-height: 30px;
+  max-width: 60vw;
+  padding: 4px 24px 4px 9px;
 }
 .chat-scroll {
   flex: 1;
@@ -1853,6 +1849,43 @@ button.avatar:hover {
 .pending-item .primary {
   margin-top: 8px;
 }
+.alert-stack {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: min(330px, calc(100vw - 28px));
+}
+.alert-card {
+  border: 1px solid #7b6140;
+  border-radius: 13px;
+  background: #2a2233;
+  padding: 10px 12px;
+  box-shadow: 0 20px 55px #000000a6;
+  animation: urgent-in 200ms ease-out;
+}
+.alert-card .alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.alert-card .alert-head .eyebrow {
+  margin: 0;
+  color: #e0bc78;
+}
+.alert-card p {
+  margin: 6px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.alert-card .quiet {
+  font-size: 12px;
+  padding: 3px 7px;
+}
 .pending-item h3 {
   font-size: 14px;
 }
@@ -2003,12 +2036,6 @@ button.tiny {
   }
   .chat-header .eyebrow {
     font-size: 8px;
-  }
-  .channel-picker {
-    max-width: 42%;
-  }
-  .channel-picker select {
-    font-size: 11px;
   }
   .chat-scroll {
     padding: 15px;
@@ -2319,14 +2346,6 @@ button.tiny {
   .chat-header .eyebrow {
     font-size: 8px;
     letter-spacing: 0.04em;
-  }
-  .channel-picker {
-    max-width: 44%;
-  }
-  .channel-picker select {
-    font-size: 16px;
-    min-height: 44px;
-    padding: 8px 22px 8px 8px;
   }
   .chat-scroll {
     padding: 18px 15px;
@@ -2700,6 +2719,16 @@ button.tiny {
   html:has(.chat-compose textarea:focus) .bottom-nav {
     display: none;
   }
+  .alert-stack {
+    top: auto;
+    bottom: calc(60px + env(safe-area-inset-bottom));
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+  html:has(.chat-compose textarea:focus) .alert-stack {
+    display: none;
+  }
   .urgent-banner {
     font-size: 13px;
     padding: 9px 12px;
@@ -2763,12 +2792,6 @@ button.tiny {
   }
   .chat-header h2 {
     font-size: 15px;
-  }
-  .channel-picker {
-    max-width: 43%;
-  }
-  .channel-picker select {
-    font-size: 16px;
   }
   .chat-scroll {
     padding: 16px 12px;

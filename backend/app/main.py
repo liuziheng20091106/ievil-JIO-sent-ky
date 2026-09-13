@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
@@ -89,13 +90,20 @@ async def frontend(path: str):
     dist = storage.PROJECT_ROOT / "frontend" / "dist"
     candidate = (dist / path).resolve()
     if candidate.is_relative_to(dist.resolve()) and candidate.is_file():
-        return FileResponse(candidate)
+        return frontend_file(candidate, hashed=path.startswith("assets/"))
     index = dist / "index.html"
     if path.startswith("assets/") or "." in path.rsplit("/", 1)[-1]:
         return JSONResponse({"detail": "文件不存在"}, status_code=404)
     if index.is_file():
-        return FileResponse(index)
+        return frontend_file(index, hashed=False)
     return JSONResponse(
         {"detail": "前端尚未构建，请先在frontend目录运行npm run build，开发时使用Vite页面"},
         status_code=503,
     )
+
+
+def frontend_file(file: Path, *, hashed: bool):
+    # 带内容哈希的资源可以长期缓存；index.html 必须每次回源校验，
+    # 否则重新构建后浏览器仍会拿旧界面（旧哈希指向已删除的资源）。
+    cache = "public, max-age=31536000, immutable" if hashed else "no-cache"
+    return FileResponse(file, headers={"Cache-Control": cache})

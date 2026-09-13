@@ -492,5 +492,22 @@ class HostWorkbench(unittest.TestCase):
         self.assertEqual(actor["seat_id"], "1")
 
 
+class FrontendDelivery(unittest.TestCase):
+    def test_index_html_revalidates_while_hashed_assets_stay_cached(self):
+        dist = storage.PROJECT_ROOT / "frontend" / "dist"
+        index = dist / "index.html"
+        if not index.is_file():
+            self.skipTest("前端尚未构建，先运行 npm run build")
+        with TestClient(app) as client:
+            root = client.get("/")
+            self.assertEqual(root.status_code, 200, root.text)
+            self.assertEqual(root.headers.get("cache-control"), "no-cache")
+            asset = next((dist / "assets").glob("index-*.js"), None)
+            self.assertIsNotNone(asset, "构建产物里应有带哈希的 JS")
+            served = client.get(f"/assets/{asset.name}")
+            self.assertEqual(served.status_code, 200, served.text)
+            self.assertIn("immutable", served.headers.get("cache-control", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

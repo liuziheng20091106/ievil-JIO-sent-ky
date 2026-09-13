@@ -16,6 +16,7 @@ import type {
   GameView,
   HostTask,
   Invite,
+  Message,
   Seat,
   SeatView,
   Session,
@@ -534,7 +535,8 @@ function Room({
   onRole: (id: string) => void;
   onNewGame: () => void;
 }) {
-  const { state, session, connection, command, setError, busy } = useGame();
+  const { state, session, connection, command, setError, busy, messages } =
+    useGame();
   const [tab, setTab] = useState<Tab>("chat");
   const [center, setCenter] = useState<"chat" | "table">("chat");
   const [side, setSide] = useState<"cards" | "actions">("actions");
@@ -542,7 +544,30 @@ function Room({
   const [request, setRequest] = useState<PanelRequest | null>(null);
   const [inspecting, setInspecting] = useState<string | null>(null);
   const [flash, setFlash] = useState("");
+  const [alerts, setAlerts] = useState<Message[]>([]);
   const [opening, setOpening] = useState(false);
+  const seenMessage = useRef<number | null>(null);
+  useEffect(() => {
+    if (!messages.length) return;
+    const latest = messages[messages.length - 1].id;
+    const previous = seenMessage.current;
+    seenMessage.current = latest;
+    if (previous === null) return; // 首次载入只记录游标，不跳转也不弹窗
+    const fresh = messages.filter(
+      (item) =>
+        item.id > previous &&
+        item.kind !== "presence" &&
+        item.sender_id !== session.actor?.id,
+    );
+    if (!fresh.length) return;
+    setCenter("chat");
+    setTab("chat");
+    const privateInfo = fresh.filter((item) => item.kind === "information");
+    if (privateInfo.length)
+      setAlerts((previousAlerts) =>
+        [...previousAlerts, ...privateInfo].slice(-3),
+      );
+  }, [messages, session.actor?.id]);
   const phaseKey = state ? `${state.day}:${state.half}:${state.phase}` : "";
   const flashText = state ? `第 ${state.day} 日 · ${state.phase_label}` : "";
   const lastPhase = useRef("");
@@ -722,6 +747,42 @@ function Room({
         <div className="phase-flash" role="status">
           <span className="eyebrow">阶段已推进</span>
           <strong>{flash}</strong>
+        </div>
+      )}
+      {alerts.length > 0 && (
+        <div className="alert-stack" role="status" aria-live="polite">
+          {alerts.map((item) => (
+            <article className="alert-card" key={item.id}>
+              <div className="alert-head">
+                <span className="eyebrow">系统与私密信息</span>
+                <button
+                  className="quiet"
+                  aria-label="关闭这条提醒"
+                  onClick={() =>
+                    setAlerts((previous) =>
+                      previous.filter((alert) => alert.id !== item.id),
+                    )
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+              <p>{item.text}</p>
+              {item.image_id && <Evidence id={item.image_id} />}
+              <button
+                className="quiet"
+                onClick={() => {
+                  setCenter("chat");
+                  setTab("chat");
+                  setAlerts((previous) =>
+                    previous.filter((alert) => alert.id !== item.id),
+                  );
+                }}
+              >
+                前往对话记录
+              </button>
+            </article>
+          ))}
         </div>
       )}
       <aside className="seat-column panel">

@@ -14,7 +14,7 @@ import type { Message, MessagePage } from "./types";
 export function Chat({ onRole }: { onRole: (id: string) => void }) {
   const { state, session, messages, mergeMessages, connection, catalog } =
     useGame();
-  const [channelId, setChannelId] = useState("public");
+  const [target, setTarget] = useState("public");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -32,8 +32,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       reason: state?.chat_reason,
     },
   ];
-  const channel = channels.find((item) => item.id === channelId) ?? channels[0];
+  const sendable = channels.filter((item) => item.can_send);
+  const channel = sendable.find((item) => item.id === target) ?? sendable[0];
   const activeId = channel?.id ?? "public";
+  const feed = useRef<string | null>(null);
+  feed.current = state?.id ?? null;
   const scope = draftKey(
     state?.id ?? null,
     session.actor?.id ?? null,
@@ -41,13 +44,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     activeId,
   );
   const [draft, setDraft, clearDraft, draftError] = useDraft(scope, "");
-  const currentChannel = useRef(scope);
-  currentChannel.current = scope;
-  const rows = messages.filter((message) =>
-    activeId === "system"
-      ? message.channel_id === "information"
-      : message.channel_id === activeId,
-  );
+  const rows = messages;
   const lastId = rows.at(-1)?.id ?? 0;
   const scrollBottom = () => {
     const node = scroller.current;
@@ -72,7 +69,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     setUnread(0);
     previousLast.current = 0;
     api<MessagePage>(
-      `/games/${state.id}/messages?channel_id=${encodeURIComponent(activeId)}`,
+      `/games/${state.id}/messages`,
       undefined,
       controller.signal,
     )
@@ -92,7 +89,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
         }
       });
     return () => controller.abort();
-  }, [state?.id, activeId, mergeMessages]);
+  }, [state?.id, mergeMessages]);
   useLayoutEffect(() => {
     const node = scroller.current;
     if (!node) return;
@@ -117,9 +114,9 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     setError("");
     try {
       const page = await api<MessagePage>(
-        `/games/${state.id}/messages?channel_id=${encodeURIComponent(activeId)}&before=${rows[0].id}`,
+        `/games/${state.id}/messages?before=${rows[0].id}`,
       );
-      if (currentChannel.current !== scope) return;
+      if (feed.current !== state.id) return;
       if (scroller.current)
         restoreScroll.current = {
           height: scroller.current.scrollHeight,
@@ -128,21 +125,22 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       mergeMessages(page.messages);
       setHasMore(page.has_more);
     } catch (failure) {
-      if (currentChannel.current === scope) setError(errorText(failure));
+      if (feed.current === state.id) setError(errorText(failure));
     } finally {
-      if (currentChannel.current === scope) setLoading(false);
+      if (feed.current === state.id) setLoading(false);
     }
   };
   const send = async (event: FormEvent) => {
     event.preventDefault();
-    if (
-      !state ||
-      sending ||
-      !draft.trim() ||
-      !channel?.can_send ||
-      state.status === "ended"
-    )
+    if (!state || sending || !draft.trim()) return;
+    if (!channel?.can_send) {
+      setError(
+        channel?.reason ||
+          state.chat_reason ||
+          "当前没有可以发言的频道；草稿已保留。",
+      );
       return;
+    }
     const recipient = activeId;
     const submitted = draft;
     setSending(true);
@@ -154,12 +152,12 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       });
       mergeMessages([message]);
       clearDraft();
-      if (scope === currentChannel.current) {
+      if (feed.current === state.id) {
         nearBottom.current = true;
         requestAnimationFrame(scrollBottom);
       }
     } catch (failure) {
-      if (scope === currentChannel.current)
+      if (feed.current === state.id)
         setError(
           `${errorText(failure)} 草稿已保留；如响应丢失，请先检查记录是否已有此消息，再决定是否重发。`,
         );
@@ -167,39 +165,14 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       setSending(false);
     }
   };
-  const systemChannel = activeId === "system";
-  const privateChannel = activeId !== "public" && !systemChannel;
+  const ended = state?.status === "ended";
   return (
     <section className="chat-panel" aria-label="聊天记录与输入">
-      <div className={`chat-header ${privateChannel ? "private-channel" : ""}`}>
+      <div className="chat-header">
         <div>
-          <span className="eyebrow">
-            {systemChannel
-              ? "发给你的通知与裁定 · 只读"
-              : privateChannel
-                ? "仅授权成员可见 · 私密频道"
-                : "全体成员可见 · 公开频道"}
-          </span>
-          <h2>{channel?.label ?? "公共讨论"}</h2>
+          <span className="eyebrow">公开与私密已合并 · 只显示你有权看到的</span>
+          <h2>全部消息</h2>
         </div>
-        <label className="channel-picker">
-          <span className="sr-only">切换聊天频道</span>
-          <select
-            value={activeId}
-            onChange={(event) => setChannelId(event.target.value)}
-          >
-            {channels.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.id === "public"
-                  ? "公开"
-                  : item.id === "system"
-                    ? "系统"
-                    : "私密"}{" "}
-                · {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
       <div
         className="chat-scroll"
@@ -229,11 +202,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             <span className="seal">言</span>
             <h3>{loading ? "正在读取对话" : "故事从第一句话开始"}</h3>
             <p>
-              {systemChannel
-                ? "这里集中显示发给你一个人的通知、裁定与私密信息；其他玩家看不到。"
-                : privateChannel
-                  ? "这个频道的内容仅发送给获准成员。主持人可查看所有频道。"
-                  : "只使用公开身份发言。你的另一张牌，仍属于你自己的秘密。"}
+              这里按时间顺序合并显示你有权看到的全部消息：公开讨论、私聊，以及只发给你的系统裁定与私密信息。
             </p>
           </div>
         )}
@@ -277,8 +246,14 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
                   </time>
                 </div>
                 <div className="bubble">
-                  {message.kind === "information" && (
-                    <span className="message-type">信息</span>
+                  {message.channel_id !== "public" && (
+                    <span className="message-type">
+                      {message.kind === "information"
+                        ? "系统信息"
+                        : (channels.find(
+                            (item) => item.id === message.channel_id,
+                          )?.label ?? "私密频道")}
+                    </span>
                   )}
                   <p>{message.text}</p>
                   {message.image_id && <Evidence id={message.image_id} />}
@@ -295,12 +270,20 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       )}
       <form className="chat-compose" onSubmit={(event) => void send(event)}>
         <div className="compose-caption">
-          <span>
-            {systemChannel
-              ? "系统信息只读，不能在此发言"
-              : privateChannel
-                ? `私密发送至：${channel?.label}`
-                : "发送至：公共讨论"}
+          <span className="send-target">
+            发送至
+            <select
+              aria-label="选择发送频道"
+              value={activeId}
+              onChange={(event) => setTarget(event.target.value)}
+            >
+              {sendable.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.id === "public" ? "公共讨论" : item.label}
+                </option>
+              ))}
+              {!sendable.length && <option value="public">暂无可用频道</option>}
+            </select>
           </span>
           <span>{draft.length}/2000</span>
         </div>
@@ -316,16 +299,17 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
         )}
         <div className="compose-controls">
           <textarea
-            aria-label={`发消息到${channel?.label}`}
+            aria-label={`草稿：发送至${channel?.label ?? "公共讨论"}`}
             placeholder={
-              channel?.can_send && state?.status !== "ended"
-                ? "说点什么…"
-                : "当前不可发言"
+              ended
+                ? "本局已结束，记录只读"
+                : channel?.can_send
+                  ? "说点什么…（草稿按频道分别保存）"
+                  : "当前不可发言，仍可先写草稿"
             }
             maxLength={2000}
             rows={2}
             value={draft}
-            disabled={!channel?.can_send || state?.status === "ended"}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (
@@ -341,23 +325,23 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
           />
           <button
             className="primary"
-            disabled={
-              sending ||
-              !draft.trim() ||
-              !channel?.can_send ||
-              state?.status === "ended"
+            title={
+              channel?.can_send
+                ? "发送到所选频道"
+                : channel?.reason || state?.chat_reason || "当前不能发言"
             }
+            disabled={sending || !draft.trim() || !channel?.can_send || ended}
           >
             {sending ? "发送中…" : "发送"}
           </button>
         </div>
         <p className="hint">
-          {state?.status === "ended"
+          {ended
             ? "本局已结束，记录只读。"
             : !channel?.can_send
               ? channel?.reason ||
                 state?.chat_reason ||
-                "当前频道不允许发言，请等待主持人安排。"
+                "当前没有可以发言的频道；草稿会按频道保留。"
               : connection !== "online"
                 ? "实时连接正在恢复；发送前请留意最新阶段。"
                 : "文字可以复制、粘贴与转述；不提供来源引用认证。"}
