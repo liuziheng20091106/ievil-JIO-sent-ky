@@ -316,6 +316,7 @@ class PlaytestFixes(unittest.TestCase):
     def test_challenge_settles_on_the_spot_instead_of_waiting_for_the_host(self):
         game = arranged_game("discussion")
         game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        game["cards"]["honoka"]["states"]["disguise"] = "emma"
         honoka = player(game, "7")
         command(game, honoka, "day.skill", {"ability": "interrupt", "target": "1"})
         declaration = game["declarations"][0]
@@ -370,6 +371,22 @@ class PlaytestFixes(unittest.TestCase):
             [event["kind"] for event in events if "发言顺序" in event["text"]],
             ["notice"],
         )
+
+    def test_honoka_only_fakes_the_role_she_shows(self):
+        game = arranged_game("discussion")
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        honoka = player(game, "7")
+        self.assertNotIn("day.skill", [item["id"] for item in actions_for(game, honoka)])
+        game["cards"]["honoka"]["states"]["disguise"] = "emma"
+        self.assertEqual(
+            [item["label"] for item in actions_for(game, honoka) if item["id"] == "day.skill"],
+            ["声称打断发言", "声称改为最后发言"],
+        )
+        with self.assertRaises(GameError):
+            command(game, honoka, "day.skill", {"ability": "gaze", "target": "1"})
+        command(game, honoka, "day.skill", {"ability": "interrupt", "target": "1"})
+        self.assertTrue(game["declarations"][0]["fake"])
+        self.assertEqual(game["declarations"][0]["status"], "open")
 
     def test_honoka_lobby_disguise_applies_only_from_the_top_card(self):
         game = arranged_game()
@@ -499,6 +516,7 @@ class HostFreeAdjudication(unittest.TestCase):
     def test_disguised_day_skill_still_waits_for_the_host(self):
         game = arranged_game()
         game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        game["cards"]["honoka"]["states"]["disguise"] = "marg"
         command(game, player(game, "7"), "day.skill", {"ability": "love", "target": "3"})
         item = next(p for p in game["pending"] if p["kind"] == "declaration")
         declaration = game["declarations"][0]

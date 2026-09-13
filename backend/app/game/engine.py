@@ -1092,7 +1092,10 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         unlock_coco(game, events)
     elif action == "day.skill":
         ability = data["ability"]
-        fake = card["id"] == "honoka" and DAY_ABILITIES[ability][0] != "honoka"
+        # 穗乃香只能假装自己示人身份的技能
+        fake = card["id"] == "honoka" and DAY_ABILITIES[ability][0] == card["states"].get(
+            "disguise"
+        )
         require(fake or can_day_ability(game, card, ability), "此时不能声明该技能")
         d = {
             "id": uid(),

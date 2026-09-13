@@ -764,7 +764,9 @@ def actions_for(game, actor):
             "nomination",
             "voting",
         }:
-            for ability in DAY_ABILITIES:
+            for ability, (owner, _) in DAY_ABILITIES.items():
+                if owner != game["cards"]["honoka"]["states"].get("disguise"):
+                    continue
                 if not any(
                     d["seat_id"] == sid and d["ability"] == ability and d["status"] == "open"
                     for d in game["declarations"]
