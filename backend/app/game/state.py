@@ -211,6 +211,7 @@ def create_game(codex):
         "balloon_choices": {},
         "balloon_votes": {},
         "nominations": [],
+        "speech_passed": [],
         "votes": {},
         "vote_rounds": [],
         "brainwash": {},

@@ -236,10 +236,17 @@ def speech_done(game):
     if public.get("interrupted_speaker"):
         public["speaker"] = public.pop("interrupted_speaker")
         return
-    order = public["speech_order"]
-    now = public["speaker"]
-    index = order.index(now) + 1 if now in order else 0
-    public["speaker"] = order[index] if index < len(order) else None
+    public["speaker"] = next_speaker(game, public["speaker"])
+
+
+def next_speaker(game, current_speaker):
+    """下一位发言人；已经提前确认发言完毕的席位直接跳过。"""
+    order = game["public"]["speech_order"]
+    passed = set(game.get("speech_passed", []))
+    index = order.index(current_speaker) + 1 if current_speaker in order else 0
+    while index < len(order) and order[index] in passed:
+        index += 1
+    return order[index] if index < len(order) else None
 
 
 def brainwash_targets(game):
@@ -380,7 +387,7 @@ def advance(game, events):
             dict.fromkeys(dead_first + [s["id"] for s in game["seats"]])
         )
         game["public"]["speech_order"] = order
-        game["public"]["speaker"] = order[0] if order else None
+        game["public"]["speaker"] = next_speaker(game, None)
         game["brainwash"] = {}
         game["nominations"] = []
         game["nomination_done"] = []
@@ -452,6 +459,7 @@ def advance(game, events):
         game["phase"] = "witch"
         game["public"]["speaker"] = None
         game["public"]["speech_order"] = []
+        game["speech_passed"] = []
     else:
         raise GameError("当前阶段不能推进")
     game["warnings"] = {}
@@ -1145,7 +1153,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         else:
             apply_damage(game, events, damage_preview(game, [attack]))
     elif action == "speech.done":
-        speech_done(game)
+        if sid == game["public"]["speaker"]:
+            speech_done(game)
+        else:
+            require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
+            require(sid not in game.get("speech_passed", []), "你已经确认过发言完毕")
+            game.setdefault("speech_passed", []).append(sid)
+            notify(
+                game,
+                events,
+                f"{sid}号已提前确认发言完毕，轮到其顺序时自动跳过。",
+            )
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})

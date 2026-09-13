@@ -12,7 +12,7 @@ from backend.app.game import (
     game_view,
     run_auto_advance,
 )
-from backend.app.game.actions import actions_for
+from backend.app.game.actions import actions_for, outstanding_seats
 from backend.app.game.resolution import begin_night, damage_preview, death_batch, revive
 from backend.app.game.state import check_winner, pending, pending_nominators, rewind, save_snapshot
 
@@ -415,6 +415,48 @@ class SpeechOrder(unittest.TestCase):
             if item["id"] == "host.speech"
         )
         self.assertEqual(default["fields"][0]["default"], "1")
+
+    def test_a_seat_can_confirm_its_speech_before_its_turn(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        early = next(
+            item
+            for item in actions_for(game, player(game, "3"))
+            if item["id"] == "speech.done"
+        )
+        self.assertTrue(early["instant"])
+        self.assertFalse(early.get("blocking"))
+        command(game, player(game, "3"), "speech.done", {})
+        self.assertIn("3", game["speech_passed"])
+        command(game, player(game, "1"), "speech.done", {})
+        self.assertEqual(game["public"]["speaker"], "2")
+        command(game, player(game, "2"), "speech.done", {})
+        self.assertEqual(game["public"]["speaker"], "4")
+
+    def test_a_fully_pre_submitted_speech_phase_counts_as_finished(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        for sid in ("2", "3", "4", "5", "6", "7", "1"):
+            command(game, player(game, sid), "speech.done", {})
+        self.assertIsNone(game["public"]["speaker"])
+        self.assertEqual(outstanding_seats(game), [])
+        self.assertIn("auto_advance_at", game["public"])
+
+    def test_speech_confirmation_is_only_offered_while_speaking(self):
+        game = arranged_game("discussion")
+        self.assertNotIn(
+            "speech.done", [item["id"] for item in actions_for(game, player(game, "1"))]
+        )
+
+    def test_pre_submitted_speeches_reset_at_the_day_boundary(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        command(game, player(game, "3"), "speech.done", {})
+        game["phase"] = "dusk"
+        game["public"]["speaker"] = None
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "witch")
+        self.assertEqual(game["speech_passed"], [])
 
 
 class AutoAdvance(unittest.TestCase):

@@ -812,6 +812,19 @@ def actions_for(game, actor):
                 )
     if phase == "speech" and game["public"]["speaker"] == sid:
         result.append(action("speech.done", "结束本次发言", group="流程", blocking=True))
+    elif (
+        phase == "speech"
+        and sid in game["public"]["speech_order"]
+        and sid not in game.get("speech_passed", [])
+    ):
+        result.append(
+            action(
+                "speech.done",
+                "已发言，跳过我的顺序",
+                group="流程",
+                instant=True,
+            )
+        )
     if phase == "nomination" and card and sid not in game.get("nomination_done", []):
         result.append(
             action("vote.nominate", "提名候选", [target_field(game)], group="投票", blocking=True)

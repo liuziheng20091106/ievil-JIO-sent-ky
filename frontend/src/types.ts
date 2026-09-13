@@ -189,6 +189,7 @@ export interface GameView {
     declarations?: HostDeclaration[];
     nominations?: HostNomination[];
     nomination_done?: string[];
+    speech_passed?: string[];
     vote_rounds?: {
       candidate: string;
       yes: number;

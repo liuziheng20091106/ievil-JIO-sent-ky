@@ -320,6 +320,7 @@ def game_view(game, actor):
             "declarations": deepcopy(game["declarations"]),
             "nominations": deepcopy(game["nominations"]),
             "nomination_done": list(game.get("nomination_done", [])),
+            "speech_passed": list(game.get("speech_passed", [])),
             "vote_rounds": deepcopy(game["vote_rounds"]),
             "photos": deepcopy(game["photos"]),
             "gaze": deepcopy(game.get("gaze")),
