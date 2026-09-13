@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流程领航 · 主持人交互原型 A</title>
+<style>
+:root{color-scheme:light;--paper:#f4f2e9;--card:#fffef9;--ink:#203d33;--muted:#68756b;--line:#d8ded1;--green:#254c3e;--soft:#e7eddf;--amber:#935719;--amber-bg:#f7ead3}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.65 "Microsoft YaHei","PingFang SC",sans-serif}button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}button,a{touch-action:manipulation}button:focus-visible,a:focus-visible{outline:3px solid #bd792e;outline-offset:4px}button{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:7px;padding:10px 16px}button:not(:disabled):hover{background:var(--soft)}a{color:inherit;text-underline-offset:4px}.prototype{background:var(--ink);color:#f8f7ee;padding:9px 28px;display:flex;justify-content:space-between;gap:12px;font-size:12px;letter-spacing:.07em}.prototype span:last-child{color:#c0cdbd}.masthead{max-width:1540px;margin:auto;min-height:108px;display:flex;align-items:center;justify-content:space-between;padding:24px 38px;gap:20px}.brand{display:flex;align-items:center;gap:16px}.monogram{width:48px;height:48px;border:1px solid var(--ink);display:grid;place-items:center;font:30px Georgia,serif;border-radius:50%}.brand h1{font:600 24px/1.3 "Songti SC","SimSun",serif;margin:0 0 5px;letter-spacing:.08em}.brand p{margin:0;color:var(--muted);font-size:11px;letter-spacing:.12em}.versions{display:flex;gap:6px;flex-wrap:wrap}.versions a{padding:8px 12px;text-decoration:none;color:var(--muted);border-radius:5px}.versions a[aria-current]{background:var(--soft);color:var(--green);font-weight:700}.workspace{max-width:1540px;margin:auto;padding:0 38px 40px;display:grid;grid-template-columns:190px minmax(0,1fr) 286px;gap:28px}.eyebrow{text-transform:uppercase;color:var(--muted);font-size:10px;letter-spacing:.17em;font-weight:700}.rail{padding-top:24px;border-top:1px solid var(--ink)}.rail h2{font-size:15px;margin:7px 0 30px}.steps{list-style:none;margin:0;padding:0}.steps li{display:flex;gap:13px;padding:0 0 28px;position:relative}.steps li:not(:last-child):before{content:"";position:absolute;left:13px;top:30px;bottom:3px;border-left:1px solid var(--line)}.step-no{width:27px;height:27px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;font-size:11px;flex:none;background:var(--paper)}.steps strong{font-size:13px;font-weight:500;display:block}.steps small{font-size:11px;color:var(--muted)}.steps [aria-current="step"] .step-no{background:var(--green);color:white;border-color:var(--green)}.steps [aria-current="step"] strong{font-weight:700}.steps .complete .step-no{background:var(--soft);border-color:var(--soft)}.rail-note{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:12px;margin-top:20px}.rail-note strong{display:block;color:var(--ink);margin-bottom:6px}.rail button{width:100%;margin-top:20px;font-size:12px}.main{min-width:0}.session{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:21px 0 18px;border-top:1px solid var(--ink)}.session strong{font-size:13px;font-weight:500}.pill{font-size:10px;letter-spacing:.07em;border:1px solid #b8c7b0;border-radius:30px;padding:3px 9px;white-space:nowrap}.focus-card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}.task-top{padding:30px 30px 22px;position:relative}.kicker{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.08em;color:var(--muted)}.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green)}.task-top h2{font:500 clamp(27px,2.8vw,40px)/1.3 "Songti SC","SimSun",serif;letter-spacing:.02em;margin:17px 0 12px}.description{color:var(--muted);max-width:480px;margin:0;min-height:46px}.progress-section{padding:0 30px 26px}.count-row{display:flex;justify-content:space-between;align-items:end;gap:12px}.count{font:52px/1.1 Georgia,serif;letter-spacing:-.06em}.count span{color:#929e8d;font-size:25px;letter-spacing:0}.count-label{font-size:12px;color:var(--muted);text-align:right}.segments{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin:17px 0 12px}.segments i{height:5px;background:#e3e7dc;border-radius:3px}.segments i.done{background:var(--green)}.waiting-line{font-size:12px;display:flex;align-items:start;gap:8px;color:var(--amber)}.waiting-line:before{content:"";width:6px;height:6px;background:currentColor;border-radius:50%;flex:none;margin-top:7px}.automation{background:#f0f3e9;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:18px 30px;display:flex;align-items:center;justify-content:space-between;gap:14px}.automation strong{font-size:12px;display:block}.automation p{font-size:11px;color:var(--muted);margin:4px 0 0}.automation button{white-space:nowrap;font-size:12px;padding:7px 12px;background:var(--card)}.action-area{padding:23px 30px 26px}.primary{background:var(--green);border-color:var(--green);color:#fff;width:100%;min-height:47px;font-weight:600}.primary:not(:disabled):hover{background:#183c2f}.button-detail{display:flex;justify-content:space-between;gap:12px;font-size:10px;color:var(--muted);margin-top:9px}.review-summary{margin:0 30px 26px;background:var(--soft);border-left:3px solid var(--green);padding:16px 18px}.review-summary h3{font-size:13px;margin:0 0 7px}.review-summary p{font-size:12px;margin:0;color:var(--muted)}[hidden]{display:none!important}.simulation{margin-top:18px;padding:18px 20px;border:1px dashed #b8c4af;border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:16px}.simulation h3{font-size:12px;margin:0 0 4px}.simulation p{font-size:11px;color:var(--muted);margin:0}.simulation button{background:var(--card);font-size:11px;flex:none;padding:9px 12px}.notes{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:29px}.notes h3{font-size:12px;font-weight:600;margin:0 0 7px}.notes p{margin:0;color:var(--muted);font-size:11px}.seats-panel{border-top:1px solid var(--ink);padding-top:22px}.seats-header{display:flex;justify-content:space-between;align-items:center;margin:5px 0 7px}.seats-header h2{font-size:15px;margin:0}.seats-header span{font:italic 20px Georgia,serif;color:var(--muted)}.seat-hint{font-size:11px;color:var(--muted);margin:0 0 20px}.seat-list{display:grid;gap:7px}.seat{width:100%;text-align:left;display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:10px;padding:12px 10px;background:rgba(255,254,249,.7);border:1px solid var(--line);border-radius:7px}.seat-index{font:17px Georgia,serif;color:#758470;text-align:center}.seat-name{font-size:12px;font-weight:600;display:block}.seat-detail{font-size:10px;color:var(--muted);display:block}.seat-status{font-size:10px;color:var(--muted)}.seat.pending{border-color:#d7be93;background:#faf3e7}.seat.pending .seat-status{color:var(--amber)}.warning{margin-top:18px;padding:15px;border:1px solid #d7be93;border-radius:7px;background:var(--amber-bg)}.warning-top{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--amber)}.timer{font:22px Georgia,serif}.warning p{font-size:11px;color:#806240;margin:7px 0 0}.footer{max-width:1540px;margin:auto;padding:20px 38px 28px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:18px;color:var(--muted);font-size:10px}dialog{width:min(520px,calc(100% - 32px));max-height:90dvh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:28px;background:var(--card);color:var(--ink);box-shadow:0 25px 90px #102a3233}dialog::backdrop{background:#14291fd1}dialog h2{font:500 26px/1.4 "Songti SC","SimSun",serif;margin:10px 0 12px}dialog p{font-size:13px;color:var(--muted)}.dialog-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}.dialog-actions .primary{width:auto}.dual-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}.role-card{border:1px solid var(--line);border-radius:8px;background:var(--paper);padding:12px;text-align:center}.role-card img{display:block;width:100%;height:150px;object-fit:contain}.role-card small{font-size:10px;color:var(--muted)}.role-card strong{display:block;font-size:13px;margin-top:7px}.dialog-disclaimer{padding:10px 12px;background:var(--soft);font-size:11px}.notice{padding-top:8px;font-size:11px;color:var(--muted)}@media(min-width:1450px){.workspace{grid-template-columns:210px minmax(0,1fr) 305px;gap:38px}.task-top{padding-top:40px}.progress-section{padding-top:10px;padding-bottom:35px}.automation{padding-top:23px;padding-bottom:23px}}@media(max-width:1120px){.workspace{grid-template-columns:150px minmax(0,1fr) 240px;gap:18px;padding-left:24px;padding-right:24px}.masthead{padding-left:24px;padding-right:24px}.task-top,.progress-section,.action-area{padding-left:22px;padding-right:22px}.automation{padding-left:22px;padding-right:22px}.simulation{align-items:start;flex-direction:column}.simulation button{width:100%}}@media(max-width:880px){.workspace{grid-template-columns:minmax(0,1fr) 245px}.rail{grid-column:1/-1;padding-top:14px}.rail>.eyebrow,.rail>h2,.rail-note{display:none}.steps{display:flex;justify-content:space-between;gap:12px}.steps li{padding-bottom:13px;gap:8px}.steps li:before{display:none}.steps small{display:none}.rail button{width:auto;margin:0 0 15px;padding:5px 12px}.brand h1{font-size:21px}.versions a{padding:7px 9px;font-size:12px}.masthead{gap:10px}.prototype{padding-left:24px;padding-right:24px}.prototype span:last-child{display:none}}@media(max-width:620px){.masthead{align-items:start;flex-direction:column;padding:22px 18px;gap:18px}.versions{width:100%;justify-content:space-between;border-top:1px solid var(--line);padding-top:12px}.workspace{display:flex;flex-direction:column;padding:0 18px 30px;gap:20px}.prototype{padding:8px 18px;font-size:10px;letter-spacing:.03em}.monogram{width:42px;height:42px;font-size:26px}.rail{padding-top:16px}.steps{gap:4px}.steps li{gap:6px}.steps strong{font-size:11px}.step-no{width:23px;height:23px;font-size:10px}.steps li:first-child{display:none}.session{padding-top:16px}.task-top{padding-top:24px}.task-top h2{font-size:32px}.description{font-size:13px}.count{font-size:48px}.automation{padding:16px 20px;align-items:start}.automation button{padding:7px 9px}.notes{gap:16px}.seat-list{grid-template-columns:1fr 1fr}.seat{grid-template-columns:24px minmax(0,1fr);gap:5px;padding:10px 7px}.seat-status{grid-column:2}.seat-index{align-self:start;font-size:15px}.footer{padding:20px 18px;flex-direction:column;gap:8px}.dialog-actions{flex-wrap:wrap}.role-card img{height:125px}.button-detail{flex-direction:column;gap:2px}.review-summary{margin-left:22px;margin-right:22px}}@media(prefers-reduced-motion:no-preference){button,a{transition:background .15s,border-color .15s}.focus-card{transition:border-color .2s}}
+</style>
+</head>
+<body>
+<div class="prototype"><strong>交互原型 · 虚构数据 · 不连接真实对局</strong><span>DESIGN STUDY / A — THE GUIDED DESK</span></div>
+<header class="masthead">
+ <div class="brand"><span class="monogram" aria-hidden="true">A</span><div><h1>流程领航</h1><p>HOST WORKSPACE / 主持人工作台</p></div></div>
+ <nav class="versions" aria-label="切换设计方案"><a href="index.html">方案比较</a><a href="guide.html" aria-current="page">A · 流程领航</a><a href="table.html">B · 七席魔典</a><a href="tasks.html">C · 裁定收件箱</a></nav>
+</header>
+<div class="workspace">
+ <aside class="rail" aria-label="本局阶段">
+  <div class="eyebrow">Tonight's itinerary</div><h2>今夜的流程</h2>
+  <ol class="steps">
+   <li class="complete"><span class="step-no">01</span><div><strong>入场与准备</strong><small>两次准备已完成</small></div></li>
+   <li id="step-collect" aria-current="step"><span class="step-no">02</span><div><strong>夜间行动</strong><small>玩家同时完成</small></div></li>
+   <li id="step-review"><span class="step-no">03</span><div><strong>夜间审阅</strong><small>主持人核对结果</small></div></li>
+   <li id="step-result"><span class="step-no">04</span><div><strong>公布夜间结果</strong><small>主持人确认后公开</small></div></li>
+  </ol>
+  <div class="rail-note"><strong>只关注眼前的一步。</strong>系统负责收齐与流转；需要审阅和宣布时，控制权始终留给真人主持。</div>
+  <button id="reset" type="button">重新开始演示</button>
+ </aside>
+ <main class="main">
+  <div class="session"><strong>月下茶会 / 第二夜</strong><span class="pill">七席双牌 · 固定真人主持</span></div>
+  <section class="focus-card" aria-labelledby="task-title">
+   <div class="task-top"><div class="kicker"><span class="live-dot"></span><span id="stage-label">02 / NIGHT ACTIONS</span></div><h2 id="task-title">让每个人完成今夜。</h2><p class="description" id="description">玩家同时行动，无需按座次等待。还有两位未确认，主持人暂时不需要操作。</p></div>
+   <div class="progress-section"><div class="count-row"><div class="count"><b id="count" style="font-weight:400">5</b><span> / 7</span></div><div class="count-label">玩家夜间确认<br><span id="completion-label">等待最后两位</span></div></div><div class="segments" aria-hidden="true"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i></i><i></i></div><div class="waiting-line" id="waiting" role="status">06、07 号尚未确认；未完成不会被视为已提交。</div></div>
+   <div class="review-summary" id="review-summary" hidden><h3 id="summary-title">拟公布：本夜无新增死亡</h3><p id="summary-body">这是预设的虚构结果。七席本夜均存活。真实技能即时结算；此处只核对将公开的结果，不重新裁定技能。</p></div>
+   <div class="automation"><div><strong id="auto-title">收齐后，5 秒自动进入「夜间审阅」</strong><p id="auto-detail">仅无人待办的自动阶段流转；不会自动公布结果。</p></div><button type="button" id="pause" aria-pressed="false">暂停自动流转</button></div>
+   <div class="action-area"><button class="primary" id="primary" type="button" disabled>等待 2 位玩家 · 随后进入夜间审阅</button><div class="button-detail"><span id="primary-help">为什么不能继续？仍有玩家未完成当夜行动。</span><span>主持视角 · 仅示例</span></div></div>
+  </section>
+  <section class="simulation" aria-labelledby="simulation-title"><div><h3 id="simulation-title">演示控制台 / 不代替真实玩家</h3><p id="simulation-help">依次模拟 06、07 号自行确认，观察自动流转。</p></div><button id="simulate" type="button">模拟：06 号提交</button></section>
+  <div class="notes"><section><h3>玩家做什么</h3><p>完成自己的技能操作并确认。即使当夜死亡，仍可完成当夜行动；超时只警告，不默认放弃。</p></section><section><h3>主持人做什么</h3><p>等待收齐，核对结果，再明确宣布。真实技能即时结算；伪装声明和特殊争议由主持裁定。</p></section></div>
+ </main>
+ <aside class="seats-panel" aria-label="七席状态"><div class="eyebrow">The seven seats</div><div class="seats-header"><h2>今夜在场</h2><span>07</span></div><p class="seat-hint">点击席位查看双牌 · 仅主持人可见</p><div class="seat-list" id="seat-list"></div>
+  <div class="warning"><div class="warning-top"><strong id="warning-label">未确认提醒倒计时</strong><span class="timer" id="warning-time">00:30</span></div><p id="warning-detail">30 秒后仅显示警告。不会替玩家提交、放弃技能或强制进入下一阶段。</p></div>
+  <p class="notice">演示从第二夜开始。入场使用统一邀请码，随机分配空席；两次准备，调整期间不公开角色。替补保留原牌与技能。</p>
+ </aside>
+</div>
+<footer class="footer"><span>方案 A / 以阶段为中心，让当前责任与下一步始终清晰。</span><span>操作参考：<a href="https://beardytas.com/botc-app-instructions/" target="_blank" rel="noopener noreferrer">BOTC 主持工具指南 ↗</a> · 未复制其资产</span></footer>
+<dialog id="cards-dialog" aria-labelledby="cards-title"><div class="eyebrow">Host-only / 虚构双牌</div><h2 id="cards-title">席位双牌</h2><p id="cards-status"></p><div class="dual-cards" id="dual-cards"></div><p class="dialog-disclaimer">角色仅作视觉示例，不推断阵营或技能结果。调整阶段不向玩家公开角色。</p><form method="dialog" class="dialog-actions"><button autofocus>关闭双牌</button></form></dialog>
+<dialog id="publish-dialog" aria-labelledby="publish-title"><div class="eyebrow">A deliberate handoff</div><h2 id="publish-title">确认公布夜间结果？</h2><p>将公布预设结果：<strong>本夜无新增死亡</strong>。七席均存活。</p><p>真实对局中，这一步会向所有玩家公开夜间结果；本原型只切换本页状态，不发送消息，也不连接真实对局。确认后停留在「夜间结果」，不会继续进入白天。</p><div class="dialog-actions"><button id="cancel-publish" type="button" autofocus>返回继续审阅</button><button id="confirm-publish" type="button" class="primary">确认公布 · 仅本页模拟</button></div></dialog>
+<script>
+const $ = id => document.getElementById(id);
+const seats = [
+ {name:'林间',cards:['樱羽艾玛','月代雪']},
+ {name:'青禾',cards:['远野汉娜','莲见蕾雅']},
+ {name:'白榆',cards:['紫藤亚里沙','泽渡可可']},
+ {name:'南星',cards:['橘雪莉','宝生马格']},
+ {name:'小满',cards:['夏目安安','城崎诺亚']},
+ {name:'听雨',cards:['冰上梅露露','佐伯米莉亚']},
+ {name:'晚舟',cards:['黑部奈叶香','二阶堂希罗']}
+];
+let submitted, stage, paused, warningDeadline, autoDeadline, autoRemaining;
+seats.forEach((seat,index) => {
+ const button=document.createElement('button');
+ button.type='button';button.className='seat';button.id='seat-'+index;
+ button.innerHTML='<span class="seat-index">0'+(index+1)+'</span><span><span class="seat-name">'+seat.name+'</span><span class="seat-detail">存活 · 双牌</span></span><span class="seat-status"></span>';
+ button.addEventListener('click',() => {
+  $('cards-title').textContent='0'+(index+1)+' 号 · '+seat.name;
+  $('cards-status').textContent='存活玩家。'+(index<submitted?'已确认今夜行动。':'尚未确认今夜行动。');
+  $('dual-cards').replaceChildren(...seat.cards.map((name,cardIndex) => {
+   const card=document.createElement('div');card.className='role-card';
+   const label=document.createElement('small');label.textContent='角色牌 '+(cardIndex===0?'A':'B');
+   const image=document.createElement('img');image.src='../../img/'+name+'.png';image.alt=name+'角色示意图';
+   const title=document.createElement('strong');title.textContent=name;
+   card.append(label,image,title);return card;
+  }));
+  $('cards-dialog').showModal();
+ });
+ $('seat-list').append(button);
+});
+function render(){
+ const collecting=stage==='collect';
+ const complete=submitted===7;
+ $('count').textContent=submitted;
+ $('completion-label').textContent=complete?'所有玩家已确认':'等待最后'+(7-submitted)+'位';
+ document.querySelectorAll('.segments i').forEach((bar,index)=>bar.classList.toggle('done',index<submitted));
+ seats.forEach((seat,index)=>{const button=$('seat-'+index);button.classList.toggle('pending',index>=submitted);button.querySelector('.seat-status').textContent=index<submitted?'已确认':'未确认';button.setAttribute('aria-label','0'+(index+1)+' 号 '+seat.name+'，'+(index<submitted?'已确认':'未确认')+'，查看双牌');});
+ ['collect','review','result'].forEach((name,index)=>{const step=$('step-'+name);step.removeAttribute('aria-current');if(name===stage)step.setAttribute('aria-current','step');step.classList.toggle('complete',index<['collect','review','result'].indexOf(stage));});
+ $('stage-label').textContent=collecting?'02 / NIGHT ACTIONS':stage==='review'?'03 / HOST REVIEW':'04 / NIGHT RESULTS';
+ $('task-title').textContent=collecting?(complete?'今夜的行动，已收齐。':'让每个人完成今夜。'):stage==='review'?'最后一步，由你宣布。':'今夜的结果，已公布。';
+ $('description').textContent=collecting?(complete?'七位玩家均已自行确认。等待自动流转进入主持审阅，不会直接公开任何结果。':'玩家同时行动，无需按座次等待。还有'+(7-submitted)+'位未确认，主持人暂时不需要操作。'):stage==='review'?'请核对拟公开的信息。此阶段由真人主持把关，无论等待多久，都不会自动公布。':'本夜无新增死亡。演示在此停止，不会自动开启白天或发起提名。';
+ $('waiting').textContent=collecting?(complete?'无人待办。自动流转只会进入审阅，不会替主持人宣布。':submitted===5?'06、07 号尚未确认；未完成不会被视为已提交。':'07 号尚未确认；06 号已完成当夜行动。'):stage==='review'?'当前责任人：主持人。等待核对并确认公布。':'夜间结果已公布；演示流程已结束。';
+ $('waiting').style.color=complete?'var(--green)':'var(--amber)';
+ $('review-summary').hidden=collecting;
+ $('summary-title').textContent=stage==='result'?'已公布：本夜无新增死亡':'拟公布：本夜无新增死亡';
+ $('auto-title').textContent=!collecting?'自动流转已停止':paused?'自动流转已暂停':complete?'即将自动进入「夜间审阅」':'收齐后，5 秒自动进入「夜间审阅」';
+ $('auto-detail').textContent=!collecting?(stage==='review'?'审阅与宣布必须由主持人手动确认。':'本页不会继续进入下一阶段。'):paused?(complete?'剩余 '+Math.ceil(autoRemaining/1000)+' 秒；恢复后继续计时。':'玩家仍可提交；收齐后也会保持暂停。'):'仅无人待办的自动阶段流转；不会自动公布结果。';
+ $('pause').disabled=!collecting;$('pause').textContent=paused?'恢复自动流转':'暂停自动流转';$('pause').setAttribute('aria-pressed',String(paused));
+ $('primary').disabled=stage!=='review';
+ $('primary').textContent=collecting?(complete?(paused?'已暂停 · 恢复后进入夜间审阅':'即将进入夜间审阅'):'等待 '+(7-submitted)+' 位玩家 · 随后进入夜间审阅'):stage==='review'?'核对完成 · 公布夜间结果':'夜间结果已公布 · 演示结束';
+ $('primary-help').textContent=collecting?(complete?'收齐后自动进入审阅；无需点击。':'为什么不能继续？仍有玩家未完成当夜行动。'):stage==='review'?'点击后再次确认影响；取消可返回审阅。':'使用左侧「重新开始演示」体验完整流程。';
+ $('simulate').disabled=!collecting||complete;$('simulate').textContent=complete?'模拟提交已完成':'模拟：0'+(submitted+1)+' 号提交';
+ $('simulation-help').textContent=complete?'七席均已确认；不会再制造额外提交。':'依次模拟 06、07 号自行确认，观察自动流转。';
+ if(complete){$('warning-label').textContent='玩家确认已收齐';$('warning-time').textContent='完成';$('warning-detail').textContent='提醒已停止。全部确认来自明确的模拟提交，不是由超时自动补齐。';}
+ tick();
+}
+function tick(){
+ if(submitted<7){const left=Math.max(0,Math.ceil((warningDeadline-Date.now())/1000));$('warning-time').textContent='00:'+String(left).padStart(2,'0');$('warning-label').textContent=left?'未确认提醒倒计时':'提醒：仍有玩家未确认';$('warning-detail').textContent=left?'30 秒后仅显示警告。不会替玩家提交、放弃技能或强制进入下一阶段。':'已到提醒时间。继续等待玩家完成；没有任何技能被自动放弃，也不会强制流转。';}
+ if(stage==='collect'&&submitted===7&&!paused){const left=Math.max(0,Math.ceil((autoDeadline-Date.now())/1000));if(left===0){stage='review';render();return;}$('auto-title').textContent=left+' 秒后自动进入「夜间审阅」';$('primary').textContent=left+' 秒后 · 自动进入夜间审阅';}
+}
+$('simulate').addEventListener('click',()=>{if(stage!=='collect'||submitted===7)return;submitted++;if(submitted===7){autoRemaining=5000;autoDeadline=Date.now()+autoRemaining;}render();});
+$('pause').addEventListener('click',()=>{if(stage!=='collect')return;if(!paused&&submitted===7)autoRemaining=Math.max(0,autoDeadline-Date.now());paused=!paused;if(!paused&&submitted===7)autoDeadline=Date.now()+autoRemaining;render();});
+$('primary').addEventListener('click',()=>{if(stage==='review')$('publish-dialog').showModal();});
+$('cancel-publish').addEventListener('click',()=>$('publish-dialog').close());
+$('confirm-publish').addEventListener('click',()=>{if(stage!=='review')return;$('publish-dialog').close();stage='result';render();$('task-title').tabIndex=-1;$('task-title').focus();});
+function reset(){submitted=5;stage='collect';paused=false;warningDeadline=Date.now()+30000;autoRemaining=5000;autoDeadline=0;render();}
+$('reset').addEventListener('click',reset);
+reset();setInterval(tick,200);
+</script>
+</body>
+</html>

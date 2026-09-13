@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 C · 裁定收件箱 | 主持人交互原型</title>
+<style>
+:root{color-scheme:light;--ink:#172b48;--muted:#5b6d85;--blue:#245acb;--line:#dce4ef;--bg:#f1f5fa;--amber:#8a4b0a;--green:#167354}*{box-sizing:border-box}body{margin:0;font:14px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}button,input,textarea,select{font:inherit}button,a,input,textarea{touch-action:manipulation}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}a{color:var(--blue);text-underline-offset:4px}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #e39d28;outline-offset:3px}h1,h2,h3,p{margin:0}button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:9px 14px;color:var(--ink);font-weight:600}button:hover:not(:disabled){border-color:#9aaecb;background:#f3f7ff}.primary{background:var(--blue);color:#fff;border-color:var(--blue)}.primary:hover:not(:disabled){background:#194cae;color:#fff}.eyebrow{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);font-weight:750}.subtle{color:var(--muted)}.prototype{padding:9px 24px;text-align:center;background:#183e76;color:#fff;font-size:12px;font-weight:650;letter-spacing:.04em}.topbar{display:flex;align-items:center;gap:25px;padding:18px 30px;background:#fff;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:12px;margin-right:auto}.brand-mark{display:grid;place-items:center;width:38px;height:38px;border-radius:11px;background:#e9effc;color:var(--blue);font-size:21px;font-weight:800}.brand strong{display:block;font-size:16px}.brand small{color:var(--muted)}nav{display:flex;gap:5px;flex-wrap:wrap}nav a{padding:7px 12px;text-decoration:none;color:var(--muted);font-size:13px;border-radius:6px}nav a[aria-current]{background:#eaf0ff;color:var(--blue);font-weight:700}.stage{padding:25px 30px;display:flex;justify-content:space-between;gap:25px;align-items:center}.stage h1{font-size:25px;letter-spacing:-.035em;margin:3px 0 7px}.stage-status{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;align-items:center;border-radius:5px;padding:3px 8px;font-size:11px;font-weight:700;background:#eaf0fc;color:var(--blue)}.pill.warning{background:#fff2da;color:var(--amber)}.pill.success{background:#e7f4ee;color:var(--green)}.stage-action{text-align:right;flex-shrink:0}.stage-action p{font-size:12px;margin-top:5px;color:var(--muted)}.workspace{display:grid;grid-template-columns:205px minmax(270px,340px) minmax(340px,1fr);min-height:670px;margin:0 30px;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#fff;box-shadow:0 9px 30px #203f6810}.sidebar{padding:25px 17px;background:#f8fafd;border-right:1px solid var(--line)}.sidebar h2{font-size:12px;color:var(--muted);margin:0 10px 14px}.filter{display:flex;justify-content:space-between;align-items:center;width:100%;border:0;background:transparent;text-align:left;margin:5px 0;padding:11px 12px;font-size:13px}.filter[aria-pressed=true]{background:#e8effd;color:var(--blue)}.count{font-size:11px;background:#fff;border:1px solid var(--line);border-radius:5px;min-width:22px;text-align:center}.side-note{border-top:1px solid var(--line);margin-top:28px;padding:20px 10px 0;font-size:12px;color:var(--muted)}.side-note strong{display:block;color:var(--ink);margin-bottom:5px}.legend{margin-top:22px}.legend span{display:block;margin:7px 0}.legend span::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:8px;background:#91a5c2}.legend span:first-child::before{background:#d69335}.list-column{border-right:1px solid var(--line)}.column-head{padding:22px 21px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.column-head h2{font-size:16px}.column-head small{color:var(--muted)}.task-list{padding:12px}.task-card{display:block;width:100%;text-align:left;padding:17px 15px;border:1px solid transparent;background:#fff;margin-bottom:8px;border-radius:9px;font-weight:400}.task-card[aria-pressed=true]{background:#f0f5ff;border-color:#afc5f1;box-shadow:inset 3px 0 var(--blue)}.task-card strong{display:block;margin:8px 0 6px;font-size:14px}.task-card small{display:block;color:var(--muted);font-size:12px}.task-meta{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted)}.empty{padding:30px 18px;color:var(--muted);text-align:center}.list-foot{padding:18px 22px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)}.detail{padding:26px 30px;min-width:0}.detail-heading{display:flex;justify-content:space-between;gap:12px;align-items:start}.detail h2{font-size:21px;margin:7px 0 6px}.detail-intro{color:var(--muted);font-size:13px}.evidence{margin:23px 0 20px;padding:17px 19px;background:#f7f9fc;border:1px solid var(--line);border-radius:8px}.section-title{font-size:12px;letter-spacing:.04em;font-weight:750;margin-bottom:10px}.facts{display:grid;grid-template-columns:76px 1fr;gap:9px 12px;margin:0;font-size:13px}.facts dt{color:var(--muted)}.facts dd{margin:0}.impact{border-left:3px solid #8dacdd;padding-left:13px;margin:17px 0;color:var(--muted);font-size:12px}.impact strong{display:block;color:var(--ink)}fieldset{border:0;margin:18px 0;padding:0}legend{font-size:13px;font-weight:750;margin-bottom:9px}.choice{display:flex;gap:9px;align-items:start;border:1px solid var(--line);padding:11px 13px;border-radius:7px;margin:7px 0;cursor:pointer}.choice:has(input:checked){background:#f0f5ff;border-color:#739ade}.choice input{margin-top:5px;accent-color:var(--blue)}.choice span{font-size:13px}.reason-label{display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-bottom:7px}.reason-label small{font-weight:400;color:var(--muted)}textarea{display:block;resize:vertical;width:100%;min-height:96px;padding:11px 12px;border:1px solid #bac9dc;border-radius:7px;color:var(--ink);background:#fff}.form-footer{margin-top:15px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.form-footer button{font-size:12px}.help{font-size:11px;color:var(--muted);margin-top:8px}.notice{padding:12px 15px;margin-bottom:18px;background:#fff4dd;border:1px solid #e6c88f;border-radius:8px;font-size:13px;color:#79490c}.notice:empty{display:none}.record-result{padding:18px 20px;background:#edf7f2;border:1px solid #cce7d9;border-radius:9px;margin-top:20px}.record-result strong{display:block;color:var(--green)}.record-result p{margin-top:9px;white-space:pre-wrap;overflow-wrap:anywhere}.logs{margin:22px 30px;background:#fff;border:1px solid var(--line);border-radius:11px;padding:21px 25px}.logs-head{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:12px}.logs h2{font-size:15px}.logs small{color:var(--muted)}.log-list{margin:0;padding:0;list-style:none;font-size:12px;max-height:180px;overflow:auto}.log-list li{padding:9px 0;border-top:1px solid #edf0f5;display:flex;gap:16px;overflow-wrap:anywhere}.log-list time{color:var(--muted);min-width:68px;font-variant-numeric:tabular-nums}footer{padding:2px 30px 25px;display:flex;justify-content:space-between;gap:15px;color:var(--muted);font-size:11px}.organization{margin:0 30px 22px;padding:23px 26px;background:#eaf2ff;border:1px solid #bed1f2;border-radius:12px}.organization h2{font-size:20px;margin:5px 0 9px}.organization p{max-width:850px;color:#3d587c}.organization ol{display:flex;gap:30px;flex-wrap:wrap;padding-left:20px;font-size:13px}.organization[hidden]{display:none}dialog{width:min(530px,calc(100% - 32px));border:1px solid var(--line);border-radius:14px;padding:27px;color:var(--ink);box-shadow:0 30px 100px #10295040}dialog::backdrop{background:#142b4d70;backdrop-filter:blur(3px)}dialog h2{font-size:21px;margin:6px 0 12px}dialog p{font-size:13px;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}.dialog-summary{background:#f1f5fb;border-radius:8px;padding:14px 17px}.dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:20px;flex-wrap:wrap}#dialogConflict{margin-top:14px;font-size:12px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@media(min-width:1550px){.workspace,.stage,.logs,.organization,footer{max-width:1490px;margin-left:auto;margin-right:auto}.stage{padding-left:0;padding-right:0}}@media(max-width:1050px){.workspace{grid-template-columns:165px 265px minmax(280px,1fr);margin:0 18px}.detail{padding:23px 20px}.sidebar{padding:23px 9px}.topbar{padding:16px 20px}.stage{padding:24px 20px}.logs,.organization{margin-left:18px;margin-right:18px}}@media(max-width:800px){.workspace{grid-template-columns:240px minmax(0,1fr)}.sidebar{grid-column:1/-1;display:flex;align-items:center;gap:10px;border-right:0;border-bottom:1px solid var(--line);padding:10px 14px;flex-wrap:wrap}.sidebar h2{margin:0 5px}.filter{width:auto;gap:14px;margin:0;padding:9px 12px}.side-note{display:none}.topbar{align-items:flex-start;flex-wrap:wrap;gap:12px}.brand{flex:1}.topbar nav{order:3;width:100%}.stage h1{font-size:23px}.stage{align-items:flex-start}.task-card{padding:13px 10px}.task-list{padding:8px}}@media(max-width:600px){.prototype{padding:9px 12px;font-size:11px}.stage{flex-direction:column;gap:16px}.stage-action{text-align:left;display:flex;align-items:center;gap:12px}.stage-action p{max-width:160px;margin:0}.workspace{display:block;margin:0 12px}.sidebar{display:flex}.sidebar h2{width:100%;margin:0 8px}.list-column{border-right:0;border-bottom:1px solid var(--line)}.task-list{display:flex;gap:9px;overflow-x:auto;padding:10px}.task-card{flex:0 0 230px;margin:0}.column-head{padding:15px 20px}.list-foot{padding:11px 20px}.detail{padding:23px 20px}.logs{margin:16px 12px;padding:18px}.logs-head{align-items:flex-start;flex-direction:column;gap:3px}.organization{margin:0 12px 16px;padding:20px}.organization ol{display:block}.organization li{margin:7px 0}footer{padding:0 15px 20px;flex-direction:column;gap:4px}.topbar>button{font-size:12px}.facts{grid-template-columns:60px 1fr}.log-list li{gap:9px}}
+</style>
+</head>
+<body>
+<div class="prototype">交互原型 · 虚构数据 · 不连接真实对局</div>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">C</span><div><strong>裁定收件箱</strong><small>主持工作台 / INBOX</small></div></div>
+  <nav aria-label="原型方案"><a href="index.html">方案比较</a><a href="guide.html">A · 流程领航</a><a href="table.html">B · 七席魔典</a><a href="tasks.html" aria-current="page">C · 裁定收件箱</a></nav>
+  <button id="reset">重置演示</button>
+</header>
+<section class="stage" aria-labelledby="stageTitle">
+  <div><div class="eyebrow">示例房间 07 / 七席双牌 / 固定真人主持</div><h1 id="stageTitle">第 2 日 · 白天自由讨论</h1><div class="stage-status"><span id="stageBadge" class="pill warning">推进受阻</span><span id="stageDescription" class="subtle">还有 2 项主持待裁定，讨论可以继续。</span></div></div>
+  <div class="stage-action"><button class="primary" id="advance" disabled>审阅并推进阶段</button><p id="advanceHelp">先处理全部主持待办</p></div>
+</section>
+<section class="organization" id="organization" hidden aria-labelledby="organizationTitle">
+  <div class="eyebrow">下一阶段 / 只读示意</div><h2 id="organizationTitle">热气球组织 · 等待玩家条件</h2>
+  <p>由亚里沙确定名单，或在满足过半同意条件后自动组织。不产生主持裁定，主持不能代替玩家提交。本页仅展示到达此阶段，不模拟名单与投票。</p>
+  <ol><li>玩家完成名单或同意条件</li><li>系统自动组织，无主持批准</li><li>自动完成阶段无人待办时，5 秒自动推进，可暂停</li></ol>
+  <p class="help">当前未模拟玩家完成条件，因此不会开启倒计时或继续推进；30 秒提醒也不会自动放弃玩家行动。</p>
+</section>
+<main class="workspace">
+  <aside class="sidebar" aria-label="收件箱分类">
+    <h2>工作队列</h2>
+    <button class="filter" data-filter="pending" aria-pressed="true">待处理 <span class="count" id="pendingCount">2</span></button>
+    <button class="filter" data-filter="done" aria-pressed="false">已处理 <span class="count" id="doneCount">3</span></button>
+    <div class="side-note"><strong>只把决定交给主持</strong>真实技能即时结算。自动处理记录只供核对，不会挤进待裁定队列。<div class="legend"><span>主持裁定 · 2 项示例</span><span>系统记录 · 3 项示例</span></div></div>
+    <div class="side-note"><strong>本页演示范围</strong>筛选、裁定、版本冲突、阶段推进。无游戏引擎；没有真实请求、联网或持久化。</div>
+  </aside>
+  <section class="list-column" aria-labelledby="listTitle"><div class="column-head"><h2 id="listTitle">待处理</h2><small id="listCount">2 项</small></div><div class="task-list" id="taskList"></div><p class="list-foot">名单与证据均为虚构。只有标记为“待裁定”的事项需要你的决定。</p></section>
+  <section class="detail" aria-label="证据与裁定表单"><div id="notice" class="notice" role="status"></div><div id="detail"></div></section>
+</main>
+<section class="logs" aria-labelledby="logTitle"><div class="logs-head"><h2 id="logTitle">本地操作日志</h2><small>仅本次页面会话 · 刷新或重置即清空</small></div><ol id="logList" class="log-list"></ol></section>
+<footer><span>所有身份、声明、时间与结果均为虚构，不向任何玩家发送消息。</span><a href="https://beardytas.com/botc-app-instructions/" target="_blank" rel="noopener noreferrer">操作参考：主持人使用说明（联网打开）</a></footer>
+<div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+<dialog id="confirmDialog" aria-labelledby="dialogTitle"><div class="eyebrow">本地演示 / 提交前预览</div><h2 id="dialogTitle">确认裁定</h2><div id="dialogContent" class="dialog-summary"></div><p id="dialogHint"></p><button id="dialogConflict">模拟版本冲突（不提交）</button><div class="dialog-actions"><button id="cancelDialog">返回修改</button><button class="primary" id="confirmAction">确认提交</button></div></dialog>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const escapeText = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let tasks, selected, filter, stage, logs, preview;
+const dialog = $('confirmDialog');
+function initialTasks(){return [
+  {id:'D-021',title:'伪装声明申请',seat:'03 席 · 小岚（虚构）',type:'主持裁定',status:'pending',version:1,time:'14:32',summary:'玩家以伪装身份作出一项声明，请求主持判定该声明是否允许。',evidence:'声明：“我以当前伪装身份公开发言。”仅为裁定流程示例，不代表任何真实技能发动。',boundary:'只处理这一次伪装声明。真实技能不经过此表单，也不会被本次裁定撤销。',impact:'影响 D-021 声明的允许 / 驳回标记；不改变身份牌、生命状态或其他玩家结果。',options:['允许该伪装声明','驳回'],reason:'',choice:''},
+  {id:'D-022',title:'希罗 · 跨时点特殊回溯',seat:'06 席 · 阿澈（虚构）',type:'主持裁定',status:'pending',version:1,time:'14:34',summary:'申请从当前讨论时点，特殊回溯至上一时点的本人操作。',evidence:'请求说明：“希望跨越已结束时点更正上次操作。”这是特殊跨时点申请，不是本人可直接进行的普通回溯。',boundary:'希罗普通回溯由本人操作。此处只演示特殊申请的裁定记录，不推演跨时点规则或重算全局。',impact:'仅记录 D-022 特殊回溯许可 / 维持当前结果。本页不会改写历史、代玩家操作或执行规则重算。',options:['允许特殊回溯','维持当前结果'],reason:'',choice:''},
+  {id:'S-018',title:'真实技能 · 即时结算',seat:'02 席 · 沐沐（虚构）',type:'系统自动',status:'done',version:1,time:'14:28',summary:'真实技能已在合法发动时即时结算，本记录为只读示例。',evidence:'系统事件示例：玩家完成真实技能操作 → 即时结算 → 写入记录。',boundary:'真实技能不是伪装声明，不等待主持批准。',impact:'只读查看，不新增主持待办。',result:'系统已自动处理',reason:'示例记录：真实技能即时结算，无需主持裁定。'},
+  {id:'S-019',title:'米莉亚 · 临死预结算换牌',seat:'04 席 · 夏音（虚构）',type:'系统自动',status:'done',version:1,time:'14:29',summary:'示例中预结算将导致出局，系统已自动换上层牌并重新结算。',evidence:'预结算会出局 → 自动换上层牌 → 重算。本页不展示或改动身份牌。',boundary:'不设置主持批准或代选换牌。死亡者仍可完成当夜行动，夜间为同时行动。',impact:'只读查看，不新增主持待办。',result:'系统已自动处理',reason:'示例记录：预结算触发自动换牌重算，不等待主持批准。'},
+  {id:'S-020',title:'热气球组织 · 自动处理',seat:'前一组织时点（虚构）',type:'系统自动',status:'done',version:1,time:'14:30',summary:'前一时点的组织记录，仅为说明系统职责；不代表下一阶段条件已完成。',evidence:'示例历史记录：亚里沙已确定名单，系统自动组织。另一种自动组织条件为过半同意。',boundary:'热气球组织不需要主持裁定。本记录不开放名单编辑或手动批准。',impact:'只读历史示例，不对当前阶段产生状态变更。',result:'系统已自动处理',reason:'示例记录：组织条件满足后自动处理，无主持批准步骤。'}
+];}
+function current(){return tasks.find(t=>t.id===selected);}
+function pending(){return tasks.filter(t=>t.status==='pending').length;}
+function announce(text){$('announcement').textContent=text;}
+function addLog(text){logs.unshift({time:new Date().toLocaleTimeString('zh-CN',{hour12:false}),text});renderLogs();}
+function renderLogs(){$('logList').innerHTML=logs.map(l=>`<li><time>${escapeText(l.time)}</time><span>${escapeText(l.text)}</span></li>`).join('');}
+function render(){
+  const count=pending();
+  $('pendingCount').textContent=count;$('doneCount').textContent=tasks.length-count;
+  document.querySelectorAll('[data-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.filter===filter)));
+  $('listTitle').textContent=filter==='pending'?'待处理':'已处理';
+  const visible=tasks.filter(t=>t.status===filter);
+  if(!visible.some(t=>t.id===selected))selected=visible[0]?.id||null;
+  $('listCount').textContent=visible.length+' 项';
+  $('taskList').innerHTML=visible.length?visible.map(t=>`<button class="task-card" data-task="${t.id}" aria-pressed="${t.id===selected}"><span class="task-meta"><span>${t.id} · ${t.time}</span><span class="pill ${t.status==='pending'?'warning':'success'}">${t.status==='pending'?'待裁定':t.type==='系统自动'?'自动已处理':'已裁定'}</span></span><strong>${t.title}</strong><small>${t.seat}</small><small>${t.type} · 示例版本 v${t.version}</small></button>`).join(''):'<div class="empty">此队列已清空。<br>全部主持事项已处理，可审阅推进。</div>';
+  $('stageTitle').textContent=stage==='discussion'?'第 2 日 · 白天自由讨论':'第 2 日 · 热气球组织';
+  $('stageBadge').textContent=stage==='organization'?'等待玩家条件':count?'推进受阻':'可审阅推进';
+  $('stageBadge').className='pill '+(count?'warning':'success');
+  $('stageDescription').textContent=stage==='organization'?'只读阶段提示，不需要主持裁定。':count?`还有 ${count} 项主持待裁定，讨论可以继续。`:'主持待办已清空；自由讨论仍需主持审阅后手动推进。';
+  $('advance').disabled=count>0||stage==='organization';
+  $('advance').textContent=stage==='organization'?'已进入组织阶段':'审阅并推进阶段';
+  $('advanceHelp').textContent=stage==='organization'?'本演示到此，不自动代交玩家行动':count?'先处理全部主持待办':'不会因待办清空而自动结束讨论';
+  $('organization').hidden=stage!=='organization';
+  renderDetail();
+}
+function renderDetail(){
+  const t=current();
+  if(!t){$('detail').innerHTML='<div class="eyebrow">QUEUE CLEAR</div><h2>暂时没有待处理事项</h2><p class="detail-intro">切换“已处理”查看裁定与自动记录，或在顶部审阅后推进阶段。</p>';return;}
+  $('detail').innerHTML=`<div class="detail-heading"><div><div class="eyebrow">${t.id} / ${t.type==='系统自动'?'SYSTEM RECORD':'DECISION REQUEST'}</div><h2>${t.title}</h2></div><span class="pill">v${t.version}</span></div><p class="detail-intro">${t.summary}</p><div class="evidence"><h3 class="section-title">证据摘要 · 虚构内容</h3><dl class="facts"><dt>发起对象</dt><dd>${t.seat}</dd><dt>请求证据</dt><dd>${t.evidence}</dd><dt>裁定边界</dt><dd>${t.boundary}</dd></dl></div><div class="impact"><strong>影响范围</strong>${t.impact}</div>`;
+  if(t.status==='done'){
+    $('detail').insertAdjacentHTML('beforeend',`<div class="record-result"><strong>${escapeText(t.result)}</strong><p>${escapeText(t.reason)}</p></div><p class="help">只读记录 · ${t.type==='系统自动'?'系统处理不需要主持再次判定':'已保存本次示例裁定；不会向真实对局提交'}</p>`);return;
+  }
+  $('detail').insertAdjacentHTML('beforeend',`<form id="rulingForm"><fieldset><legend>明确裁定结果 <span class="subtle">（必选）</span></legend>${t.options.map((o,i)=>`<label class="choice"><input type="radio" name="result" value="${i}" required ${t.choice===o?'checked':''}><span>${o}</span></label>`).join('')}</fieldset><label class="reason-label" for="reason">裁定理由 <small>必填 · 最多 500 字</small></label><textarea id="reason" required maxlength="500" placeholder="请说明判断依据与影响边界，供提交前复核。">${escapeText(t.reason)}</textarea><div class="form-footer"><button type="button" id="conflict">模拟版本冲突</button><button class="primary" id="preview" type="submit" ${!t.reason.trim()||!t.choice?'disabled':''}>预览裁定</button></div><p class="help">确认前不会保存结果。版本冲突保留草稿，但必须重新预览确认。</p></form>`);
+  $('reason').addEventListener('input',()=>{t.reason=$('reason').value;updatePreview();});
+  document.querySelectorAll('input[name="result"]').forEach(input=>input.addEventListener('change',()=>{t.choice=t.options[Number(input.value)];updatePreview();}));
+  $('conflict').addEventListener('click',simulateConflict);
+  $('rulingForm').addEventListener('submit',event=>{event.preventDefault();openRuling();});
+}
+function updatePreview(){$('preview').disabled=!current().reason.trim()||!current().choice;}
+function openRuling(){
+  const t=current();if(!t||t.status!=='pending'||!t.reason.trim()||!t.choice)return;
+  preview={mode:'ruling',id:t.id,version:t.version,reason:t.reason.trim(),result:t.choice};
+  $('dialogTitle').textContent='确认这项裁定？';
+  $('dialogContent').innerHTML=`<p><strong>${t.id} · ${t.title}</strong><br>校验版本：v${t.version}</p><p><strong>结果：${escapeText(preview.result)}</strong></p><p>理由：${escapeText(preview.reason)}</p><p>影响范围：${t.impact}</p>`;
+  $('dialogHint').textContent='只写入本页示例裁定与日志，不执行真实规则重算，也不向玩家发送消息。';
+  $('dialogConflict').hidden=false;$('confirmAction').textContent='确认提交';$('cancelDialog').textContent='返回修改';dialog.showModal();
+}
+function simulateConflict(){
+  const t=current();if(!t||t.status!=='pending')return;
+  const old=t.version;t.version++;preview=null;
+  if(dialog.open)dialog.close();
+  render();
+  $('notice').textContent=`模拟版本冲突：${t.id} 已从 v${old} 刷新为 v${t.version}。理由和选择已保留，尚未提交。请核对当前证据，重新预览并确认。`;
+  addLog(`${t.id}：模拟版本冲突 v${old} → v${t.version}；保留草稿，未提交裁定。`);
+  announce('版本已刷新，草稿已保留，必须重新确认。');$('reason').focus();
+}
+function openSimple(mode){
+  preview={mode};$('dialogConflict').hidden=true;$('cancelDialog').textContent='取消';
+  if(mode==='advance'){
+    if(pending()||stage!=='discussion')return;
+    $('dialogTitle').textContent='结束自由讨论并进入组织阶段？';
+    $('dialogContent').textContent='主持待办：0 项。请确认当前自由讨论已结束。本次将进入“热气球组织”的只读提示。';
+    $('dialogHint').textContent='亚里沙确定名单或过半同意后由系统自动组织，无主持裁定。本演示不代替玩家完成这些条件，也不继续推进。';
+    $('confirmAction').textContent='确认推进';
+  }else{
+    $('dialogTitle').textContent='重置这个演示？';$('dialogContent').textContent='清除本页的草稿、裁定与操作日志，回到 2 项待裁定的白天自由讨论。';$('dialogHint').textContent='仅影响当前页面，不涉及真实对局或其他原型页面。';$('confirmAction').textContent='确认重置';
+  }
+  dialog.showModal();
+}
+function reset(){tasks=initialTasks();selected='D-021';filter='pending';stage='discussion';preview=null;logs=[{time:'14:34:00',text:'已载入虚构场景：2 项主持待裁定，3 项系统自动已处理记录。'}];$('notice').textContent='';render();renderLogs();}
+$('taskList').addEventListener('click',event=>{const b=event.target.closest('[data-task]');if(!b)return;selected=b.dataset.task;$('notice').textContent='';render();document.querySelector(`[data-task="${selected}"]`).focus();});
+document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;$('notice').textContent='';render();}));
+$('advance').addEventListener('click',()=>openSimple('advance'));
+$('reset').addEventListener('click',()=>openSimple('reset'));
+$('cancelDialog').addEventListener('click',()=>{preview=null;dialog.close();});
+dialog.addEventListener('cancel',()=>{preview=null;});
+$('dialogConflict').addEventListener('click',simulateConflict);
+$('confirmAction').addEventListener('click',()=>{
+  if(!preview)return;
+  const p=preview;
+  if(p.mode==='reset'){dialog.close();reset();announce('演示已重置。');return;}
+  if(p.mode==='advance'){
+    if(pending()||stage!=='discussion')return;
+    stage='organization';preview=null;dialog.close();render();addLog('主持确认推进：白天自由讨论 → 热气球组织。只读提示，不代交玩家操作。');announce('已进入热气球组织只读提示。');$('organization').scrollIntoView({block:'start'});return;
+  }
+  const t=tasks.find(item=>item.id===p.id);
+  if(!t||t.status!=='pending')return;
+  if(t.version!==p.version){preview=null;dialog.close();render();$('notice').textContent='版本不一致，未提交。草稿已保留，请重新预览确认。';return;}
+  if(!p.reason.trim()||!t.options.includes(p.result))return;
+  t.status='done';t.result=p.result;t.reason=p.reason;t.version++;
+  preview=null;dialog.close();$('notice').textContent=`${t.id} 已裁定：${t.result}。仅更新本页虚构记录。`;
+  addLog(`${t.id}：${t.result}；理由：${t.reason}（v${p.version} → v${t.version}）`);render();announce(`裁定已保存，剩余 ${pending()} 项待处理。`);
+  if(pending())document.querySelector('[data-task]').focus();else $('advance').focus();
+});
+reset();
+</script>
+</body>
+</html>
