@@ -820,7 +820,21 @@ def actions_for(game, actor):
         result.append(
             action(
                 "speech.done",
-                "已发言，跳过我的顺序",
+                "本轮不发言（跳过我的顺序）",
+                group="流程",
+                instant=True,
+            )
+        )
+    if (
+        phase == "speech"
+        and sid in game["public"]["speech_order"]
+        and sid not in game.get("speech_passed", [])
+    ):
+        result.append(
+            action(
+                "speech.speak",
+                "提前发言",
+                [field("text", "发言内容", "textarea")],
                 group="流程",
                 instant=True,
             )

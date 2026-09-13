@@ -424,6 +424,7 @@ class SpeechOrder(unittest.TestCase):
             for item in actions_for(game, player(game, "3"))
             if item["id"] == "speech.done"
         )
+        self.assertEqual(early["label"], "本轮不发言（跳过我的顺序）")
         self.assertTrue(early["instant"])
         self.assertFalse(early.get("blocking"))
         command(game, player(game, "3"), "speech.done", {})
@@ -432,6 +433,35 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["public"]["speaker"], "2")
         command(game, player(game, "2"), "speech.done", {})
         self.assertEqual(game["public"]["speaker"], "4")
+
+    def test_a_seat_can_speak_early_and_the_text_is_published(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        speak = next(
+            item
+            for item in actions_for(game, player(game, "4"))
+            if item["id"] == "speech.speak"
+        )
+        self.assertTrue(speak["instant"])
+        self.assertEqual([(f["name"], f["type"]) for f in speak["fields"]], [("text", "textarea")])
+        with self.assertRaises(GameError):
+            command(game, player(game, "4"), "speech.speak", {"text": "   "})
+        events = command(game, player(game, "4"), "speech.speak", {"text": "我提前说完了"})
+        self.assertEqual(
+            [item["text"] for item in events if item["text"].startswith("4号")],
+            ["4号的发言：我提前说完了"],
+        )
+        self.assertIn("4", game["speech_passed"])
+        for sid in ("1", "2"):
+            command(game, player(game, sid), "speech.done", {})
+        command(game, player(game, "3"), "speech.done", {})
+        self.assertEqual(game["public"]["speaker"], "5")
+
+    def test_the_current_speaker_can_publish_its_speech_text_and_move_on(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        command(game, player(game, "1"), "speech.speak", {"text": "我先讲"})
+        self.assertEqual(game["public"]["speaker"], "2")
 
     def test_a_fully_pre_submitted_speech_phase_counts_as_finished(self):
         game = arranged_game("speech")

@@ -950,7 +950,7 @@ def host_command(game, events, action, data):
 PHASE_ACTIONS = {
     "night": {"night.confirm"},
     "night_coco": {"night.confirm"},
-    "speech": {"speech.done"},
+    "speech": {"speech.done", "speech.speak"},
     "balloon": {"balloon.choose"},
     "nomination": {"vote.nominate", "vote.pass"},
     "voting": {"vote.cast"},
@@ -1157,13 +1157,22 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             speech_done(game)
         else:
             require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
-            require(sid not in game.get("speech_passed", []), "你已经确认过发言完毕")
+            require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
             game.setdefault("speech_passed", []).append(sid)
             notify(
                 game,
                 events,
-                f"{sid}号已提前确认发言完毕，轮到其顺序时自动跳过。",
+                f"{sid}号本轮不发言，轮到其顺序时自动跳过。",
             )
+    elif action == "speech.speak":
+        require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
+        require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
+        text = data["text"].strip()
+        require(text, "请先写下发言内容")
+        notify(game, events, f"{sid}号的发言：{text}")
+        game.setdefault("speech_passed", []).append(sid)
+        if sid == game["public"]["speaker"]:
+            speech_done(game)
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
