@@ -51,6 +51,9 @@ def host_tasks(game):
         )
 
     phase = game["phase"]
+    for item in game["pending"]:
+        if item["kind"] == "hiro" and item.get("seat_id"):
+            warn_task("hiro", item["seat_id"], f"{item['seat_id']}号尚未选择是否回溯")
     if phase in {"night", "night_coco"}:
         coco = coco_seat(game) if phase == "night" else None
         for sid in game["night"]["actors"]:

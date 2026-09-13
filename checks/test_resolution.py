@@ -436,6 +436,91 @@ class PlaytestFixes(unittest.TestCase):
         self.assertEqual(game_view(game, player(game, "1"))["ready_count"], 2)
 
 
+class HostFreeAdjudication(unittest.TestCase):
+    def test_real_day_skill_settles_without_a_host_step(self):
+        game = arranged_game()
+        command(game, player(game, "4"), "day.skill", {"ability": "love", "target": "3"})
+        self.assertEqual(game["pending"], [])
+        declaration = game["declarations"][0]
+        self.assertFalse(declaration["fake"])
+        self.assertTrue(declaration["executed"])
+        self.assertEqual(declaration["status"], "open")
+        self.assertEqual(
+            game["cards"]["marg"]["states"]["madness_target"], game["seats"][2]["cards"][0]
+        )
+        self.assertIn("day.challenge", [item["id"] for item in actions_for(game, player(game, "1"))])
+
+    def test_disguised_day_skill_still_waits_for_the_host(self):
+        game = arranged_game()
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        command(game, player(game, "7"), "day.skill", {"ability": "love", "target": "3"})
+        item = next(p for p in game["pending"] if p["kind"] == "declaration")
+        declaration = game["declarations"][0]
+        self.assertTrue(declaration["fake"])
+        self.assertFalse(declaration["executed"])
+        self.assertEqual(item["declaration_id"], declaration["id"])
+        self.assertNotIn("madness_target", game["cards"]["marg"]["states"])
+        command(game, HOST, "host.resolve", {"pending_id": item["id"], "outcome": "execute"})
+        self.assertTrue(game["declarations"][0]["executed"])
+
+    def test_day_declarations_close_when_the_day_ends(self):
+        game = arranged_game()
+        command(game, player(game, "4"), "day.skill", {"ability": "love", "target": "3"})
+        game["pending"] = []
+        game.update(phase="night_results", half="night")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "speech")
+        self.assertEqual(game["declarations"][0]["status"], "complete")
+        self.assertNotIn("day.challenge", [item["id"] for item in actions_for(game, player(game, "1"))])
+
+    def test_hiro_decides_his_own_rewind(self):
+        game = arranged_game()
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["hiro"], "effect": "death", "source": "coco", "reason": "测试希罗回溯"},
+        )
+        item = next(p for p in game["pending"] if p["kind"] == "hiro")
+        self.assertEqual(item["seat_id"], "2")
+        actions = [entry["id"] for entry in actions_for(game, player(game, "2"))]
+        self.assertEqual(actions[0], "hiro.decline")
+        self.assertNotIn("hiro.decline", [entry["id"] for entry in actions_for(game, player(game, "1"))])
+        command(game, player(game, "2"), "hiro.decline")
+        self.assertFalse(any(p["kind"] == "hiro" for p in game["pending"]))
+        self.assertFalse(game["cards"]["hiro"]["alive"])
+
+    def test_the_host_todo_asks_to_warn_a_waiting_hiro(self):
+        game = arranged_game()
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["hiro"], "effect": "death", "source": "coco", "reason": "测试希罗回溯"},
+        )
+        titles = [task["title"] for task in game_view(game, HOST)["host"]["tasks"]]
+        self.assertIn("2号尚未选择是否回溯", titles)
+
+    def test_hiro_can_rewind_to_the_previous_day_same_phase(self):
+        game = arranged_game()
+        game.update(day=1, phase="discussion")
+        save_snapshot(game)
+        game.update(day=2, phase="discussion")
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["hiro"], "effect": "death", "source": "coco", "reason": "测试希罗回溯"},
+        )
+        labels = [entry["label"] for entry in actions_for(game, player(game, "2"))]
+        self.assertIn("按预结算继续（不回溯）", labels)
+        self.assertTrue(any(label.startswith("回溯到前一天同一时点") for label in labels))
+        command(game, player(game, "2"), "hiro.rewind")
+        self.assertEqual(game["day"], 1)
+        self.assertTrue(game["spiritual"]["hiro_used"]["normal"])
+        self.assertTrue(game["cards"]["hiro"]["alive"])
+
+
 class SpeechOrder(unittest.TestCase):
     def test_speech_start_and_direction_build_the_two_documented_orders(self):
         game = arranged_game("speech")

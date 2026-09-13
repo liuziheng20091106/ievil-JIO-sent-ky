@@ -6,12 +6,14 @@ from .state import (
     can_use_card,
     current,
     eligible_voters,
+    hiro_dilemma,
     lost_by_challenge,
     pending_nominators,
     owner,
     player_seat,
     present,
     role_card,
+    snapshot_for,
 )
 
 
@@ -629,6 +631,21 @@ def actions_for(game, actor):
     sid = s["id"]
     card = current(game, s)
     result = []
+    dilemma = hiro_dilemma(game, sid)
+    if dilemma:
+        snap = snapshot_for(game, dilemma)
+        if snap:
+            result.append(
+                action(
+                    "hiro.rewind",
+                    f"回溯到前一天同一时点（{snap['label']}）",
+                    group="流程",
+                    blocking=True,
+                )
+            )
+        result.append(
+            action("hiro.decline", "按预结算继续（不回溯）", group="流程", blocking=True)
+        )
     if game["status"] == "lobby":
         if game["phase"] == "ordering" and not s["ready"]:
             result.append(

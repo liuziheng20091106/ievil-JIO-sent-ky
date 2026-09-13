@@ -234,6 +234,47 @@ def create_game(codex):
 SNAPSHOT_EXCLUDED = {"id", "version", "snapshots", "information", "spiritual", "seats"}
 
 
+def hiro_pending(game, events, mode, preview=None, phase=None):
+    """希罗即将出局：选择权交回本人，主持人只处理前一天同一时点之外的裁定。"""
+    sid = owner(game, "hiro")["id"]
+    pending(
+        game,
+        "hiro",
+        "希罗即将出局：等待本人选择回溯或继续",
+        mode=mode,
+        seat_id=sid,
+        expected_day=game["day"] - 1,
+        expected_phase=game["phase"] if phase is None else phase,
+        preview=preview,
+    )
+    notify(
+        game,
+        events,
+        "你庇护后仍会出局：可以回溯到前一天同一时点，或在行动面板选择按预结算继续。",
+        [sid],
+        "希罗回溯",
+    )
+
+
+def hiro_dilemma(game, seat_id):
+    """希罗即将出局时挂起的回溯选择；由本人作答，主持人只在特殊时点介入。"""
+    return next(
+        (p for p in game["pending"] if p["kind"] == "hiro" and p.get("seat_id") == seat_id), None
+    )
+
+
+def snapshot_for(game, item):
+    """希罗的合法回溯点：前一天的同一时点。其他时点仍由主持人裁定。"""
+    return next(
+        (
+            snap
+            for snap in game["snapshots"]
+            if snap["day"] == item["expected_day"] and snap["phase"] == item["expected_phase"]
+        ),
+        None,
+    )
+
+
 def save_snapshot(game):
     label = f"第{game['day']}天 · {game['phase']}"
     state = {k: deepcopy(v) for k, v in game.items() if k not in SNAPSHOT_EXCLUDED}

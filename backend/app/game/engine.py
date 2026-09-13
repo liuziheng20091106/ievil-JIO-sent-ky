@@ -27,6 +27,8 @@ from .state import (
     deal_cards,
     eligible_voters,
     finish,
+    hiro_dilemma,
+    hiro_pending,
     living,
     lost_by_challenge,
     pending_nominators,
@@ -41,6 +43,7 @@ from .state import (
     role_card,
     save_snapshot,
     seat,
+    snapshot_for,
     uid,
 )
 
@@ -157,16 +160,7 @@ def apply_damage(game, events, preview, allow_reaction=True):
         and not game["spiritual"]["hiro_used"][mode]
         and any(d["target_card"] == "hiro" for d in preview["deaths"])
     ):
-        pending(
-            game,
-            "hiro",
-            "希罗即将出局：裁定回溯或按预结算继续",
-            mode=mode,
-            seat_id=owner(game, "hiro")["id"],
-            expected_day=game["day"] - 1,
-            expected_phase=game["phase"],
-            preview=preview,
-        )
+        hiro_pending(game, events, mode, preview=preview)
     else:
         death_batch(game, events, preview)
 
@@ -425,6 +419,11 @@ def advance(game, events):
         game["vote_rounds"] = []
         game["execution"] = []
         game["balloon_proposal"] = None
+        for declaration in game["declarations"]:
+            if declaration["status"] == "open":
+                declaration["status"] = "complete"
+        game["pending"] = [p for p in game["pending"] if not p.get("declaration_id")]
+        sync_declarations(game)
     elif phase == "speech":
         require(game["public"]["speaker"] is None, "仍有顺序发言未完成，请玩家确认或警告超时")
         game["phase"] = "discussion"
@@ -1093,16 +1092,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             "executed": False,
         }
         game["declarations"].append(d)
-        if ability == "balloon":
-            # 造热气球不需要主持人审批：声明后立即开始收集，质疑窗口开到结算为止。
-            execute_declaration(game, events, d)
-        else:
+        if fake:
+            # 规则九：伪装能不能成立、按什么结算由主持人裁定，仍保留主持人判定点。
             pending(
                 game,
                 "declaration",
-                f"{sid}号声明{DAY_ABILITIES[ability][1]}：{'伪装，按主持人裁定执行' if fake else '真实技能'}",
+                f"{sid}号声称{DAY_ABILITIES[ability][1]}（伪装）：裁定是否按真实流程结算",
                 declaration_id=d["id"],
             )
+        else:
+            # 真实技能（含热气球）按技能条目直接结算，声明保持开放以保留质疑窗口。
+            execute_declaration(game, events, d)
         sync_declarations(game)
         notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。", alert=True)
     elif action == "day.challenge":
@@ -1268,6 +1268,21 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         require(sid not in proposal["votes"], "你已经表决过这份名单")
         proposal["votes"][sid] = action == "balloon.agree"
         resolve_balloon_proposal(game, events)
+    elif action == "hiro.decline":
+        item = hiro_dilemma(game, sid)
+        require(item is not None, "当前没有等待你决定的重溯")
+        game["pending"] = [p for p in game["pending"] if p["id"] != item["id"]]
+        if item.get("preview"):
+            apply_damage(game, events, item["preview"], allow_reaction=False)
+        else:
+            notify(game, events, "按预结算继续。", [sid], "希罗回溯")
+    elif action == "hiro.rewind":
+        item = hiro_dilemma(game, sid)
+        require(item is not None, "当前没有等待你决定的重溯")
+        snap = snapshot_for(game, item)
+        require(snap is not None, "前一天同一时点没有可用快照，请由主持人裁定")
+        rewind(game, snap["id"], events, item["mode"])
+        return
     elif action == "photo.permission":
         photo = next(p for p in game["photos"] if p["id"] == data["photo_id"])
         photo["allowed"] = bool(data.get("allow"))
@@ -1391,7 +1406,13 @@ def expire_warnings(game, now=None):
     events = []
     for sid in expired:
         phase = game["phase"]
-        if phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
+        hiro = hiro_dilemma(game, sid)
+        if hiro:
+            game["pending"] = [p for p in game["pending"] if p["id"] != hiro["id"]]
+            if hiro.get("preview"):
+                apply_damage(game, events, hiro["preview"], allow_reaction=False)
+            notify(game, events, "警告到期，按预结算继续。", [sid], "希罗回溯")
+        elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
             clear_seat_actions(game, sid)
             game["night"]["confirmed"].append(sid)
             if game["night"]["actors"].get(sid) == "noah":

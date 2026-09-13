@@ -8,6 +8,7 @@ from .state import (
     check_winner,
     current,
     half_key,
+    hiro_pending,
     move_hanna,
     notify,
     owner,
@@ -277,15 +278,7 @@ def prepare_night_preview(game):
     ):
         mode = "witch" if role_card(game, "hiro")["witch"] else "normal"
         if not game["spiritual"]["hiro_used"][mode]:
-            pending(
-                game,
-                "hiro",
-                "希罗庇护后仍会死亡：裁定是否回溯及对应时间点",
-                mode=mode,
-                seat_id=owner(game, "hiro")["id"],
-                expected_day=game["day"] - 1,
-                expected_phase="night",
-            )
+            hiro_pending(game, [], mode, phase="night")
             night["reactions"].append("hiro")
 
 
