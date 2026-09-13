@@ -583,6 +583,10 @@ function Room({
     (item) => item.blocking && item.action !== "host.advance",
   );
   const actor = state.public.current_actor;
+  const revealActions = () => {
+    setTab("actions");
+    setSide("actions");
+  };
   const pick = (
     id: string,
     payload?: Record<string, unknown>,
@@ -700,7 +704,7 @@ function Room({
           className={`urgent-banner ${
             state.self.warning_deadline ? "warned" : ""
           }`}
-          onClick={() => setTab("actions")}
+          onClick={revealActions}
         >
           <strong>
             {urgent.length
