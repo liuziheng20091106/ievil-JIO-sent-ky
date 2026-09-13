@@ -529,6 +529,26 @@ function CreateGame({
   );
 }
 
+const phaseHints: Record<string, string> = {
+  lobby: "用本局邀请码入席并点「准备」；七人全部准备后系统自动发牌。",
+  ordering: "私下选定上层牌后再次「准备」；七人齐全由主持人开局。",
+  witch:
+    "系统检测本日魔女化并私下通知被选中的人；无人需要操作，稍候自动进入夜晚。",
+  night:
+    "有夜间技能的席位私下选目标并「确认已选行动」；没有技能的席位已自动放弃。",
+  night_coco: "魔女可可在参考已确认的夜间行动后最后提交；其他席位等待。",
+  night_review: "主持人审阅预结算、处理待裁定事项，然后公布夜间结果。",
+  night_results: "主持人公布死亡与证物；本夜出局者可在此阶段提交遗留证物。",
+  speech: "按发言顺序依次出声；轮到你时说完点「结束本次发言」交给下一位。",
+  discussion: "自由讨论；主持人认为讨论充分后推进到热气球。",
+  balloon: "热气球参与者私下提交「制作」或「破坏」；其他人等待。",
+  nomination:
+    "各自提名一个席位或「放弃本次提名」，可提前提交；进入本阶段时先前提名自动确认。",
+  voting: "对当前候选投同意／不同意／弃票；提名过该候选的人已自动投同意。",
+  execution: "被处决席位确认临刑行动（奈乃香可临刑开枪）；其他席位等待。",
+  dusk: "主持人确认胜负与结算效果，然后进入下一夜。",
+};
+
 function Room({
   onRole,
   onNewGame,
@@ -611,6 +631,10 @@ function Room({
     (item) => item.blocking && item.action !== "host.advance",
   );
   const actor = state.public.current_actor;
+  const hint =
+    state.status === "playing" || state.status === "lobby"
+      ? phaseHints[state.phase]
+      : undefined;
   const revealActions = () => {
     setTab("actions");
     setSide("actions");
@@ -676,6 +700,12 @@ function Room({
             </span>
             <h1>{state.phase_label}</h1>
           </div>
+          {hint && (
+            <p className="phase-hint">
+              <span className="eyebrow">现在做什么</span>
+              {hint}
+            </p>
+          )}
         </div>
         <div className="phase-meta">
           {actor && (

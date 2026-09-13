@@ -690,6 +690,21 @@ progress {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.phase-hint {
+  margin: 0;
+  max-width: 44ch;
+  padding-left: 16px;
+  border-left: 1px solid #40344c;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #b0a3bc;
+}
+.phase-hint .eyebrow {
+  display: block;
+  margin: 0 0 2px;
+  font-size: 10px;
+  color: var(--gold);
+}
 .connection {
   display: inline-flex;
   align-items: center;
@@ -2243,6 +2258,14 @@ button.tiny {
   .phase-title {
     gap: 10px;
     min-width: 0;
+    flex-wrap: wrap;
+  }
+  .phase-hint {
+    flex-basis: 100%;
+    max-width: none;
+    padding: 6px 0 0;
+    border-left: 0;
+    border-top: 1px solid #40344c;
   }
   .phase-symbol {
     font-size: 30px;
