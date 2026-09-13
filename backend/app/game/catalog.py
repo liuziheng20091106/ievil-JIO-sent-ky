@@ -118,6 +118,19 @@ PHASES = {
     "execution": "处决前响应",
     "dusk": "天黑与胜负确认",
 }
+
+# 系统自己知道做完的阶段：无人待办时倒计时到点自动进入下一阶段，主持人可暂停。
+AUTO_PHASES = {
+    "witch",
+    "night",
+    "night_coco",
+    "speech",
+    "balloon",
+    "nomination",
+    "voting",
+    "execution",
+}
+AUTO_ADVANCE_DELAY = 5
 DAY_ABILITIES = {
     "interrupt": ("emma", "打断发言"),
     "last_speaker": ("emma", "改为最后发言"),

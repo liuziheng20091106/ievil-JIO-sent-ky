@@ -1,9 +1,17 @@
 """Observable edge cases for simultaneous resolution and host adjudication."""
 
 from copy import deepcopy
+from time import time
 import unittest
 
-from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
+from backend.app.game import (
+    DEFAULT_CODEX,
+    GameError,
+    apply_command,
+    create_game,
+    game_view,
+    run_auto_advance,
+)
 from backend.app.game.actions import actions_for
 from backend.app.game.resolution import begin_night, damage_preview, death_batch, revive
 from backend.app.game.state import check_winner, pending, rewind, save_snapshot
@@ -408,6 +416,51 @@ class SpeechOrder(unittest.TestCase):
             if item["id"] == "host.speech"
         )
         self.assertEqual(default["fields"][0]["default"], "1")
+
+
+class AutoAdvance(unittest.TestCase):
+    """玩家行动完的阶段由系统倒计时推进；自由发言这类仍等主持人。"""
+
+    def finished_speech(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        for sid in list(game["public"]["speech_order"]):
+            command(game, player(game, sid), "speech.done", {})
+        return game
+
+    def test_speech_advances_itself_five_seconds_after_the_last_speaker(self):
+        game = self.finished_speech()
+        self.assertIsNone(game["public"]["speaker"])
+        deadline = game["public"]["auto_advance_at"]
+        self.assertIsNotNone(deadline)
+        run_auto_advance(game, deadline - 1)
+        self.assertEqual(game["phase"], "speech")
+        run_auto_advance(game, deadline + 1)
+        self.assertEqual(game["phase"], "discussion")
+        self.assertNotIn("auto_advance_at", game["public"])
+
+    def test_the_host_can_pause_and_restore_the_countdown(self):
+        game = self.finished_speech()
+        command(game, HOST, "host.auto", {})
+        self.assertTrue(game["public"]["auto_advance_off"])
+        self.assertNotIn("auto_advance_at", game["public"])
+        run_auto_advance(game, time() + 60)
+        self.assertEqual(game["phase"], "speech")
+        command(game, HOST, "host.auto", {})
+        self.assertFalse(game["public"]["auto_advance_off"])
+        self.assertIsNotNone(game["public"]["auto_advance_at"])
+
+    def test_pending_rulings_and_free_discussion_never_advance_themselves(self):
+        game = self.finished_speech()
+        deadline = game["public"]["auto_advance_at"]
+        pending(game, "reaction", "夜前互动裁定", seat_id="1")
+        run_auto_advance(game, deadline + 1)
+        self.assertEqual(game["phase"], "speech")
+        self.assertNotIn("auto_advance_at", game["public"])
+        discussion = arranged_game("discussion")
+        command(discussion, HOST, "host.water", {"seat_id": "1"})
+        self.assertNotIn("auto_advance_at", discussion["public"])
+        self.assertNotIn("host.auto", [item["id"] for item in actions_for(discussion, HOST)])
 
 
 if __name__ == "__main__":

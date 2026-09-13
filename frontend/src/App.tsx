@@ -620,8 +620,8 @@ function Room({
     payload?: Record<string, unknown>,
     values?: Record<string, unknown>,
   ) => setRequest({ id, payload, values, token: Date.now() });
-  const advance = async () => {
-    const action = state.actions.find((item) => item.id === "host.advance");
+  const runHost = async (id: string) => {
+    const action = state.actions.find((item) => item.id === id);
     if (!action) return;
     setOpening(true);
     try {
@@ -632,6 +632,8 @@ function Room({
       setOpening(false);
     }
   };
+  const autoToggle = state.actions.find((item) => item.id === "host.auto");
+  const autoPaused = state.public.auto_advance_off === true;
   const tabs: { id: Tab; label: string; count?: number; urgent?: boolean }[] = [
     { id: "chat", label: "聊天" },
     { id: "table", label: "桌面" },
@@ -699,6 +701,10 @@ function Room({
                   : "离线 · 正在恢复"}
           </span>
           <Countdown deadline={state.deadline} label="阶段计时" />
+          <Countdown
+            deadline={state.public.auto_advance_at ?? null}
+            label="自动推进"
+          />
           {isHost && (
             <button
               className="primary advance-button"
@@ -708,13 +714,27 @@ function Room({
                   ? `还有 ${blockingTasks.length} 项待处理，见「裁决」列表`
                   : "结算并推进到下一阶段"
               }
-              onClick={() => void advance()}
+              onClick={() => void runHost("host.advance")}
             >
               {opening
                 ? "推进中…"
                 : blockingTasks.length
                   ? `还有 ${blockingTasks.length} 项待处理`
                   : "完成当前阶段 / 推进"}
+            </button>
+          )}
+          {isHost && autoToggle && (
+            <button
+              className="quiet auto-toggle"
+              disabled={busy || opening}
+              title={
+                autoPaused
+                  ? "恢复后：无人待办时 5 秒自动进入下一阶段"
+                  : "暂停后本阶段只由主持人手动推进"
+              }
+              onClick={() => void runHost("host.auto")}
+            >
+              {autoPaused ? "恢复自动推进" : "暂停自动推进"}
             </button>
           )}
           {isHost && (

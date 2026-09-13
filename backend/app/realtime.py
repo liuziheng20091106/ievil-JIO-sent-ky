@@ -9,7 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from . import auth, storage, views
-from .game import expire_warnings
+from .game import expire_warnings, run_auto_advance
 
 logger = logging.getLogger(__name__)
 # ponytail: one room and one worker; use per-room locks if concurrent games are added.
@@ -233,6 +233,7 @@ async def clock():
                         game = storage.load_game(db, game_id)
                         previous = game["version"]
                         events = expire_warnings(game, time.time())
+                        events += run_auto_advance(game, time.time())
                         changed = game["version"] != previous
                         if changed:
                             storage.save_game(db, game)

@@ -173,7 +173,11 @@ export interface GameView {
   };
   actions: UIAction[];
   information: Information[];
-  public: { current_actor?: CurrentActor } & Record<string, unknown>;
+  public: {
+    current_actor?: CurrentActor;
+    auto_advance_at?: number | null;
+    auto_advance_off?: boolean;
+  } & Record<string, unknown>;
   host?: {
     codex: string[];
     pending: Record<string, unknown>[];

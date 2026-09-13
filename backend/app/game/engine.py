@@ -5,7 +5,7 @@ from random import SystemRandom
 from time import time
 
 from .actions import actions_for, can_day_ability, night_abilities, outstanding_seats
-from .catalog import DAY_ABILITIES, PHASES, ROLES
+from .catalog import AUTO_ADVANCE_DELAY, AUTO_PHASES, DAY_ABILITIES, PHASES, ROLES
 from .resolution import (
     begin_night,
     damage_preview,
@@ -727,6 +727,16 @@ def host_command(game, events, action, data):
         notify(game, events, "所有上下牌已锁定，对局开始。")
     elif action == "host.advance":
         advance(game, events)
+    elif action == "host.auto":
+        paused = not game["public"].get("auto_advance_off")
+        game["public"]["auto_advance_off"] = paused
+        notify(
+            game,
+            events,
+            "已暂停自动推进，本阶段改由主持人手动推进。"
+            if paused
+            else "已恢复自动推进，无人待办时 5 秒后自动进入下一阶段。",
+        )
     elif action == "host.resolve":
         resolve_pending(game, events, data)
     elif action == "host.codex":
@@ -1230,6 +1240,45 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
             alert=True,
         )
+    sync_auto_advance(game)
+    game["version"] += 1
+    return events
+
+
+def auto_advance_ready(game):
+    """玩家行动完即可推进的阶段由系统计时，主持人只需处理待裁定事项。"""
+    return (
+        game["status"] == "playing"
+        and game["phase"] in AUTO_PHASES
+        and not game["pending"]
+        and not game["public"].get("auto_advance_off")
+        and not outstanding_seats(game)
+    )
+
+
+def sync_auto_advance(game):
+    """没人在等的时候开始 5 秒倒计时；有人又卡住时撤销倒计时。"""
+    if auto_advance_ready(game):
+        game["public"].setdefault("auto_advance_at", time() + AUTO_ADVANCE_DELAY)
+    else:
+        game["public"].pop("auto_advance_at", None)
+
+
+def run_auto_advance(game, now=None):
+    """倒计时到点时替主持人推进；条件不成立或推进被拒时撤销倒计时。"""
+    now = time() if now is None else now
+    deadline = game["public"].get("auto_advance_at")
+    if not deadline or deadline > now or game["status"] != "playing":
+        return []
+    events = []
+    if auto_advance_ready(game):
+        try:
+            advance(game, events)
+            sync_auto_advance(game)
+        except GameError:
+            game["public"].pop("auto_advance_at", None)
+    else:
+        game["public"].pop("auto_advance_at", None)
     game["version"] += 1
     return events
 
@@ -1270,5 +1319,6 @@ def expire_warnings(game, now=None):
     ):
         settle_balloon(game, events)
     game["deadline"] = min(game["warnings"].values(), default=None)
+    sync_auto_advance(game)
     game["version"] += 1
     return events

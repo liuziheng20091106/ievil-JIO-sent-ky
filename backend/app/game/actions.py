@@ -1,6 +1,6 @@
 """Privacy-safe action descriptors, also used as authoritative input grammar."""
 
-from .catalog import DAY_ABILITIES, NIGHT_ABILITIES, ROLES
+from .catalog import AUTO_PHASES, DAY_ABILITIES, NIGHT_ABILITIES, ROLES
 from .resolution import coco_seat, target_allowed
 from .state import (
     can_use_card,
@@ -398,6 +398,15 @@ def host_actions(game):
     )
     if game["status"] == "playing":
         outstanding = outstanding_seats(game)
+        if game["phase"] in AUTO_PHASES:
+            paused = bool(game["public"].get("auto_advance_off"))
+            result.append(
+                action(
+                    "host.auto",
+                    "恢复自动推进" if paused else "暂停自动推进",
+                    group="流程",
+                )
+            )
         if outstanding:
             result.append(
                 action(

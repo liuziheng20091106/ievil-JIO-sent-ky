@@ -37,11 +37,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
   const activeId = channel?.id ?? "public";
   const feed = useRef<string | null>(null);
   feed.current = state?.id ?? null;
-  const scope = draftKey(
-    state?.id ?? null,
-    session.actor?.id ?? null,
-    "chat",
-  );
+  const scope = draftKey(state?.id ?? null, session.actor?.id ?? null, "chat");
   const [draft, setDraft, clearDraft, draftError] = useDraft(scope, "");
   const rows = messages;
   const lastId = rows.at(-1)?.id ?? 0;
