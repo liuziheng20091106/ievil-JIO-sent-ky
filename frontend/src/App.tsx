@@ -649,12 +649,12 @@ function Room({
     payload?: Record<string, unknown>,
     values?: Record<string, unknown>,
   ) => setRequest({ id, payload, values, token: Date.now() });
-  const runHost = async (id: string) => {
+  const runHost = async (id: string, payload: Record<string, unknown> = {}) => {
     const action = state.actions.find((item) => item.id === id);
     if (!action) return;
     setOpening(true);
     try {
-      await command(action, {}, state.version);
+      await command(action, payload, state.version);
     } catch (failure) {
       setError(errorText(failure));
     } finally {
@@ -915,11 +915,18 @@ function Room({
         </div>
         <div className="side-scroll">
           <div className="actions-surface">
-            {isHost && state.host && <HostTasks onPick={pick} />}
+            {isHost && state.host && (
+              <HostTasks
+                onPick={pick}
+                onWarn={(seatId) =>
+                  void runHost("host.warn", { seat_id: seatId })
+                }
+              />
+            )}
             {isHost && (
               <NightLedger
                 onWarn={(seatId) =>
-                  pick("host.warn", undefined, { seat_id: seatId })
+                  void runHost("host.warn", { seat_id: seatId })
                 }
               />
             )}
@@ -1329,12 +1336,14 @@ const taskLabels: Record<string, string> = {
 
 function HostTasks({
   onPick,
+  onWarn,
 }: {
   onPick: (
     id: string,
     payload?: Record<string, unknown>,
     values?: Record<string, unknown>,
   ) => void;
+  onWarn: (seatId: string) => void;
 }) {
   const { state } = useGame();
   const tasks = state?.host?.tasks ?? [];
@@ -1374,22 +1383,22 @@ function HostTasks({
             {Boolean(task.seats.length) && (
               <p className="hint">涉及席位：{task.seats.join("、")}</p>
             )}
-            {task.action && (
-              <button
-                className="primary"
-                onClick={() =>
-                  onPick(
-                    task.action!,
-                    task.payload,
-                    task.kind === "night"
-                      ? { seat_id: task.seats[0] }
-                      : undefined,
-                  )
-                }
-              >
-                {goto[task.kind] ?? "前往处理"}
-              </button>
-            )}
+            {task.action &&
+              (task.action === "host.warn" && task.seats.length ? (
+                <button
+                  className="primary"
+                  onClick={() => onWarn(task.seats[0])}
+                >
+                  警告30秒
+                </button>
+              ) : (
+                <button
+                  className="primary"
+                  onClick={() => onPick(task.action!, task.payload)}
+                >
+                  {goto[task.kind] ?? "前往处理"}
+                </button>
+              ))}
           </article>
         ))
       ) : (
