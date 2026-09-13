@@ -27,6 +27,10 @@ start.cmd
 
 主持人登录使用固定密码，见 `backend/app/api.py`。
 
+## 反向代理
+
+服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。提交类接口会校验同源，代理需要把原始 `Host` 透传给后端（`proxy_set_header Host $host;`）或补上 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；代理不在本机时再用 `start.cmd --trusted-proxies <代理地址>`（或环境变量 `GAME_TRUSTED_PROXIES`）声明可信代理，代理地址不固定可写 `*`。
+
 ## 检查
 
 ```cmd

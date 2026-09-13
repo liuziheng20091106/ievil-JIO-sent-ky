@@ -16,19 +16,31 @@ def secret_hash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def forwarded(connection, header):
+    """反向代理可能改写 Host/scheme，取 X-Forwarded-* 的第一个值当作对外值。"""
+    value = connection.headers.get(header)
+    return value.split(",")[0].strip() if value else ""
+
+
 def same_origin(connection):
-    origin = connection.headers.get("origin")
-    if connection.headers.get("sec-fetch-site") == "cross-site":
+    site = connection.headers.get("sec-fetch-site")
+    if site == "cross-site":
         return False
+    origin = connection.headers.get("origin")
     if not origin:
         return connection.scope["type"] != "websocket"
+    if site == "same-origin":
+        # 浏览器自己判定为同源，代理改写 Host 或终结 TLS 都不影响。
+        return True
     parsed = urlsplit(origin)
-    scheme = {"ws": "http", "wss": "https"}.get(connection.url.scheme, connection.url.scheme)
-    return (
-        parsed.scheme == scheme
-        and parsed.scheme in ("http", "https")
-        and parsed.netloc.lower() == connection.headers.get("host", "").lower()
-    )
+    if parsed.scheme not in ("http", "https"):
+        return False
+    scheme = forwarded(connection, "x-forwarded-proto") or {
+        "ws": "http",
+        "wss": "https",
+    }.get(connection.url.scheme, connection.url.scheme)
+    host = forwarded(connection, "x-forwarded-host") or connection.headers.get("host", "")
+    return parsed.scheme == scheme and parsed.netloc.lower() == host.lower()
 
 
 def token_hash(connection):

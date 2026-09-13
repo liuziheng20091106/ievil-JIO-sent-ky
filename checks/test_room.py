@@ -500,6 +500,56 @@ class HostWorkbench(unittest.TestCase):
         self.assertEqual(actor["seat_id"], "1")
 
 
+class ProxyOrigin(unittest.TestCase):
+    """反向代理改写了 Host/scheme 时，同源校验仍要放行本站提交。"""
+
+    def login(self, client, headers):
+        return client.post(
+            "/api/host/login",
+            json={"password": "114514"},
+            headers=headers,
+        )
+
+    def test_browser_reported_same_origin_survives_a_tls_terminating_proxy(self):
+        with TestClient(app) as client:
+            response = self.login(
+                client,
+                {
+                    "Origin": "https://game.example.com",
+                    "Host": "127.0.0.1:8000",
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "game.example.com",
+                    "Sec-Fetch-Site": "same-origin",
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+    def test_relying_on_forwarded_host_alone_still_passes(self):
+        with TestClient(app) as client:
+            response = self.login(
+                client,
+                {
+                    "Origin": "https://game.example.com",
+                    "Host": "127.0.0.1:8000",
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "game.example.com, inner",
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+    def test_cross_site_and_mismatched_origins_stay_forbidden(self):
+        with TestClient(app) as client:
+            cross_site = self.login(
+                client,
+                {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+            )
+            self.assertEqual(cross_site.status_code, 403, cross_site.text)
+            mismatched = self.login(client, {"Origin": "https://evil.example"})
+            self.assertEqual(mismatched.status_code, 403, mismatched.text)
+            no_origin = client.post("/api/host/login", json={"password": "114514"})
+            self.assertEqual(no_origin.status_code, 200, no_origin.text)
+
+
 class FrontendDelivery(unittest.TestCase):
     def test_index_html_revalidates_while_hashed_assets_stay_cached(self):
         dist = storage.PROJECT_ROOT / "frontend" / "dist"
