@@ -17,6 +17,7 @@ from .resolution import (
     begin_night,
     damage_preview,
     death_batch,
+    eliminate_seat,
     information,
     lock_night,
     prepare_night_preview,
@@ -1149,16 +1150,12 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         else:
             if s["occupant_id"] not in game["spiritual"]["personal_losses"]:
                 game["spiritual"]["personal_losses"].append(s["occupant_id"])
-            if card:
-                apply_damage(
-                    game,
-                    events,
-                    damage_preview(
-                        game,
-                        [{"target_card": card["id"], "cause": "challenge", "unconditional": True}],
-                    ),
-                )
-            notify(game, events, f"{sid}号质疑失败，因犯规出局且本局个人判负。", alert=True)
+            eliminate_seat(
+                game,
+                events,
+                s,
+                f"{sid}号质疑失败，两张角色牌直接出局，本局个人判负。",
+            )
         sync_declarations(game)
     elif action == "honoka.disguise":
         hc = game["cards"]["honoka"]

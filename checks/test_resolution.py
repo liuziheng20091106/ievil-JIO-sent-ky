@@ -336,8 +336,15 @@ class PlaytestFixes(unittest.TestCase):
         self.assertIn(
             "day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))]
         )
+        challenged_cards = list(game["seats"][2]["cards"])
         command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
-        self.assertFalse(game["cards"]["meruru"]["alive"])
+        # 质疑失败整席出局：两张牌一起作废，跳过亡语、回溯、证物与疑似凶手
+        self.assertEqual(
+            [game["cards"][card_id]["alive"] for card_id in challenged_cards],
+            [False, False],
+        )
+        self.assertEqual(game["pending"], [])
+        self.assertIsNone(game_view(game, player(game, "3"))["self"]["current_card_id"])
         self.assertIn("p3", game["spiritual"]["personal_losses"])
         self.assertEqual(game["declarations"][0]["status"], "open")
         self.assertNotIn(

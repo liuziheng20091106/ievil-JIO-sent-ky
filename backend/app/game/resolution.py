@@ -309,6 +309,27 @@ def night_damage(game):
     return preview, {d["target_card"] for d in preview["deaths"]}
 
 
+def eliminate_seat(game, events, seat, notice):
+    """整席出局：两张牌直接作废，不触发出局流程（亡语、回溯、证物、疑似凶手等）。"""
+    for card_id in seat["cards"]:
+        game["cards"][card_id]["alive"] = False
+        game["deaths"].append(
+            {
+                "id": uid(),
+                "day": game["day"],
+                "half": game["half"],
+                "seat_id": seat["id"],
+                "target_card": card_id,
+                "cause": "challenge",
+            }
+        )
+    if set(seat["cards"]) & {"sherry", "hanna"} and game.get("day_binding"):
+        game["day_binding"]["intact"] = False
+    game["half_exits"][seat["id"]] = half_key(game)
+    notify(game, events, notice, alert=True)
+    check_winner(game)
+
+
 def death_batch(game, events, preview):
     for cid, injured in preview["injured"].items():
         game["cards"][cid]["injured"] = injured
