@@ -537,6 +537,32 @@ class ProxyOrigin(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 200, response.text)
 
+    def test_explicitly_allowed_origin_passes_without_other_signals(self):
+        with TestClient(app) as client:
+            for origin in (
+                "https://super.tkcloud.online",
+                "https://super.tkcloud.online:8443",
+                "http://super.tkcloud.online",
+            ):
+                response = self.login(client, {"Origin": origin})
+                self.assertEqual(response.status_code, 200, f"{origin}: {response.text}")
+            other = self.login(client, {"Origin": "https://other.example"})
+            self.assertEqual(other.status_code, 403, other.text)
+
+    def test_allowed_origins_can_be_overridden_and_still_deny_cross_site(self):
+        with patch.dict("os.environ", {"GAME_ALLOWED_ORIGINS": "https://other.example, local.test"}):
+            with TestClient(app) as client:
+                other = self.login(client, {"Origin": "https://other.example"})
+                self.assertEqual(other.status_code, 200, other.text)
+                local = self.login(client, {"Origin": "http://local.test"})
+                self.assertEqual(local.status_code, 200, local.text)
+                dropped = self.login(client, {"Origin": "https://super.tkcloud.online"})
+                self.assertEqual(dropped.status_code, 403, dropped.text)
+                cross = self.login(
+                    client, {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+                )
+                self.assertEqual(cross.status_code, 403, cross.text)
+
     def test_cross_site_and_mismatched_origins_stay_forbidden(self):
         with TestClient(app) as client:
             cross_site = self.login(

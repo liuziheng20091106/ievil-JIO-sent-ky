@@ -31,6 +31,8 @@ start.cmd
 
 服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。提交类接口会校验同源，代理需要把原始 `Host` 透传给后端（`proxy_set_header Host $host;`）或补上 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；代理不在本机时再用 `start.cmd --trusted-proxies <代理地址>`（或环境变量 `GAME_TRUSTED_PROXIES`）声明可信代理，代理地址不固定可写 `*`。
 
+`super.tkcloud.online` 属于显式放行的来源：只要请求的 `Origin` 是它，就算代理吞掉了 `Sec-Fetch-*`、改写了 `Host` 也放行。换站点用 `GAME_ALLOWED_ORIGINS` 覆盖（逗号分隔，可写 `host`、`host:port` 或整条 URL），默认值见 `backend/app/auth.py`。
+
 ## 检查
 
 ```cmd

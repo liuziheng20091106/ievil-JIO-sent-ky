@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import secrets
 from urllib.parse import urlsplit
 
@@ -10,10 +11,22 @@ from fastapi import HTTPException
 from . import storage
 
 COOKIE = "seven_double_session"
+DEFAULT_ALLOWED_ORIGINS = "super.tkcloud.online"
 
 
 def secret_hash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def allowed_origins():
+    """显式放行的来源，写 host 或 host:port（贴整条 URL 也可以）；用 GAME_ALLOWED_ORIGINS 覆盖。"""
+    raw = os.environ.get("GAME_ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
+    hosts = []
+    for item in raw.split(","):
+        item = item.strip().lower()
+        if item:
+            hosts.append(urlsplit(item).netloc or item)
+    return hosts
 
 
 def forwarded(connection, header):
@@ -23,16 +36,20 @@ def forwarded(connection, header):
 
 
 def same_origin(connection):
+    origin = connection.headers.get("origin")
+    parsed = urlsplit(origin) if origin else None
+    if parsed and parsed.hostname:
+        allowed = allowed_origins()
+        if parsed.netloc.lower() in allowed or parsed.hostname in allowed:
+            return True
     site = connection.headers.get("sec-fetch-site")
     if site == "cross-site":
         return False
-    origin = connection.headers.get("origin")
     if not origin:
         return connection.scope["type"] != "websocket"
     if site == "same-origin":
         # 浏览器自己判定为同源，代理改写 Host 或终结 TLS 都不影响。
         return True
-    parsed = urlsplit(origin)
     if parsed.scheme not in ("http", "https"):
         return False
     scheme = forwarded(connection, "x-forwarded-proto") or {

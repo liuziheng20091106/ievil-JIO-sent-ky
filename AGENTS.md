@@ -21,7 +21,7 @@
 ## 运行与验证
 - 安装：`setup.cmd`；启动：`start.cmd`；默认 `http://localhost:8000`。
 - 默认数据目录 `data/` 属于用户。验证必须设置 `GAME_DATA_DIR` 为独立临时目录；不得删除或改写用户对局。
-- 反向代理：代理必须透传原始 `Host` 或补 `X-Forwarded-Host`/`X-Forwarded-Proto`；代理不在本机时用 `--trusted-proxies` 或 `GAME_TRUSTED_PROXIES` 声明。
+- 反向代理：代理必须透传原始 `Host` 或补 `X-Forwarded-Host`/`X-Forwarded-Proto`；代理不在本机时用 `--trusted-proxies` 或 `GAME_TRUSTED_PROXIES` 声明。显式放行来源默认是 `super.tkcloud.online`，用 `GAME_ALLOWED_ORIGINS` 覆盖。
 - 后端检查：`.venv/Scripts/python.exe -m unittest discover -s checks -v`。
 - 静态检查：`.venv/Scripts/python.exe -m ruff check backend checks run.py`。
 - 前端检查/构建：在 `frontend/` 执行 `npm.cmd run build`。
