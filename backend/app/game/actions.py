@@ -6,6 +6,7 @@ from .state import (
     can_use_card,
     current,
     eligible_voters,
+    lost_by_challenge,
     pending_nominators,
     owner,
     player_seat,
@@ -789,7 +790,7 @@ def actions_for(game, actor):
         )
     if card and card["role_id"] == "hiro" and card["witch"]:
         result.append(action("hiro.exit", "主动出局", danger=True))
-    if game["half"] == "day":
+    if game["half"] == "day" and not lost_by_challenge(game, s):
         for declaration in game["declarations"]:
             if declaration["status"] == "open" and declaration["seat_id"] != sid:
                 result.append(

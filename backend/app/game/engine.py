@@ -26,6 +26,7 @@ from .state import (
     deal_cards,
     eligible_voters,
     finish,
+    lost_by_challenge,
     pending_nominators,
     notify,
     owner,
@@ -220,6 +221,7 @@ def settle_balloon(game, events):
         events,
         f"热气球结算：制作{makers}人、破坏{len(breakers)}人、未提交{len(skipped)}人；"
         f"本次+{delta}，当前进度{balloon['progress']}/13。",
+        alert=True,
     )
     if (
         balloon["progress"] >= 13
@@ -273,6 +275,7 @@ def open_vote(game, events):
         game,
         events,
         f"开始对{nominee['seat_id']}号候选投票；严格超过有投票权存活玩家的一半方可处决。",
+        alert=True,
     )
 
 
@@ -307,6 +310,7 @@ def close_vote(game, events):
         game,
         events,
         f"{nominee['seat_id']}号：同意{yes}/{n}，门槛{n // 2 + 1}，{'通过处决' if passed else '未通过'}。",
+        alert=True,
     )
     open_vote(game, events)
 
@@ -475,7 +479,7 @@ def execute_declaration(game, events, declaration):
         if target_card["id"] not in game["execution"]:
             game["execution"].append(target_card["id"])
         game["spiritual"]["annan_penalty"][cid] = game["day"] + 1
-        notify(game, events, f"{target}号进入本轮处决名单。")
+        notify(game, events, f"{target}号进入本轮处决名单。", alert=True)
     elif ability == "photo":
         require(data.get("text") or data.get("image_id"), "照片需要真实内容或画面")
         photo = {
@@ -1026,15 +1030,21 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             declaration_id=d["id"],
         )
         sync_declarations(game)
-        notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。")
+        notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。", alert=True)
     elif action == "day.challenge":
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])
         require(d["status"] == "open", "该技能声明已结束")
         require(d["seat_id"] != sid, "不可质疑自己")
+        require(not lost_by_challenge(game, s), "质疑失败后不能再质疑")
         if d["fake"]:
             d["status"] = "stopped"
             game["pending"] = [p for p in game["pending"] if p.get("declaration_id") != d["id"]]
-            notify(game, events, f"{sid}号质疑成功：伪装技能尚未完成的部分停止，已执行部分不撤销。")
+            notify(
+                game,
+                events,
+                f"{sid}号质疑成功：伪装技能尚未完成的部分停止，已执行部分不撤销。",
+                alert=True,
+            )
         else:
             if s["occupant_id"] not in game["spiritual"]["personal_losses"]:
                 game["spiritual"]["personal_losses"].append(s["occupant_id"])
@@ -1047,7 +1057,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                         [{"target_card": card["id"], "cause": "challenge", "unconditional": True}],
                     ),
                 )
-            notify(game, events, f"{sid}号质疑失败，因犯规出局且本局个人判负。")
+            notify(game, events, f"{sid}号质疑失败，因犯规出局且本局个人判负。", alert=True)
         sync_declarations(game)
     elif action == "honoka.disguise":
         hc = game["cards"]["honoka"]
@@ -1127,6 +1137,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             game,
             events,
             f"{sid}号临刑开枪，命中率1/{denominator}，{'命中' if roll == 1 and not poisoned(card) else '未造成有效命中'}。",
+            alert=True,
         )
     elif action == "execution.confirm":
         game["execution_ready"].append(sid)
@@ -1213,7 +1224,12 @@ def apply_command(game, actor, action, payload, *, by_host=False):
     else:
         player_command(game, actor, events, action, payload, by_host=by_host)
     if by_host and actor["kind"] == "player":
-        notify(game, events, f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。")
+        notify(
+            game,
+            events,
+            f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
+            alert=True,
+        )
     game["version"] += 1
     return events
 
@@ -1247,7 +1263,7 @@ def expire_warnings(game, now=None):
         ):
             game["balloon_choices"][sid] = "skip"
         game["warnings"].pop(sid, None)
-        notify(game, events, f"{sid}号警告时间已到，当前未完成操作按放弃处理。")
+        notify(game, events, f"{sid}号警告时间已到，当前未完成操作按放弃处理。", alert=True)
     balloon = game["public"]["balloon"]
     if balloon["status"] == "collecting" and set(balloon["participants"]).issubset(
         game["balloon_choices"]

@@ -331,7 +331,7 @@ def death_batch(game, events, preview):
         suffix = (
             "，死于13水" if death.get("cause") == "water" and not death.get("hide_cause") else ""
         )
-        notify(game, events, f"{s['id']}号玩家一张角色牌出局{suffix}。")
+        notify(game, events, f"{s['id']}号玩家一张角色牌出局{suffix}。", alert=True)
         lower = current(game, s)
         if lower:
             s["avatar_role_id"] = lower["role_id"]
@@ -374,5 +374,5 @@ def revive(game, events, card_id, puppet=None):
     now = current(game, owner_seat)
     if now:
         owner_seat["avatar_role_id"] = now["role_id"]
-    notify(game, events, f"{owner_seat['id']}号玩家一张角色牌复活。")
+    notify(game, events, f"{owner_seat['id']}号玩家一张角色牌复活。", alert=True)
     check_winner(game)

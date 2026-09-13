@@ -563,10 +563,12 @@ function Room({
     if (!fresh.length) return;
     setCenter("chat");
     setTab("chat");
-    const privateInfo = fresh.filter((item) => item.kind === "information");
-    if (privateInfo.length)
+    const mustNotice = fresh.filter(
+      (item) => item.kind === "information" || item.kind === "alert",
+    );
+    if (mustNotice.length)
       setAlerts((previousAlerts) =>
-        [...previousAlerts, ...privateInfo].slice(-3),
+        [...previousAlerts, ...mustNotice].slice(-3),
       );
   }, [messages, session.actor?.id]);
   const phaseKey = state ? `${state.day}:${state.half}:${state.phase}` : "";
@@ -753,9 +755,14 @@ function Room({
       {alerts.length > 0 && (
         <div className="alert-stack" role="status" aria-live="polite">
           {alerts.map((item) => (
-            <article className="alert-card" key={item.id}>
+            <article
+              className={`alert-card ${item.kind === "alert" ? "public-alert" : ""}`}
+              key={item.id}
+            >
               <div className="alert-head">
-                <span className="eyebrow">系统与私密信息</span>
+                <span className="eyebrow">
+                  {item.kind === "alert" ? "全场公告" : "系统与私密信息"}
+                </span>
                 <button
                   className="quiet"
                   aria-label="关闭这条提醒"

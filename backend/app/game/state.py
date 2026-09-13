@@ -58,10 +58,10 @@ def audience(game, seats):
     return [s["occupant_id"] for s in game["seats"] if s["id"] in seats and s["occupant_id"]]
 
 
-def notify(game, events, text, seats=None, title="游戏信息", image_id=None):
+def notify(game, events, text, seats=None, title="游戏信息", image_id=None, alert=False):
     recipients = None if seats is None else audience(game, seats)
     event = {
-        "kind": "notice" if recipients is None else "information",
+        "kind": "information" if recipients is not None else ("alert" if alert else "notice"),
         "text": text,
         "audience": recipients,
         "title": title,
@@ -85,6 +85,11 @@ def half_key(game):
 
 def living(game):
     return [s for s in game["seats"] if current(game, s)]
+
+
+def lost_by_challenge(game, seat):
+    """A failed challenge costs the player the game, so that seat may not challenge again."""
+    return bool(seat) and seat.get("occupant_id") in game["spiritual"]["personal_losses"]
 
 
 def pending_nominators(game):

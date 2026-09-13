@@ -222,7 +222,7 @@ export interface SeatView {
 }
 export interface Message {
   id: number;
-  kind: "chat" | "notice" | "information" | "presence";
+  kind: "chat" | "notice" | "information" | "presence" | "alert";
   sender_id: string;
   sender_name: string;
   avatar_role_id: string | null;

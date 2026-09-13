@@ -1049,6 +1049,13 @@ button.avatar:hover {
 .system-message.presence {
   color: #ae947d;
 }
+.system-message.alert {
+  color: #f0cf9a;
+  font-size: 12px;
+  border-left: 2px solid #a8543f;
+  border-right: 2px solid #a8543f;
+  padding: 4px 8px;
+}
 .chat-compose {
   padding: 12px 16px 10px;
   background: #27202f;
@@ -1884,6 +1891,10 @@ button.avatar:hover {
   padding: 10px 12px;
   box-shadow: 0 20px 55px #000000a6;
   animation: urgent-in 200ms ease-out;
+}
+.alert-card.public-alert {
+  border-color: #a8543f;
+  background-color: #332330;
 }
 .alert-card .alert-head {
   display: flex;

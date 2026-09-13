@@ -289,10 +289,44 @@ class PlaytestFixes(unittest.TestCase):
         command(game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
         declaration = game["declarations"][0]
         self.assertFalse(declaration["fake"])
+        self.assertIn(
+            "day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))]
+        )
         command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
         self.assertFalse(game["cards"]["meruru"]["alive"])
         self.assertIn("p3", game["spiritual"]["personal_losses"])
         self.assertEqual(game["declarations"][0]["status"], "open")
+        self.assertNotIn(
+            "day.challenge", [a["id"] for a in actions_for(game, player(game, "3"))]
+        )
+        with self.assertRaises(GameError):
+            command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
+        self.assertIn(
+            "day.challenge", [a["id"] for a in actions_for(game, player(game, "4"))]
+        )
+
+    def test_must_notice_events_are_marked_as_alerts_only_when_needed(self):
+        game = arranged_game("discussion")
+        game["seats"][0]["cards"] = ["emma", "millia"]
+        events = command(
+            game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"}
+        )
+        self.assertEqual([event["kind"] for event in events], ["alert"])
+        declaration = game["declarations"][0]
+        events = command(
+            game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]}
+        )
+        self.assertTrue(
+            any(
+                event["kind"] == "alert" and "质疑失败" in event["text"]
+                for event in events
+            )
+        )
+        events = command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        self.assertEqual(
+            [event["kind"] for event in events if "发言顺序" in event["text"]],
+            ["notice"],
+        )
 
     def test_honoka_lobby_disguise_applies_only_from_the_top_card(self):
         game = arranged_game()

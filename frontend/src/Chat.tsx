@@ -207,7 +207,14 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
           </div>
         )}
         {rows.map((message) =>
-          message.kind === "notice" || message.kind === "presence" ? (
+          message.kind === "alert" ? (
+            <p className="system-message alert" key={message.id}>
+              <time dateTime={message.created_at}>
+                {formatTime(message.created_at)}
+              </time>
+              <span>{message.text}</span>
+            </p>
+          ) : message.kind === "notice" || message.kind === "presence" ? (
             <p className={`system-message ${message.kind}`} key={message.id}>
               <time dateTime={message.created_at}>
                 {formatTime(message.created_at)}
