@@ -4,7 +4,14 @@ from copy import deepcopy
 from random import SystemRandom
 from time import time
 
-from .actions import actions_for, can_day_ability, night_abilities, outstanding_seats
+from .actions import (
+    actions_for,
+    can_day_ability,
+    challengeable,
+    claimable,
+    night_abilities,
+    outstanding_seats,
+)
 from .catalog import AUTO_ADVANCE_DELAY, AUTO_PHASES, DAY_ABILITIES, PHASES, ROLES
 from .resolution import (
     begin_night,
@@ -451,9 +458,7 @@ def advance(game, events):
         if game["status"] != "ended":
             game["phase"] = "nomination"
     elif phase == "nomination":
-        require(
-            not pending_nominators(game), "仍有玩家未提名或放弃，可警告后等待30秒"
-        )
+        require(not pending_nominators(game), "仍有玩家未提名或放弃，可警告后等待30秒")
         open_vote(game, events)
     elif phase == "voting":
         close_vote(game, events)
@@ -1093,9 +1098,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
     elif action == "day.skill":
         ability = data["ability"]
         # 穗乃香只能假装自己示人身份的技能
-        fake = card["id"] == "honoka" and DAY_ABILITIES[ability][0] == card["states"].get(
-            "disguise"
-        )
+        fake = card["id"] == "honoka" and ability in claimable(card["states"].get("disguise"))
         require(fake or can_day_ability(game, card, ability), "此时不能声明该技能")
         d = {
             "id": uid(),
@@ -1122,11 +1125,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             # 真实技能（含热气球）按技能条目直接结算，声明保持开放以保留质疑窗口。
             execute_declaration(game, events, d)
         sync_declarations(game)
-        notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。", alert=True)
+        notify(
+            game,
+            events,
+            f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。",
+            alert=True,
+        )
     elif action == "day.challenge":
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])
         require(d["status"] == "open", "该技能声明已结束")
         require(d["seat_id"] != sid, "不可质疑自己")
+        require(challengeable(game, d), "该技能不能质疑")
         require(not lost_by_challenge(game, s), "质疑失败后不能再质疑")
         if d["fake"]:
             d["status"] = "stopped"
@@ -1255,7 +1264,10 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         game["execution_ready"].append(sid)
     elif action == "balloon.choose":
         balloon = game["public"]["balloon"]
-        require(balloon["status"] == "collecting" and sid in balloon["participants"], "你不在本次热气球名单里")
+        require(
+            balloon["status"] == "collecting" and sid in balloon["participants"],
+            "你不在本次热气球名单里",
+        )
         require(data["choice"] in {"make", "skip", "break"}, "不合法的热气球选择")
         require(
             data["choice"] != "break" or card["witch"] or card["role_id"] == "annan",

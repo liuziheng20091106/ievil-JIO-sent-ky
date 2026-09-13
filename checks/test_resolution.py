@@ -372,6 +372,46 @@ class PlaytestFixes(unittest.TestCase):
             ["notice"],
         )
 
+    def test_only_emma_and_witch_brainwash_claims_can_be_challenged(self):
+        game = arranged_game("discussion")
+        game["seats"][0]["cards"] = ["emma", "millia"]
+        command(game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
+        game["seats"][2]["cards"] = ["annan", "meruru"]
+        game["cards"]["annan"]["witch"] = True
+        command(game, player(game, "3"), "day.skill", {"ability": "mass_brainwash", "target": "4"})
+        game["seats"][3]["cards"] = ["marg", "sherry"]
+        command(game, player(game, "4"), "day.skill", {"ability": "love", "target": "2"})
+        game["cards"]["marg"]["witch"] = True
+        game["cards"]["marg"]["states"]["learned_brainwash"] = True
+        game["phase"] = "voting"
+        command(game, player(game, "4"), "day.skill", {"ability": "brainwash", "target": "2"})
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        game["cards"]["honoka"]["states"]["disguise"] = "marg"
+        command(game, player(game, "7"), "day.skill", {"ability": "brainwash", "target": "5"})
+        ids = {
+            declaration["ability"] + ("(伪装)" if declaration["fake"] else ""): declaration["id"]
+            for declaration in game["declarations"]
+        }
+        offered = sorted(
+            item["payload"]["declaration_id"]
+            for item in actions_for(game, player(game, "5"))
+            if item["id"] == "day.challenge"
+        )
+        self.assertEqual(
+            offered,
+            sorted(
+                [
+                    ids["interrupt"],
+                    ids["mass_brainwash"],
+                    ids["brainwash"],
+                    ids["brainwash(伪装)"],
+                ]
+            ),
+        )
+        self.assertNotIn(ids["love"], offered)
+        with self.assertRaises(GameError):
+            command(game, player(game, "5"), "day.challenge", {"declaration_id": ids["love"]})
+
     def test_honoka_only_fakes_the_role_she_shows(self):
         game = arranged_game("discussion")
         game["seats"][6]["cards"] = ["honoka", "nanoka"]
@@ -501,17 +541,15 @@ class NightReveal(unittest.TestCase):
 
 class HostFreeAdjudication(unittest.TestCase):
     def test_real_day_skill_settles_without_a_host_step(self):
-        game = arranged_game()
-        command(game, player(game, "4"), "day.skill", {"ability": "love", "target": "3"})
+        game = arranged_game("discussion")
+        game["seats"][0]["cards"] = ["emma", "millia"]
+        command(game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
         self.assertEqual(game["pending"], [])
         declaration = game["declarations"][0]
         self.assertFalse(declaration["fake"])
         self.assertTrue(declaration["executed"])
         self.assertEqual(declaration["status"], "open")
-        self.assertEqual(
-            game["cards"]["marg"]["states"]["madness_target"], game["seats"][2]["cards"][0]
-        )
-        self.assertIn("day.challenge", [item["id"] for item in actions_for(game, player(game, "1"))])
+        self.assertIn("day.challenge", [item["id"] for item in actions_for(game, player(game, "3"))])
 
     def test_disguised_day_skill_still_waits_for_the_host(self):
         game = arranged_game()

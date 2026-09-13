@@ -167,6 +167,26 @@ def can_day_ability(game, card, ability):
     return ability == "photo"
 
 
+def claimable(role):
+    """该示人身份可以声称的白天技能：本角色的技能，魔女玛格另含学到的洗脑。"""
+    if not role:
+        return set()
+    return {ability for ability, (owner, _) in DAY_ABILITIES.items() if owner == role} | (
+        {"brainwash"} if role == "marg" else set()
+    )
+
+
+def challengeable(game, declaration):
+    """只有艾玛、魔女安安与魔女玛格的技能可以质疑。"""
+    card = game["cards"][declaration["card_id"]]
+    shown = card["states"].get("disguise") if declaration["fake"] else card["role_id"]
+    if declaration["ability"] == "mass_brainwash":
+        return shown == "annan"
+    if declaration["ability"] == "brainwash":
+        return shown == "marg"
+    return shown == "emma" and declaration["ability"] in {"interrupt", "last_speaker"}
+
+
 def night_abilities(game, card):
     role, witch, uses = card["role_id"], card["witch"], card["uses"]
     abilities = ["knife"] if witch else []
@@ -195,9 +215,7 @@ def pending_action(game, item):
     kind = item["kind"]
     fields = []
     if kind == "information":
-        fields = [
-            field("text", "发给当事人的裁定信息", "textarea", default=item.get("text", ""))
-        ]
+        fields = [field("text", "发给当事人的裁定信息", "textarea", default=item.get("text", ""))]
     elif kind == "hiro":
         choices = [("decline", "不发动回溯")] + [
             (s["id"], f"{s['label']}（日{s['day']}）") for s in game["snapshots"]
@@ -225,9 +243,7 @@ def pending_action(game, item):
     elif kind == "suspects":
         source = item.get("source_card")
         killer = game["cards"][source]["states"].get("framed_killer", source) if source else None
-        third = next(
-            (r for r in ROLES if r not in {killer, "hanna"} and present(game, r)), None
-        )
+        third = next((r for r in ROLES if r not in {killer, "hanna"} and present(game, r)), None)
         suggested = list(dict.fromkeys(r for r in (killer, "hanna", third) if r))
         fields = [
             field(
@@ -643,9 +659,7 @@ def actions_for(game, actor):
                     blocking=True,
                 )
             )
-        result.append(
-            action("hiro.decline", "按预结算继续（不回溯）", group="流程", blocking=True)
-        )
+        result.append(action("hiro.decline", "按预结算继续（不回溯）", group="流程", blocking=True))
     if game["status"] == "lobby":
         if game["phase"] == "ordering" and not s["ready"]:
             result.append(
@@ -741,7 +755,9 @@ def actions_for(game, actor):
                 )
             if submitted:
                 result.append(action("night.clear", "清除未确认夜间选择", group="夜间"))
-            result.append(action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True))
+            result.append(
+                action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True)
+            )
     if card and game["half"] == "day":
         for ability in DAY_ABILITIES:
             if can_day_ability(game, card, ability) and not any(
@@ -764,8 +780,9 @@ def actions_for(game, actor):
             "nomination",
             "voting",
         }:
-            for ability, (owner, _) in DAY_ABILITIES.items():
-                if owner != game["cards"]["honoka"]["states"].get("disguise"):
+            shown = claimable(game["cards"]["honoka"]["states"].get("disguise"))
+            for ability in DAY_ABILITIES:
+                if ability not in shown:
                     continue
                 if not any(
                     d["seat_id"] == sid and d["ability"] == ability and d["status"] == "open"
@@ -801,7 +818,11 @@ def actions_for(game, actor):
         result.append(action("hiro.exit", "主动出局", danger=True))
     if game["half"] == "day" and not lost_by_challenge(game, s):
         for declaration in game["declarations"]:
-            if declaration["status"] == "open" and declaration["seat_id"] != sid:
+            if (
+                declaration["status"] == "open"
+                and declaration["seat_id"] != sid
+                and challengeable(game, declaration)
+            ):
                 result.append(
                     action(
                         "day.challenge",
