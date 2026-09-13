@@ -20,6 +20,7 @@ import type {
   Seat,
   SeatView,
   Session,
+  UIAction,
 } from "./types";
 
 type Tab = "chat" | "table" | "cards" | "actions" | "manage";
@@ -1573,6 +1574,7 @@ function HostSources() {
 function SeatInspector({ seatId }: { seatId: string }) {
   const { state } = useGame();
   const [data, setData] = useState<SeatView | null>(null);
+  const [request, setRequest] = useState<PanelRequest | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const version = state?.version;
@@ -1608,11 +1610,22 @@ function SeatInspector({ seatId }: { seatId: string }) {
       {loading && !data && <p className="hint">正在读取该席位视角…</p>}
       {data && (
         <div className="inspector">
-          <SeatViewCard view={data.view} />
+          <SeatViewCard
+            view={data.view}
+            onAct={(item) =>
+              setRequest({
+                id: item.id,
+                payload: item.payload,
+                token: Date.now(),
+              })
+            }
+          />
           <ActionPanel
             actions={data.view.actions}
-            title={`以 ${seatId} 号席位的身份操作`}
+            title={`代替操作（${seatId}号）`}
             asSeat={seatId}
+            request={request}
+            onRequestHandled={() => setRequest(null)}
           />
         </div>
       )}
@@ -1620,7 +1633,13 @@ function SeatInspector({ seatId }: { seatId: string }) {
   );
 }
 
-function SeatViewCard({ view }: { view: GameView }) {
+function SeatViewCard({
+  view,
+  onAct,
+}: {
+  view: GameView;
+  onAct: (action: UIAction) => void;
+}) {
   const { catalog } = useGame();
   return (
     <section className="public-record">
@@ -1654,13 +1673,16 @@ function SeatViewCard({ view }: { view: GameView }) {
       ) : null}
       <h3>该席位当前可提交的操作</h3>
       {view.actions.length ? (
-        <div className="tags">
+        <ul className="impersonate-list">
           {view.actions.map((item) => (
-            <span className="tag" key={item.id}>
-              {item.label}
-            </span>
+            <li key={item.id}>
+              <span>{item.label}</span>
+              <button className="quiet" onClick={() => onAct(item)}>
+                代替操作
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : (
         <p className="hint">当前没有轮到该席位提交的操作。</p>
       )}

@@ -9,7 +9,7 @@ from .state import (
     can_use_card,
     current,
     eligible_voters,
-    next_nominator,
+    pending_nominators,
     owner,
     player_seat,
     require,
@@ -61,9 +61,8 @@ def host_tasks(game):
         sid = game["public"]["speaker"]
         warn_task("speech", sid, f"当前发言人：{sid}号")
     elif phase == "nomination":
-        sid = next_nominator(game)
-        if sid:
-            warn_task("nomination", sid, f"轮到{sid}号提名")
+        for sid in pending_nominators(game):
+            warn_task("nomination", sid, f"{sid}号尚未提名或放弃（可与其他人同时提交）")
     elif phase == "voting":
         for s in eligible_voters(game):
             if s["id"] not in game["votes"]:
@@ -185,8 +184,6 @@ def game_view(game, actor):
         if host or item["audience"] is None or access.intersection(item["audience"])
     ]
     public = deepcopy(game["public"])
-    if game["phase"] == "nomination":
-        public["nomination_speaker"] = next_nominator(game)
     phase = game["phase"]
     if phase == "speech":
         public["current_actor"] = {
@@ -195,10 +192,11 @@ def game_view(game, actor):
             "label": "顺序发言",
         }
     elif phase == "nomination":
+        pending = pending_nominators(game)
         public["current_actor"] = {
             "phase": "nomination",
-            "seat_id": next_nominator(game),
-            "label": "依次提名",
+            "seat_id": None,
+            "label": f"同时提名（还有 {len(pending)} 人未提交）",
         }
     elif phase == "voting":
         public["current_actor"] = {

@@ -4,6 +4,7 @@ from copy import deepcopy
 import unittest
 
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
+from backend.app.game.actions import actions_for
 from backend.app.game.resolution import begin_night, damage_preview, death_batch, revive
 from backend.app.game.state import check_winner, pending, rewind, save_snapshot
 
@@ -161,15 +162,18 @@ class ResolutionEdges(unittest.TestCase):
         command(game, HOST, "host.advance")
         self.assertFalse(game["spiritual"]["sherry_bound"])
 
-    def test_nomination_waits_for_each_player_and_allows_passing(self):
+    def test_players_nominate_at_the_same_time_and_the_phase_waits_for_all(self):
         game = arranged_game("nomination")
-        with self.assertRaises(GameError):
-            command(game, player(game, "2"), "vote.nominate", {"target": "3"})
-        command(game, player(game, "1"), "vote.pass")
+        self.assertIn("vote.nominate", [item["id"] for item in actions_for(game, player(game, "2"))])
         command(game, player(game, "2"), "vote.nominate", {"target": "3"})
         with self.assertRaises(GameError):
+            command(game, player(game, "4"), "vote.nominate", {"target": "3"})
+        command(game, player(game, "1"), "vote.pass")
+        command(game, player(game, "4"), "vote.nominate", {"target": "5"})
+        self.assertNotIn("vote.nominate", [item["id"] for item in actions_for(game, player(game, "4"))])
+        with self.assertRaises(GameError):
             command(game, HOST, "host.advance")
-        for sid in ("3", "4", "5", "6", "7"):
+        for sid in ("3", "5", "6", "7"):
             command(game, player(game, sid), "vote.pass")
         command(game, HOST, "host.advance")
         self.assertEqual(game_view(game, player(game, "1"))["public"]["votes"]["candidate"], "3")

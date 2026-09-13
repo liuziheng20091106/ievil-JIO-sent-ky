@@ -6,7 +6,7 @@ from .state import (
     can_use_card,
     current,
     eligible_voters,
-    next_nominator,
+    pending_nominators,
     owner,
     player_seat,
     present,
@@ -67,9 +67,7 @@ def outstanding_seats(game):
     elif phase == "speech" and game["public"]["speaker"]:
         result.append(game["public"]["speaker"])
     elif phase == "nomination":
-        sid = next_nominator(game)
-        if sid:
-            result.append(sid)
+        result = pending_nominators(game)
     elif phase == "voting":
         result = [s["id"] for s in eligible_voters(game) if s["id"] not in game["votes"]]
     elif phase == "execution":
@@ -804,13 +802,11 @@ def actions_for(game, actor):
                 )
     if phase == "speech" and game["public"]["speaker"] == sid:
         result.append(action("speech.done", "结束本次发言", group="流程", blocking=True))
-    if phase == "nomination" and card and next_nominator(game) == sid:
+    if phase == "nomination" and card and sid not in game.get("nomination_done", []):
         result.append(
             action("vote.nominate", "提名候选", [target_field(game)], group="投票", blocking=True)
         )
-        result.append(
-            action("vote.pass", "放弃本次提名并交给下一人", group="投票", blocking=True)
-        )
+        result.append(action("vote.pass", "放弃本次提名", group="投票", blocking=True))
     if phase == "voting" and s in eligible_voters(game):
         result.append(
             action(

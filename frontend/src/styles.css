@@ -1849,6 +1849,24 @@ button.avatar:hover {
 .pending-item .primary {
   margin-top: 8px;
 }
+.impersonate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.impersonate-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
 .alert-stack {
   position: fixed;
   top: 14px;

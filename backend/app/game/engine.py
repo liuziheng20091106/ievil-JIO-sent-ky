@@ -26,7 +26,7 @@ from .state import (
     deal_cards,
     eligible_voters,
     finish,
-    next_nominator,
+    pending_nominators,
     notify,
     owner,
     pending,
@@ -360,7 +360,9 @@ def advance(game, events):
             game["phase"] = "nomination"
             game["nomination_done"] = []
     elif phase == "nomination":
-        require(next_nominator(game) is None, "仍有玩家未依次提名或放弃，可警告后等待30秒")
+        require(
+            not pending_nominators(game), "仍有玩家未提名或放弃，可警告后等待30秒"
+        )
         open_vote(game, events)
     elif phase == "voting":
         close_vote(game, events)
@@ -1232,7 +1234,7 @@ def expire_warnings(game, now=None):
             unlock_coco(game, events)
         elif phase == "speech" and game["public"]["speaker"] == sid:
             speech_done(game)
-        elif phase == "nomination" and next_nominator(game) == sid:
+        elif phase == "nomination" and sid in pending_nominators(game):
             game.setdefault("nomination_done", []).append(sid)
         elif phase == "voting":
             game["votes"][sid] = "abstain"

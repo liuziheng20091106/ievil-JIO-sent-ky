@@ -87,10 +87,13 @@ def living(game):
     return [s for s in game["seats"] if current(game, s)]
 
 
-def next_nominator(game):
-    order = dict.fromkeys(game["public"].get("speech_order", []) + [s["id"] for s in game["seats"]])
+def pending_nominators(game):
+    """Seats that have not nominated or passed yet; they may act at the same time."""
+    order = dict.fromkeys(
+        game["public"].get("speech_order", []) + [s["id"] for s in game["seats"]]
+    )
     done = game.get("nomination_done", [])
-    return next((sid for sid in order if sid not in done and current(game, sid)), None)
+    return [sid for sid in order if sid not in done and current(game, sid)]
 
 
 def eligible_voters(game):
