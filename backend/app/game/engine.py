@@ -182,6 +182,17 @@ def open_balloon(game, events, organizer, participants):
         }
     )
     game["balloon_choices"] = {}
+    annan = owner(game, "annan")["id"]
+    if annan in participants:
+        # 安安参加即为破坏，不需要她本人或其他操作
+        game["balloon_choices"][annan] = "break"
+        notify(
+            game,
+            events,
+            f"{annan}号（安安）参加热气球，直接判定为破坏。",
+            [annan],
+            "热气球",
+        )
     notify(
         game,
         events,
@@ -413,6 +424,10 @@ def advance(game, events):
         )
         game["public"]["speech_order"] = order
         game["public"]["speaker"] = next_speaker(game, None, events)
+        for notice in game["queued_notices"]:
+            notify(game, events, notice, alert=True)
+        game["queued_notices"] = []
+        game["queued_reveals"] = []
         game["brainwash"] = {}
         game["nominations"] = []
         game["nomination_done"] = []

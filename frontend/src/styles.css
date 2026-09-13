@@ -790,6 +790,60 @@ progress {
   font-family: SimSun, serif;
   font-size: 20px;
 }
+.avatar-slot {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.avatar-fallen {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid #ff9db1;
+  background: #2a1f33;
+  color: #ff9db1;
+  font-size: 11px;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+.avatar-previous {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid #ff9db1;
+  overflow: hidden;
+  background: #1c1523;
+  color: #ff9db1;
+  font-family: SimSun, serif;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.avatar-previous img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 18%;
+  transform: scale(1.14);
+}
+.avatar-slot:hover .avatar-previous,
+.avatar-slot:focus-within .avatar-previous {
+  opacity: 1;
+  visibility: visible;
+}
 .avatar img {
   width: 100%;
   height: 100%;

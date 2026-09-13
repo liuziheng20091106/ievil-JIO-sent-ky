@@ -34,6 +34,7 @@ export interface Seat {
   id: string;
   name: string;
   avatar_role_id: string | null;
+  previous_role_id?: string | null;
   occupied: boolean;
   ready: boolean | null;
   alive: boolean;

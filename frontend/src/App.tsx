@@ -564,6 +564,7 @@ function Room({
   const [side, setSide] = useState<"cards" | "actions">("actions");
   const [management, setManagement] = useState(false);
   const [request, setRequest] = useState<PanelRequest | null>(null);
+  const actionFormOpen = useRef(false);
   const [inspecting, setInspecting] = useState<string | null>(null);
   const [flash, setFlash] = useState("");
   const [alerts, setAlerts] = useState<Message[]>([]);
@@ -582,8 +583,11 @@ function Room({
         item.sender_id !== session.actor?.id,
     );
     if (!fresh.length) return;
-    setCenter("chat");
-    setTab("chat");
+    if (!actionFormOpen.current) {
+      // 手机上正在填行动窗口时不打断，聊天内容照常进记录与悬浮提醒
+      setCenter("chat");
+      setTab("chat");
+    }
     const mustNotice = fresh.filter(
       (item) => item.kind === "information" || item.kind === "alert",
     );
@@ -924,6 +928,9 @@ function Room({
               title={isHost ? "主持人操作" : "本阶段行动"}
               request={request}
               onRequestHandled={() => setRequest(null)}
+              onOpenChange={(open) => {
+                actionFormOpen.current = open;
+              }}
             />
           </div>
           <div className="cards-surface">
@@ -1042,6 +1049,7 @@ function SeatList({
             <Avatar
               name={seat.id}
               roleId={seat.avatar_role_id}
+              previousRoleId={seat.previous_role_id}
               onClick={
                 seat.avatar_role_id
                   ? () => onRole(seat.avatar_role_id!)

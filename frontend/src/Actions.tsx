@@ -4,7 +4,7 @@ import { Drawing } from "./Drawing";
 import { draftKey, useDraft } from "./drafts";
 import { Modal, RecordView } from "./components";
 import { useGame } from "./state";
-import type { Field, UIAction } from "./types";
+import type { Catalog, Field, GameView, UIAction } from "./types";
 
 const groups: Record<string, string> = {
   lobby: "候场准备",
@@ -45,12 +45,14 @@ export function ActionPanel({
   asSeat,
   request,
   onRequestHandled,
+  onOpenChange,
 }: {
   actions: UIAction[];
   title?: string;
   asSeat?: string;
   request?: PanelRequest | null;
   onRequestHandled?: () => void;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const { state, session } = useGame();
   const [selected, setSelected] = useState<{
@@ -83,6 +85,8 @@ export function ActionPanel({
       values,
     });
   };
+  const open = Boolean(selected);
+  useEffect(() => onOpenChange?.(open), [open, onOpenChange]);
   const requestToken = request?.token;
   useEffect(() => {
     if (!request) return;
@@ -198,7 +202,10 @@ function ActionForm({
   asSeat?: string;
   initial?: Record<string, unknown>;
 }) {
-  const { command, busy, state } = useGame();
+  const { command, busy, state, session, catalog } = useGame();
+  const isHost = session.actor?.kind === "host";
+  const labeled = (option: { value: string; label: string } | undefined) =>
+    option ? seatChoiceLabel(option, state, catalog, isHost) : "";
   const [expectedVersion, setExpectedVersion] = useState(version);
   const [descriptor, setDescriptor] = useState(action);
   action = descriptor;
@@ -373,13 +380,17 @@ function ActionForm({
                         ? Array.isArray(values[field.name])
                           ? (values[field.name] as unknown[]).map(
                               (value) =>
-                                field.options?.find(
-                                  (option) => option.value === value,
-                                )?.label ?? value,
+                                labeled(
+                                  field.options?.find(
+                                    (option) => option.value === value,
+                                  ),
+                                ) || value,
                             )
-                          : (field.options.find(
-                              (option) => option.value === values[field.name],
-                            )?.label ?? values[field.name])
+                          : labeled(
+                              field.options.find(
+                                (option) => option.value === values[field.name],
+                              ),
+                            ) || values[field.name]
                         : values[field.name]
                     }
                   />
@@ -449,6 +460,29 @@ function ActionForm({
   );
 }
 
+function seatChoiceLabel(
+  option: { value: string; label: string },
+  state: GameView | null,
+  catalog: Catalog,
+  isHost: boolean,
+) {
+  const seat = state?.seats.find((item) => item.id === option.value);
+  if (!seat) return option.label;
+  const cards = seat.cards ?? [];
+  const ids =
+    isHost && cards.length
+      ? [...new Set(cards.map((card) => card.role_id))]
+      : [seat.previous_role_id, seat.avatar_role_id].filter(
+          (id): id is string => Boolean(id),
+        );
+  const names = ids.map(
+    (roleId) =>
+      catalog.roles.find((role) => role.id === roleId)?.name ?? roleId,
+  );
+  if (!names.length) return option.label;
+  return `${seat.id}号 · ${seat.name}（${names.join(isHost ? "／" : "→")}）`;
+}
+
 function ActionField({
   field,
   value,
@@ -458,7 +492,21 @@ function ActionField({
   value: unknown;
   onChange: (value: unknown) => void;
 }) {
+  const { state, session, catalog } = useGame();
   const id = `field-${field.name}`;
+  const options = useMemo(
+    () =>
+      field.options?.map((option) => ({
+        ...option,
+        label: seatChoiceLabel(
+          option,
+          state,
+          catalog,
+          session.actor?.kind === "host",
+        ),
+      })) ?? [],
+    [field.options, state, catalog, session.actor?.kind],
+  );
   if (field.type === "checkbox")
     return (
       <label className="check-row">
@@ -503,7 +551,7 @@ function ActionField({
           。需要顺序时，按下方编号排列。
         </p>
         <div className="multiselect">
-          {field.options?.map((option) => (
+          {options.map((option) => (
             <label
               className={`check-row ${selected.includes(option.value) ? "selected" : ""}`}
               key={option.value}
@@ -533,8 +581,8 @@ function ActionField({
             {selected.map((item, index) => (
               <li key={item}>
                 <span>
-                  {field.options?.find((option) => option.value === item)
-                    ?.label ?? item}
+                  {options.find((option) => option.value === item)?.label ??
+                    item}
                 </span>
                 <button
                   type="button"
@@ -589,7 +637,7 @@ function ActionField({
           onChange={(event) => onChange(event.target.value)}
         >
           <option value="">请选择</option>
-          {field.options?.map((option) => (
+          {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>

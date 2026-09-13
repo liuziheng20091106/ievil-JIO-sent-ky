@@ -5,6 +5,7 @@ from random import SystemRandom
 
 from .catalog import NIGHT_ABILITIES, ROLES
 from .state import (
+    fallen_upper_role,
     check_winner,
     current,
     half_key,
@@ -318,6 +319,12 @@ def death_batch(game, events, preview):
         s = owner(game, cid)
         if not card["alive"] or game["half_exits"].get(s["id"]) == half_key(game):
             continue
+        before = {
+            "seat_id": s["id"],
+            "avatar_role_id": s["avatar_role_id"],
+            "previous_role_id": fallen_upper_role(game, s),
+            "alive": current(game, s) is not None,
+        }
         card["alive"] = False
         if cid in {"sherry", "hanna"} and game.get("day_binding"):
             game["day_binding"]["intact"] = False
@@ -335,7 +342,13 @@ def death_batch(game, events, preview):
         suffix = (
             "，死于13水" if death.get("cause") == "water" and not death.get("hide_cause") else ""
         )
-        notify(game, events, f"{s['id']}号玩家一张角色牌出局{suffix}。", alert=True)
+        notice = f"{s['id']}号玩家一张角色牌出局{suffix}。"
+        if game["half"] == "night":
+            # 夜间出局连同头像一起压到第二天白天再公示，夜间阶段不泄露
+            game["queued_notices"].append(notice)
+            game["queued_reveals"].append(before)
+        else:
+            notify(game, events, notice, alert=True)
         lower = current(game, s)
         if lower:
             s["avatar_role_id"] = lower["role_id"]

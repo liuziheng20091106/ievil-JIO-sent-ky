@@ -9,6 +9,7 @@ from .state import (
     can_use_card,
     current,
     eligible_voters,
+    fallen_upper_role,
     pending_nominators,
     owner,
     player_seat,
@@ -183,15 +184,32 @@ def game_view(game, actor):
     own_id = own["id"] if own else None
     seats = []
     ready_count = 0
+    lobby = game["status"] == "lobby"
+    # 夜间出局要等第二天白天才公示，公示前对外沿用出局前的位置信息
+    held = (
+        {item["seat_id"]: item for item in game["queued_reveals"]}
+        if game["status"] == "playing"
+        else {}
+    )
     for s in game["seats"]:
         ready_count += bool(s["ready"])
+        pub = held.get(s["id"])
         entry = {
             "id": s["id"],
             "name": s["name"],
-            "avatar_role_id": None if game["status"] == "lobby" else s["avatar_role_id"],
+            "avatar_role_id": None
+            if lobby
+            else pub["avatar_role_id"]
+            if pub
+            else s["avatar_role_id"],
+            "previous_role_id": None
+            if lobby
+            else pub["previous_role_id"]
+            if pub
+            else fallen_upper_role(game, s),
             "occupied": bool(s["occupant_id"]),
             "ready": s["ready"] if host or s["id"] == own_id else None,
-            "alive": game["status"] == "lobby" or current(game, s) is not None,
+            "alive": lobby or (pub["alive"] if pub else current(game, s) is not None),
         }
         if host:
             entry["cards"] = [card_view(game, game["cards"][cid], True) for cid in s["cards"]]

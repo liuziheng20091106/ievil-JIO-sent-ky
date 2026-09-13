@@ -45,17 +45,20 @@ export function Modal({
 
 export function Avatar({
   roleId,
+  previousRoleId,
   name,
   host = false,
   onClick,
 }: {
   roleId?: string | null;
+  previousRoleId?: string | null;
   name: string;
   host?: boolean;
   onClick?: () => void;
 }) {
   const { catalog } = useGame();
   const role = catalog.roles.find((item) => item.id === roleId);
+  const previous = catalog.roles.find((item) => item.id === previousRoleId);
   const image = host ? "/assets/characters/月代雪.png" : role?.avatar;
   const content = image ? (
     <img
@@ -68,17 +71,47 @@ export function Avatar({
       {roleId === "honoka" ? "穗" : name.slice(0, 1) || "席"}
     </span>
   );
-  return onClick ? (
+  const face = (
+    <>
+      {content}
+      {previous && (
+        <span className="avatar-fallen" aria-hidden="true">
+          ×
+        </span>
+      )}
+    </>
+  );
+  const base = onClick ? (
     <button
       className="avatar"
       type="button"
       aria-label={`查看${role?.name ?? name}的角色说明`}
       onClick={onClick}
     >
-      {content}
+      {face}
     </button>
   ) : (
-    <span className="avatar">{content}</span>
+    <span className="avatar">{face}</span>
+  );
+  if (!previous) return base;
+  return (
+    <span className="avatar-slot">
+      {base}
+      <span
+        className="avatar-previous"
+        title={`上一张牌：${previous.name}（已出局）`}
+      >
+        {previous.avatar ? (
+          <img
+            src={previous.avatar}
+            alt={`${previous.name}已出局头像`}
+            loading="lazy"
+          />
+        ) : (
+          <span>{previous.name.slice(0, 1)}</span>
+        )}
+      </span>
+    </span>
   );
 }
 

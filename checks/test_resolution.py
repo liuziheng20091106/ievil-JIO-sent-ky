@@ -399,6 +399,7 @@ class PlaytestFixes(unittest.TestCase):
             game_view(game, player(game, "1"))["seats"][6]["avatar_role_id"], "nanoka"
         )
         self.assertNotIn("disguise", game["cards"]["honoka"]["states"])
+        game["half"] = "day"
         death_batch(
             game,
             [],
@@ -434,6 +435,51 @@ class PlaytestFixes(unittest.TestCase):
         stranger = game_view(game, player(game, "1"))["self"]
         self.assertNotIn("honoka_upper", stranger)
         self.assertEqual(game_view(game, player(game, "1"))["ready_count"], 2)
+
+
+class NightReveal(unittest.TestCase):
+    def test_night_deaths_are_announced_with_the_next_day(self):
+        game = arranged_game("night_review", "night")
+        game["night"]["reactions"] = []
+        game["night"]["preview"] = damage_preview(
+            game, [{"target_card": "meruru", "source_card": "emma", "cause": "knife"}]
+        )
+        game["seats"][2]["avatar_role_id"] = "meruru"
+        events = command(game, HOST, "host.advance")
+        self.assertNotIn(
+            "3号玩家一张角色牌出局。", [item["text"] for item in events]
+        )
+        self.assertFalse(game["cards"]["meruru"]["alive"])
+        self.assertEqual(game["queued_notices"], ["3号玩家一张角色牌出局。"])
+        # 夜间结算时对外仍是出局前的位置，避免头像与出局标记提前泄露
+        held = game_view(game, player(game, "1"))["seats"]
+        self.assertEqual(held[2]["avatar_role_id"], "meruru")
+        self.assertIsNone(held[2]["previous_role_id"])
+        self.assertTrue(held[2]["alive"])
+        game["pending"] = []
+        events = command(game, HOST, "host.advance")
+        self.assertIn("3号玩家一张角色牌出局。", [item["text"] for item in events])
+        self.assertEqual(game["queued_notices"], [])
+        self.assertEqual(game["phase"], "speech")
+        open_view = game_view(game, player(game, "1"))["seats"]
+        self.assertEqual(open_view[2]["avatar_role_id"], "hanna")
+        self.assertEqual(open_view[2]["previous_role_id"], "meruru")
+        self.assertTrue(open_view[2]["alive"])
+
+    def test_daytime_deaths_are_announced_right_away(self):
+        game = arranged_game()
+        events = command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["meruru"], "effect": "death", "source": "coco", "reason": "测试白天出局"},
+        )
+        self.assertIn("3号玩家一张角色牌出局。", [item["text"] for item in events])
+        self.assertEqual(game["queued_notices"], [])
+        seats = {seat["id"]: seat for seat in game_view(game, player(game, "1"))["seats"]}
+        self.assertEqual(seats["3"]["previous_role_id"], "meruru")
+        self.assertEqual(seats["3"]["avatar_role_id"], "hanna")
+        self.assertIsNone(seats["1"]["previous_role_id"])
 
 
 class HostFreeAdjudication(unittest.TestCase):
@@ -657,6 +703,33 @@ class BalloonFlow(unittest.TestCase):
         command(game, player(game, "5"), "day.skill", {"ability": "balloon", "participants": ["2"]})
         with self.assertRaises(GameError):
             command(game, player(game, "2"), "balloon.choose", {"choice": "break"})
+
+    def test_annan_breaks_the_balloon_just_by_joining(self):
+        game = arranged_game()
+        game["cards"]["arisa"]["alive"] = False
+        game["seats"][2].update(cards=["annan", "meruru"])
+        command(
+            game,
+            player(game, "1"),
+            "balloon.propose",
+            {"participants": ["3", "4"]},
+        )
+        for sid in ("2", "3", "4"):
+            command(game, player(game, sid), "balloon.agree", {})
+        balloon = game["public"]["balloon"]
+        self.assertEqual(balloon["participants"], ["3", "4"])
+        self.assertEqual(game["balloon_choices"], {"3": "break"})
+        self.assertNotIn(
+            "balloon.choose", [item["id"] for item in actions_for(game, player(game, "3"))]
+        )
+        self.assertIn(
+            "balloon.choose", [item["id"] for item in actions_for(game, player(game, "4"))]
+        )
+        command(game, player(game, "4"), "balloon.choose", {"choice": "make"})
+        settled = game["public"]["balloon"]
+        self.assertEqual(settled["status"], "complete")
+        self.assertEqual(settled["progress"], 0)
+        self.assertEqual(settled["last"]["breakers"], ["3"])
 
     def test_proposal_needs_more_than_half_of_the_living_players(self):
         game = arranged_game()

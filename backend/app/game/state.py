@@ -213,6 +213,8 @@ def create_game(codex):
         "nominations": [],
         "speech_passed": [],
         "speech_queued": {},
+        "queued_notices": [],
+        "queued_reveals": [],
         "votes": {},
         "vote_rounds": [],
         "brainwash": {},
@@ -232,6 +234,14 @@ def create_game(codex):
 # Only mechanical time is restored; occupant identity, public persona, and received
 # information belong to real time. Seven seats make a JSON copy simpler than diffs.
 SNAPSHOT_EXCLUDED = {"id", "version", "snapshots", "information", "spiritual", "seats"}
+
+
+def fallen_upper_role(game, seat):
+    """席位第一张牌已经出局时的角色，用于头像上的下牌标记与悬浮回顾。"""
+    if len(seat["cards"]) < 2:
+        return None
+    upper = game["cards"][seat["cards"][0]]
+    return None if upper["alive"] else upper["role_id"]
 
 
 def hiro_pending(game, events, mode, preview=None, phase=None):
@@ -381,6 +391,7 @@ def finish(game, events, winner, reason, balloon=False):
     game["status"] = "ended"
     game["deadline"] = None
     game["warnings"] = {}
+    game["queued_reveals"] = []
     notify(
         game,
         events,
