@@ -93,7 +93,7 @@ Future<void> showActionPreview(BuildContext context, ActionDescriptor action) =>
             ],
             const SizedBox(height: AppSpacing.lg),
             const Text(
-              '预览不会提交；点击行动按钮后仍需填写参数并确认。',
+              '预览不会提交；点击行动按钮后填写参数，确认一次即会提交。',
               style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
             ),
           ],
@@ -316,7 +316,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                             submitting ||
                             widget.store.writeBusy
                         ? null
-                        : review,
+                        : submit,
                     style: danger
                         ? FilledButton.styleFrom(
                             backgroundColor: AppColors.danger,
@@ -325,10 +325,10 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                     icon: Icon(
                       danger
                           ? Icons.warning_amber_rounded
-                          : Icons.fact_check_outlined,
+                          : Icons.check_circle_outline,
                       size: 18,
                     ),
-                    label: const Text('检查并确认'),
+                    label: const Text('确认提交'),
                   ),
                 ),
               ),
@@ -963,7 +963,10 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     widget.store.saveDraft(widget.action, values, asSeat: widget.asSeat);
   }
 
-  Future<void> review() async {
+  /// 单次确认：校验通过后直接提交，不再弹二次确认框。
+  /// 危险动作仍以红色按钮与警告图标双重标记；写命令带 expected_version，
+  /// 服务端版本变化会返回 409，由错误提示要求重新确认，不会静默写入。
+  Future<void> submit() async {
     setState(() => error = null);
     if (formKey.currentState?.validate() != true) {
       return;
@@ -987,82 +990,10 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
         return;
       }
     }
-    await widget.store.saveDraft(widget.action, values, asSeat: widget.asSeat);
     if (!mounted) {
       return;
     }
-    final danger = widget.action.raw['danger'] == true;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        icon: Icon(
-          danger ? Icons.warning_amber_rounded : Icons.fact_check_outlined,
-          color: danger ? AppColors.danger : AppColors.accent,
-        ),
-        title: Text('确认${widget.action.label}'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (widget.action.description.isNotEmpty)
-                  Text(widget.action.description),
-                const SizedBox(height: AppSpacing.md),
-                for (final field in widget.action.fields)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: 96,
-                          child: Text(
-                            field.label,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textTertiary,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            _displayValue(field, values[field.name]),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: AppColors.text,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (widget.action.fields.isEmpty)
-                  const Text('此行动没有参数，仍需确认后才会提交。'),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('返回检查'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: danger
-                ? FilledButton.styleFrom(backgroundColor: AppColors.danger)
-                : null,
-            child: const Text('确认提交'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) {
-      return;
-    }
+    await widget.store.saveDraft(widget.action, values, asSeat: widget.asSeat);
     if (Platform.isAndroid) {
       await HapticFeedback.lightImpact();
     }
@@ -1076,38 +1007,12 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
       if (mounted) {
         setState(() {
           error = failure.isConflict
-              ? '${failure.message}。草稿已保留，请检查刷新后的状态并再次确认。'
+              ? '${failure.message}。草稿已保留，请检查刷新后的状态并重新确认。'
               : failure.message;
           submitting = false;
         });
       }
     }
-  }
-
-  String _displayValue(ActionField field, dynamic value) {
-    if (field.type == 'drawing') {
-      return value == null ? '未绘制' : '已绘制';
-    }
-    if (field.type == 'checkbox') {
-      return value == true ? '是' : '否';
-    }
-    if (value is List) {
-      return value.map((item) => _optionLabel(field, item.toString())).join('、');
-    }
-    if (value == null) {
-      return '（空）';
-    }
-    return _optionLabel(field, value.toString());
-  }
-
-  String _optionLabel(ActionField field, String value) {
-    for (final option in field.options) {
-      if (option['value'].toString() == value) {
-        return option['label'].toString();
-      }
-    }
-    final role = roleVisual(value);
-    return role?.name ?? value;
   }
 }
 

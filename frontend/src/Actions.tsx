@@ -228,8 +228,6 @@ function ActionForm({
 }) {
   const { command, busy, state, session, catalog } = useGame();
   const isHost = session.actor?.kind === "host";
-  const labeled = (option: { value: string; label: string } | undefined) =>
-    option ? seatChoiceLabel(option, state, catalog, isHost) : "";
   const [expectedVersion, setExpectedVersion] = useState(version);
   const [descriptor, setDescriptor] = useState(action);
   action = descriptor;
@@ -249,7 +247,6 @@ function ActionForm({
   const values = action.fields.some((field) => field.name === "confirm")
     ? { ...savedValues, confirm: confirmed }
     : savedValues;
-  const [review, setReview] = useState(false);
   const [error, setError] = useState("");
   const update = (name: string, value: unknown) => {
     if (name === "confirm") setConfirmed(Boolean(value));
@@ -258,7 +255,8 @@ function ActionForm({
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!review) {
+    // 单次确认：校验通过后直接提交，不再进入二次确认步骤。
+    {
       for (const field of action.fields) {
         const value = values[field.name];
         if (
@@ -298,10 +296,9 @@ function ActionForm({
           return;
         }
       }
-      setReview(true);
-      return;
     }
     const payload = { ...values };
+    delete payload.confirm;
     for (const field of action.fields) {
       if (field.type === "number") {
         if (payload[field.name] === "") {
@@ -319,7 +316,6 @@ function ActionForm({
       onClose();
     } catch (failure) {
       setError(errorText(failure));
-      setReview(false);
       setConfirmed(false);
     }
   };
@@ -364,7 +360,6 @@ function ActionForm({
               onClick={() => {
                 setExpectedVersion(state!.version);
                 setDescriptor(latestAction);
-                setReview(false);
                 setConfirmed(false);
                 setError("");
               }}
@@ -377,92 +372,44 @@ function ActionForm({
         </div>
       )}
       <form onSubmit={(event) => void submit(event)}>
-        {!review ? (
-          <>
-            {action.fields.map((field) => (
-              <ActionField
-                key={field.name}
-                field={field}
-                value={values[field.name]}
-                onChange={(value) => update(field.name, value)}
-              />
-            ))}
-            {selectedTop && selectedBottom && (
-              <p className="hint" role="status">
-                上层：
-                {catalog.roles.find((role) => role.id === selectedTop.role_id)
-                  ?.name ?? selectedTop.role_id}
-                ；下层已自动选择：
-                {catalog.roles.find(
-                  (role) => role.id === selectedBottom.role_id,
-                )?.name ?? selectedBottom.role_id}
-                。
-              </p>
-            )}
-          </>
-        ) : (
-          <div className="action-review">
-            <h3>确认目标与内容</h3>
-            {action.fields.length === 0 && (
-              <p>
-                将执行「{action.label}」。结果及可见范围由服务器按规则处理。
-              </p>
-            )}
-            {action.fields.map((field) => (
-              <div key={field.name}>
-                <h4>{field.label}</h4>
-                {field.type === "drawing" && values[field.name] ? (
-                  <img
-                    className="drawing-preview"
-                    src={String(values[field.name])}
-                    alt="即将提交的画作"
-                  />
-                ) : (
-                  <RecordView
-                    value={
-                      field.options
-                        ? Array.isArray(values[field.name])
-                          ? (values[field.name] as unknown[]).map(
-                              (value) =>
-                                labeled(
-                                  field.options?.find(
-                                    (option) => option.value === value,
-                                  ),
-                                ) || value,
-                            )
-                          : labeled(
-                              field.options.find(
-                                (option) => option.value === values[field.name],
-                              ),
-                            ) || values[field.name]
-                        : values[field.name]
-                    }
-                  />
-                )}
-              </div>
-            ))}
-            {action.payload && Object.keys(action.payload).length > 0 && (
-              <details>
-                <summary>操作绑定的对象与选项</summary>
-                <RecordView value={action.payload} />
-              </details>
-            )}
-            {action.id === "room.replace" && (
-              <section className="warning">
-                <h4>接管将继承以下席位状态</h4>
-                <RecordView
-                  value={state?.seats.find(
-                    (seat) =>
-                      seat.id ===
-                      String(values.seat_id ?? action.payload?.seat_id),
-                  )}
-                />
-                <h4>当前已提交行动（是否保留以上方选择为准）</h4>
-                <RecordView value={state?.host?.night_actions} />
-                <p>原操作者将失去此席位权限；私密历史仅按你确认的范围授予。</p>
-              </section>
-            )}
-          </div>
+        {action.fields.map((field) => (
+          <ActionField
+            key={field.name}
+            field={field}
+            value={values[field.name]}
+            onChange={(value) => update(field.name, value)}
+          />
+        ))}
+        {selectedTop && selectedBottom && (
+          <p className="hint" role="status">
+            上层：
+            {catalog.roles.find((role) => role.id === selectedTop.role_id)
+              ?.name ?? selectedTop.role_id}
+            ；下层已自动选择：
+            {catalog.roles.find((role) => role.id === selectedBottom.role_id)
+              ?.name ?? selectedBottom.role_id}
+            。
+          </p>
+        )}
+        {action.id === "room.replace" && (
+          <section className="warning">
+            <h4>接管将继承以下席位状态</h4>
+            <RecordView
+              value={state?.seats.find(
+                (seat) =>
+                  seat.id ===
+                  String(values.seat_id ?? action.payload?.seat_id),
+              )}
+            />
+            <h4>当前已提交行动（是否保留以上方选择为准）</h4>
+            <RecordView value={state?.host?.night_actions} />
+            <p>原操作者将失去此席位权限；私密历史仅按你选择的范围授予。</p>
+          </section>
+        )}
+        {action.fields.length === 0 && (
+          <p className="hint">
+            将执行「{action.label}」。结果及可见范围由服务器按规则处理。
+          </p>
         )}
         {draftError && (
           <p className="warning" role="alert">
@@ -475,22 +422,12 @@ function ActionForm({
           </p>
         )}
         <div className="form-footer">
-          {review && (
-            <button
-              type="button"
-              className="quiet"
-              onClick={() => setReview(false)}
-              disabled={busy}
-            >
-              返回修改
-            </button>
-          )}
           <button
             type="submit"
             className={action.danger ? "danger-button" : "primary"}
             disabled={busy || stale}
           >
-            {busy ? "正在提交…" : review ? "确认提交" : "核对并继续"}
+            {busy ? "正在提交…" : "确认提交"}
           </button>
         </div>
       </form>
