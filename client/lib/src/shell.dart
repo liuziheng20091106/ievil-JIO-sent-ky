@@ -467,7 +467,55 @@ class _Composer extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (actions.isNotEmpty)
+            // 发送目标与发送按钮同处文本框上方，文本框整行展开不再被挤压。
+            Row(
+              children: [
+                Expanded(child: _ChannelButton(store: store, channel: channel)),
+                const SizedBox(width: AppSpacing.sm),
+                _SendButton(enabled: canSend, onSend: onSend),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: controller,
+              enabled: canSend,
+              maxLength: 2000,
+              minLines: 1,
+              maxLines: 4,
+              decoration: InputDecoration(
+                hintText: canSend ? '说点什么…' : '当前不可发言',
+                errorText: error,
+                counterText: '',
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+              onChanged: (_) => onClearError(),
+              onSubmitted: (_) => onSend(),
+            ),
+            if (!canSend && (channel?.reason.isNotEmpty ?? false))
+              Padding(
+                padding: const EdgeInsets.only(top: AppSpacing.sm),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline,
+                        size: 14, color: AppColors.textTertiary),
+                    const SizedBox(width: AppSpacing.xs),
+                    Expanded(
+                      child: Text(
+                        channel!.reason,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (actions.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
+                child: DashedDivider(),
+              ),
               SizedBox(
                 height: 42,
                 child: keyboard
@@ -497,57 +545,65 @@ class _Composer extends StatelessWidget {
                         ),
                       ),
               ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                _ChannelButton(store: store, channel: channel),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    enabled: canSend,
-                    maxLength: 2000,
-                    minLines: 1,
-                    maxLines: 4,
-                    decoration: InputDecoration(
-                      hintText: canSend ? '说点什么…' : '当前不可发言',
-                      errorText: error,
-                      counterText: '',
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                    ),
-                    onChanged: (_) => onClearError(),
-                    onSubmitted: (_) => onSend(),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                _SendButton(enabled: canSend, onSend: onSend),
-              ],
-            ),
-            if (!canSend && (channel?.reason.isNotEmpty ?? false))
-              Padding(
-                padding: const EdgeInsets.only(top: AppSpacing.sm),
-                child: Row(
-                  children: [
-                    const Icon(Icons.info_outline,
-                        size: 14, color: AppColors.textTertiary),
-                    const SizedBox(width: AppSpacing.xs),
-                    Expanded(
-                      child: Text(
-                        channel!.reason,
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            ],
           ],
         ),
       ),
     );
   }
+}
+
+/// 虚线分隔符：用于把文本框与行动区分开。
+class DashedDivider extends StatelessWidget {
+  const DashedDivider({super.key, this.dash = 5, this.gap = 4, this.color});
+
+  final double dash;
+  final double gap;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 1,
+        width: double.infinity,
+        child: CustomPaint(
+          painter: _DashedLinePainter(
+            color: color ?? AppColors.borderStrong,
+            dash: dash,
+            gap: gap,
+          ),
+        ),
+      );
+}
+
+class _DashedLinePainter extends CustomPainter {
+  const _DashedLinePainter({
+    required this.color,
+    required this.dash,
+    required this.gap,
+  });
+
+  final Color color;
+  final double dash;
+  final double gap;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    var start = 0.0;
+    while (start < size.width) {
+      final end = (start + dash).clamp(0.0, size.width);
+      canvas.drawLine(Offset(start, 0), Offset(end, 0), paint);
+      start = end + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedLinePainter oldDelegate) =>
+      oldDelegate.color != color ||
+      oldDelegate.dash != dash ||
+      oldDelegate.gap != gap;
 }
 
 class _SendButton extends StatelessWidget {
@@ -600,7 +656,8 @@ class _ChannelButton extends StatelessWidget {
           child: Container(
             height: 46,
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            constraints: const BoxConstraints(maxWidth: 132),
+            // 整行展开：发送目标名称要完整显示，不被左侧固定宽度截断。
+            width: double.infinity,
             child: Row(
               children: [
                 Icon(
@@ -613,7 +670,7 @@ class _ChannelButton extends StatelessWidget {
                   color: AppColors.textSecondary,
                 ),
                 const SizedBox(width: 6),
-                Flexible(
+                Expanded(
                   child: Text(
                     label.replaceFirst('私密 · ', ''),
                     overflow: TextOverflow.ellipsis,
