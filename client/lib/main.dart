@@ -20,14 +20,14 @@ class SevenDoubleApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: kAppTitle,
-    debugShowCheckedModeBanner: false,
-    theme: buildAppTheme(),
-    home: AnimatedBuilder(
-      animation: store,
-      builder: (context, _) => AppGate(store: store),
-    ),
-  );
+        title: kAppTitle,
+        debugShowCheckedModeBanner: false,
+        theme: buildAppTheme(),
+        home: AnimatedBuilder(
+          animation: store,
+          builder: (context, _) => AppGate(store: store),
+        ),
+      );
 }
 
 class AppGate extends StatelessWidget {
@@ -117,62 +117,63 @@ class _EndpointPageState extends State<EndpointPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(AppSpacing.xl),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Center(child: AppLogo(size: 88, rounded: true)),
-                const SizedBox(height: AppSpacing.xl),
-                const Text(
-                  kAppTitle,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.text,
-                  ),
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 460),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Center(child: AppLogo(size: 88, rounded: true)),
+                    const SizedBox(height: AppSpacing.xl),
+                    const Text(
+                      kAppTitle,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    const Text(
+                      '七人双角色 · 由真人主持人主持的魔女审判',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 14, color: AppColors.textTertiary),
+                    ),
+                    const SizedBox(height: AppSpacing.xxl),
+                    const SectionTitle(
+                      '连接服务器',
+                      subtitle: '局域网可用 HTTP；公网地址必须使用 HTTPS。',
+                    ),
+                    TextField(
+                      controller: controller,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        labelText: '服务根地址',
+                        hintText: 'https://game.example.com',
+                        errorText: error,
+                        prefixIcon: const Icon(Icons.dns_outlined, size: 20),
+                      ),
+                      onSubmitted: (_) => submit(),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    FilledButton.icon(
+                      onPressed: submit,
+                      icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                      label: const Text('继续'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                const Text(
-                  '七人双角色 · 由真人主持人主持的魔女审判',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14, color: AppColors.textTertiary),
-                ),
-                const SizedBox(height: AppSpacing.xxl),
-                const SectionTitle(
-                  '连接服务器',
-                  subtitle: '局域网可用 HTTP；公网地址必须使用 HTTPS。',
-                ),
-                TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.url,
-                  autocorrect: false,
-                  decoration: InputDecoration(
-                    labelText: '服务根地址',
-                    hintText: 'https://game.example.com',
-                    errorText: error,
-                    prefixIcon: const Icon(Icons.dns_outlined, size: 20),
-                  ),
-                  onSubmitted: (_) => submit(),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                FilledButton.icon(
-                  onPressed: submit,
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                  label: const Text('继续'),
-                ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
-    ),
-  );
+      );
 
   Future<void> submit() async {
     try {
@@ -184,9 +185,9 @@ class _EndpointPageState extends State<EndpointPage> {
       if (mounted) {
         setState(
           () => error = failure.toString().replaceFirst(
-            'FormatException: ',
-            '',
-          ),
+                'FormatException: ',
+                '',
+              ),
         );
       }
     }
@@ -499,9 +500,8 @@ class _LobbyPageState extends State<LobbyPage> {
                       if (store.actor!.isHost) ...[
                         const SizedBox(height: AppSpacing.lg),
                         FilledButton.icon(
-                          onPressed: store.writeBusy
-                              ? null
-                              : pickCodexThenCreate,
+                          onPressed:
+                              store.writeBusy ? null : pickCodexThenCreate,
                           icon: const Icon(
                             Icons.auto_stories_outlined,
                             size: 18,
@@ -582,8 +582,8 @@ class _LobbyPageState extends State<LobbyPage> {
                             child: OutlinedButton.icon(
                               onPressed:
                                   game.canJoinSpectator && !store.writeBusy
-                                  ? () => store.participate('spectator')
-                                  : null,
+                                      ? () => store.participate('spectator')
+                                      : null,
                               icon: const Icon(
                                 Icons.visibility_outlined,
                                 size: 18,

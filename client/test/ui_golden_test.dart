@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,27 +21,29 @@ Map<String, dynamic> seatJson(
   required List<String> roles,
   bool alive = true,
   bool occupied = true,
-}) => {
-  'id': id,
-  'participant_id': occupied ? 'p$id' : null,
-  'name': name,
-  'avatar_role_id': roles.isEmpty ? null : roles.first,
-  'previous_role_id': roles.length > 1 ? roles.last : null,
-  'occupied': occupied,
-  'ready': false,
-  'alive': alive,
-  'online': id == '1' || id == '3',
-};
+}) =>
+    {
+      'id': id,
+      'participant_id': occupied ? 'p$id' : null,
+      'name': name,
+      'avatar_role_id': roles.isEmpty ? null : roles.first,
+      'previous_role_id': roles.length > 1 ? roles.last : null,
+      'occupied': occupied,
+      'ready': false,
+      'alive': alive,
+      'online': id == '1' || id == '3',
+    };
 
-Map<String, dynamic> cardJson(String id, String roleId, {bool alive = true}) => {
-  'id': id,
-  'role_id': roleId,
-  'alive': alive,
-  'witch': false,
-  'injured': false,
-  'uses': <String, dynamic>{},
-  'states': <String, dynamic>{},
-};
+Map<String, dynamic> cardJson(String id, String roleId, {bool alive = true}) =>
+    {
+      'id': id,
+      'role_id': roleId,
+      'alive': alive,
+      'witch': false,
+      'injured': false,
+      'uses': <String, dynamic>{},
+      'states': <String, dynamic>{},
+    };
 
 Map<String, dynamic> actionJson(
   String id,
@@ -49,130 +52,131 @@ Map<String, dynamic> actionJson(
   String group = '流程',
   List<Map<String, dynamic>> fields = const [],
   bool danger = false,
-}) => {
-  'id': id,
-  'ui_version': 1,
-  'short_label': short,
-  'label': label,
-  'description': '$label：这是完整说明文字，用来验证说明在弹窗中完整显示。',
-  'group': group,
-  'danger': danger,
-  'payload': <String, dynamic>{},
-  'fields': fields,
-};
+}) =>
+    {
+      'id': id,
+      'ui_version': 1,
+      'short_label': short,
+      'label': label,
+      'description': '$label：这是完整说明文字，用来验证说明在弹窗中完整显示。',
+      'group': group,
+      'danger': danger,
+      'payload': <String, dynamic>{},
+      'fields': fields,
+    };
 
 List<Map<String, dynamic>> seatList() => [
-  seatJson('1', name: '阿雪', roles: ['emma', 'coco']),
-  seatJson('2', name: 'kiwi', roles: ['hiro', 'marg']),
-  seatJson('3', name: '小满', roles: ['sherry', 'noah']),
-  seatJson('4', name: '', roles: [], occupied: false),
-  seatJson('5', name: '庭雨', roles: ['millia', 'annan'], alive: false),
-  seatJson('6', name: '青岚', roles: ['arisa', 'leia']),
-  seatJson('7', name: '临', roles: ['nanoka', 'honoka']),
-];
+      seatJson('1', name: '阿雪', roles: ['emma', 'coco']),
+      seatJson('2', name: 'kiwi', roles: ['hiro', 'marg']),
+      seatJson('3', name: '小满', roles: ['sherry', 'noah']),
+      seatJson('4', name: '', roles: [], occupied: false),
+      seatJson('5', name: '庭雨', roles: ['millia', 'annan'], alive: false),
+      seatJson('6', name: '青岚', roles: ['arisa', 'leia']),
+      seatJson('7', name: '临', roles: ['nanoka', 'honoka']),
+    ];
 
 Map<String, dynamic> playerViewJson() => {
-  'ui_version': 1,
-  'id': 'game-demo',
-  'version': 12,
-  'status': 'playing',
-  'day': 2,
-  'half': 'day',
-  'phase': 'speech',
-  'phase_label': '顺序发言',
-  'deadline': null,
-  'ready_count': 7,
-  'seats': seatList(),
-  'self': {
-    'seat_id': '1',
-    'cards': [cardJson('c1', 'emma'), cardJson('c2', 'coco')],
-    'current_card_id': 'c1',
-  },
-  'actions': [
-    actionJson('speech.done', '结束发言', '结束本轮发言'),
-    actionJson(
-      'day.skill',
-      '技能',
-      '声明白天技能',
-      fields: [
+      'ui_version': 1,
+      'id': 'game-demo',
+      'version': 12,
+      'status': 'playing',
+      'day': 2,
+      'half': 'day',
+      'phase': 'speech',
+      'phase_label': '顺序发言',
+      'deadline': null,
+      'ready_count': 7,
+      'seats': seatList(),
+      'self': {
+        'seat_id': '1',
+        'cards': [cardJson('c1', 'emma'), cardJson('c2', 'coco')],
+        'current_card_id': 'c1',
+      },
+      'actions': [
+        actionJson('speech.done', '结束发言', '结束本轮发言'),
+        actionJson(
+          'day.skill',
+          '技能',
+          '声明白天技能',
+          fields: [
+            {
+              'name': 'target',
+              'label': '目标席位',
+              'type': 'select',
+              'required': true,
+              'options': [
+                {'value': '2', 'label': '2号 · kiwi（希罗）'},
+                {'value': '3', 'label': '3号 · 小满（雪莉）'},
+              ],
+            },
+          ],
+        ),
+        actionJson('day.challenge', '质疑', '质疑他人的技能声明'),
+        actionJson('channel.create', '建私信', '创建一对一或多人私信', group: '私信'),
+        actionJson('evidence.submit', '证物', '提交证物'),
+      ],
+      'channels': [
         {
-          'name': 'target',
-          'label': '目标席位',
-          'type': 'select',
-          'required': true,
-          'options': [
-            {'value': '2', 'label': '2号 · kiwi（希罗）'},
-            {'value': '3', 'label': '3号 · 小满（雪莉）'},
+          'id': 'public',
+          'label': '公开讨论',
+          'status': 'active',
+          'creator_id': 'host',
+          'members': <dynamic>[],
+          'invited_ids': <dynamic>[],
+          'accepted_ids': <dynamic>[],
+          'invitation': 'none',
+          'can_send': true,
+          'reason': '',
+          'actions': <dynamic>[],
+        },
+        {
+          'id': 'private:abc',
+          'label': '私密 · 与主持人',
+          'status': 'active',
+          'creator_id': 'p1',
+          'members': [
+            {'id': 'p1', 'name': '阿雪', 'kind': 'player', 'seat_id': '1'},
+            {'id': 'host', 'name': '主持人', 'kind': 'host', 'seat_id': null},
+          ],
+          'invited_ids': ['host'],
+          'accepted_ids': ['p1', 'host'],
+          'invitation': 'accepted',
+          'can_send': true,
+          'reason': '',
+          'actions': [
+            actionJson(
+              'channel.end',
+              '结束私信',
+              '结束整个私信频道',
+              group: '私信',
+              danger: true,
+            ),
           ],
         },
+        {
+          'id': 'system',
+          'label': '系统与私密信息',
+          'status': 'active',
+          'creator_id': 'host',
+          'members': <dynamic>[],
+          'invited_ids': <dynamic>[],
+          'accepted_ids': <dynamic>[],
+          'invitation': 'none',
+          'can_send': false,
+          'reason': '系统信息只用于告知，不能在此发言',
+          'actions': <dynamic>[],
+        },
       ],
-    ),
-    actionJson('day.challenge', '质疑', '质疑他人的技能声明'),
-    actionJson('channel.create', '建私信', '创建一对一或多人私信', group: '私信'),
-    actionJson('evidence.submit', '证物', '提交证物'),
-  ],
-  'channels': [
-    {
-      'id': 'public',
-      'label': '公开讨论',
-      'status': 'active',
-      'creator_id': 'host',
-      'members': <dynamic>[],
-      'invited_ids': <dynamic>[],
-      'accepted_ids': <dynamic>[],
-      'invitation': 'none',
-      'can_send': true,
-      'reason': '',
-      'actions': <dynamic>[],
-    },
-    {
-      'id': 'private:abc',
-      'label': '私密 · 与主持人',
-      'status': 'active',
-      'creator_id': 'p1',
-      'members': [
-        {'id': 'p1', 'name': '阿雪', 'kind': 'player', 'seat_id': '1'},
-        {'id': 'host', 'name': '主持人', 'kind': 'host', 'seat_id': null},
-      ],
-      'invited_ids': ['host'],
-      'accepted_ids': ['p1', 'host'],
-      'invitation': 'accepted',
-      'can_send': true,
-      'reason': '',
-      'actions': [
-        actionJson(
-          'channel.end',
-          '结束私信',
-          '结束整个私信频道',
-          group: '私信',
-          danger: true,
-        ),
-      ],
-    },
-    {
-      'id': 'system',
-      'label': '系统与私密信息',
-      'status': 'active',
-      'creator_id': 'host',
-      'members': <dynamic>[],
-      'invited_ids': <dynamic>[],
-      'accepted_ids': <dynamic>[],
-      'invitation': 'none',
-      'can_send': false,
-      'reason': '系统信息只用于告知，不能在此发言',
-      'actions': <dynamic>[],
-    },
-  ],
-  'public': {
-    'speaker': '1',
-    'balloon': {'status': 'idle'},
-    'votes': <String, dynamic>{},
-  },
-  'information': <dynamic>[],
-  'result': null,
-  'can_chat': true,
-  'chat_reason': '',
-};
+      'public': {
+        'speaker': '1',
+        'balloon': {'status': 'idle'},
+        'votes': <String, dynamic>{},
+      },
+      'information': <dynamic>[],
+      'result': null,
+      'can_chat': true,
+      'chat_reason': '',
+    };
 
 Map<String, dynamic> hostViewJson() {
   final view = playerViewJson();
@@ -322,80 +326,87 @@ Map<String, dynamic> hostViewJson() {
   return view;
 }
 
+/// 夹具时间基准：固定「现在」，让时间文本与 golden 都不随运行时刻变化。
+/// 偏移都取同一天内的近几分钟，显示为 HH:mm。
+final fixedNow = DateTime.utc(2026, 9, 15, 12, 0);
+
+String stampAgo(int minutes) =>
+    fixedNow.subtract(Duration(minutes: minutes)).toIso8601String();
+
 List<GameMessage> messagesJson() => [
-  GameMessage.fromJson({
-    'id': 1,
-    'kind': 'notice',
-    'sender_name': '主持人',
-    'avatar_role_id': 'host',
-    'channel_id': 'public',
-    'text': '新对局已创建，等待主持人开放参局',
-    'created_at': '2026-09-15T12:00:00Z',
-  }),
-  GameMessage.fromJson({
-    'id': 2,
-    'kind': 'chat',
-    'sender_id': 'p2',
-    'sender_name': 'kiwi',
-    'avatar_role_id': 'hiro',
-    'channel_id': 'public',
-    'text': '我先说说昨晚的情况，3 号的动作有点奇怪。',
-    'created_at': '2026-09-15T12:01:00Z',
-  }),
-  GameMessage.fromJson({
-    'id': 3,
-    'kind': 'chat',
-    'sender_id': 'p1',
-    'sender_name': '阿雪',
-    'avatar_role_id': 'emma',
-    'channel_id': 'public',
-    'text': '我这边没有可以证明的信息，先听大家说。',
-    'created_at': '2026-09-15T12:02:00Z',
-  }),
-  GameMessage.fromJson({
-    'id': 4,
-    'kind': 'chat',
-    'sender_id': 'p1',
-    'sender_name': '阿雪',
-    'avatar_role_id': 'emma',
-    'channel_id': 'private:abc',
-    'text': '（私信）主持人，我想私下确认一件事。',
-    'created_at': '2026-09-15T12:03:00Z',
-  }),
-  GameMessage.fromJson({
-    'id': 5,
-    'kind': 'information',
-    'sender_name': '主持人',
-    'avatar_role_id': 'host',
-    'channel_id': 'information',
-    'text': '系统信息：你已获得一次额外的信息授权。',
-    'created_at': '2026-09-15T12:04:00Z',
-  }),
-];
+      GameMessage.fromJson({
+        'id': 1,
+        'kind': 'notice',
+        'sender_name': '主持人',
+        'avatar_role_id': 'host',
+        'channel_id': 'public',
+        'text': '新对局已创建，等待主持人开放参局',
+        'created_at': stampAgo(5),
+      }),
+      GameMessage.fromJson({
+        'id': 2,
+        'kind': 'chat',
+        'sender_id': 'p2',
+        'sender_name': 'kiwi',
+        'avatar_role_id': 'hiro',
+        'channel_id': 'public',
+        'text': '我先说说昨晚的情况，3 号的动作有点奇怪。',
+        'created_at': stampAgo(4),
+      }),
+      GameMessage.fromJson({
+        'id': 3,
+        'kind': 'chat',
+        'sender_id': 'p1',
+        'sender_name': '阿雪',
+        'avatar_role_id': 'emma',
+        'channel_id': 'public',
+        'text': '我这边没有可以证明的信息，先听大家说。',
+        'created_at': stampAgo(3),
+      }),
+      GameMessage.fromJson({
+        'id': 4,
+        'kind': 'chat',
+        'sender_id': 'p1',
+        'sender_name': '阿雪',
+        'avatar_role_id': 'emma',
+        'channel_id': 'private:abc',
+        'text': '（私信）主持人，我想私下确认一件事。',
+        'created_at': stampAgo(2),
+      }),
+      GameMessage.fromJson({
+        'id': 5,
+        'kind': 'information',
+        'sender_name': '主持人',
+        'avatar_role_id': 'host',
+        'channel_id': 'information',
+        'text': '系统信息：你已获得一次额外的信息授权。',
+        'created_at': stampAgo(1),
+      }),
+    ];
 
 Actor actorJson({required bool host}) => Actor.fromJson(
-  host
-      ? {
-          'id': 'host',
-          'account_id': null,
-          'kind': 'host',
-          'game_id': 'game-demo',
-          'seat_id': null,
-          'name': '主持人',
-          'access_ids': ['host'],
-        }
-      : {
-          'id': 'p1',
-          'account_id': 'a1',
-          'kind': 'player',
-          'game_id': 'game-demo',
-          'seat_id': '1',
-          'name': '阿雪',
-          'qq_id': '10001',
-          'avatar_url': null,
-          'access_ids': ['p1'],
-        },
-);
+      host
+          ? {
+              'id': 'host',
+              'account_id': null,
+              'kind': 'host',
+              'game_id': 'game-demo',
+              'seat_id': null,
+              'name': '主持人',
+              'access_ids': ['host'],
+            }
+          : {
+              'id': 'p1',
+              'account_id': 'a1',
+              'kind': 'player',
+              'game_id': 'game-demo',
+              'seat_id': '1',
+              'name': '阿雪',
+              'qq_id': '10001',
+              'avatar_url': null,
+              'access_ids': ['p1'],
+            },
+    );
 
 Future<GameStore> previewStore({required bool host}) async {
   SharedPreferences.setMockInitialValues({});
@@ -433,8 +444,8 @@ Future<void> loadBundledFonts() async {
     final name = weight == 400
         ? 'Regular'
         : weight == 500
-        ? 'Medium'
-        : 'Bold';
+            ? 'Medium'
+            : 'Bold';
     final bytes = await rootBundle.load(
       'assets/fonts/HarmonyOS_Sans_SC_$name.ttf',
     );
@@ -462,42 +473,46 @@ void main() {
   setUpAll(loadBundledFonts);
 
   testWidgets('玩家端对局页渲染', (tester) async {
-    final store = await previewStore(host: false);
-    await pumpAt(tester, store, const Size(420, 880));
-    await expectLater(
-      find.byType(GameShell),
-      matchesGoldenFile('goldens/player_chat.png'),
-    );
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      await pumpAt(tester, store, const Size(420, 880));
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/player_chat.png'),
+      );
 
-    await tester.tap(find.text('状态'));
-    await tester.pump(const Duration(milliseconds: 600));
-    await expectLater(
-      find.byType(GameShell),
-      matchesGoldenFile('goldens/player_board.png'),
-    );
+      await tester.tap(find.text('状态'));
+      await tester.pump(const Duration(milliseconds: 600));
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/player_board.png'),
+      );
 
-    await tester.tap(find.text('我的'));
-    await tester.pump(const Duration(milliseconds: 600));
-    await expectLater(
-      find.byType(GameShell),
-      matchesGoldenFile('goldens/player_profile.png'),
-    );
+      await tester.tap(find.text('我的'));
+      await tester.pump(const Duration(milliseconds: 600));
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/player_profile.png'),
+      );
+    });
   });
 
   testWidgets('主持人端管理页渲染', (tester) async {
-    final store = await previewStore(host: true);
-    await pumpAt(tester, store, const Size(1280, 800));
-    await expectLater(
-      find.byType(GameShell),
-      matchesGoldenFile('goldens/host_chat.png'),
-    );
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: true);
+      await pumpAt(tester, store, const Size(1280, 800));
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/host_chat.png'),
+      );
 
-    await tester.tap(find.text('管理'));
-    await tester.pump(const Duration(milliseconds: 600));
-    await expectLater(
-      find.byType(GameShell),
-      matchesGoldenFile('goldens/host_manage.png'),
-    );
+      await tester.tap(find.text('管理'));
+      await tester.pump(const Duration(milliseconds: 600));
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/host_manage.png'),
+      );
+    });
   });
 
   testWidgets('自绘选择界面渲染', (tester) async {

@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # 直接使用，用于按本机时区格式化时间；测试里配合 withClock 固定「现在」。
+  clock: ^1.1.1
   flutter_secure_storage: ^9.2.4
   # 直接使用，用于拼接 Windows 上两个插件的存储目录路径（旧数据迁移）。
   path: ^1.9.0

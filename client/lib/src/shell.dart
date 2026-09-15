@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'action_sheet.dart';
 import 'app_icons.dart';
 import 'design.dart';
+import 'message_time.dart';
 import 'models.dart';
 import 'picks.dart';
 import 'role_visuals.dart';
@@ -783,7 +784,7 @@ class MessageBubble extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppRadius.chip),
             ),
             child: Text(
-              message.text,
+              _systemText,
               textAlign: TextAlign.center,
               style: const TextStyle(
                   fontSize: 13, color: AppColors.textSecondary, height: 1.5),
@@ -867,6 +868,17 @@ class MessageBubble extends StatelessWidget {
                           color: mine ? AppColors.onAccent : AppColors.text,
                         ),
                       ),
+                      if (_time.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        Text(
+                          _time,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color:
+                                mine ? Colors.white70 : AppColors.textTertiary,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -877,6 +889,13 @@ class MessageBubble extends StatelessWidget {
       ),
     );
   }
+
+  /// 本机时区的精简时间；解析失败时返回空串，不显示原始时间串。
+  String get _time => formatMessageTime(message.createdAt);
+
+  /// 系统消息在正文后附一个精简时间，方便对照阶段变化。
+  String get _systemText =>
+      _time.isEmpty ? message.text : '${message.text} · $_time';
 }
 
 /// 状态页：牌桌 + 阶段信息。

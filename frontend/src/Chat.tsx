@@ -408,9 +408,26 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     </section>
   );
 }
+/**
+ * 服务端存的是 UTC 的 ISO-8601 串，界面统一换算成本机时区的精简时间：
+ * 当天只显示时刻，跨天补日期，跨年补年份。无法解析时返回空串，
+ * 绝不把原始时间串直接显示给用户。
+ */
 function formatTime(value: string) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const now = new Date();
+  if (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  ) {
+    return time;
+  }
+  const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `${day} ${time}`
+    : `${date.getFullYear()}-${day} ${time}`;
 }

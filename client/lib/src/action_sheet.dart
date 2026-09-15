@@ -24,7 +24,8 @@ Future<void> showActionForm(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    builder: (_) => ActionFormSheet(store: store, action: action, asSeat: asSeat),
+    builder: (_) =>
+        ActionFormSheet(store: store, action: action, asSeat: asSeat),
   );
 }
 
@@ -130,8 +131,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     super.initState();
     values.addAll(widget.store.draftFor(widget.action, asSeat: widget.asSeat));
     for (final field in widget.action.fields) {
-      if (!values.containsKey(field.name) &&
-          field.raw.containsKey('default')) {
+      if (!values.containsKey(field.name) && field.raw.containsKey('default')) {
         values[field.name] = field.raw['default'];
       }
       switch (field.type) {
@@ -210,9 +210,8 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w700,
-                                color: danger
-                                    ? AppColors.danger
-                                    : AppColors.text,
+                                color:
+                                    danger ? AppColors.danger : AppColors.text,
                               ),
                             ),
                             const SizedBox(width: AppSpacing.sm),
@@ -311,8 +310,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed:
-                        unsupported != null ||
+                    onPressed: unsupported != null ||
                             submitting ||
                             widget.store.writeBusy
                         ? null
@@ -443,12 +441,9 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 child: Row(
                   children: [
                     Icon(
-                      checked
-                          ? Icons.check_box
-                          : Icons.check_box_outline_blank,
-                      color: checked
-                          ? AppColors.accent
-                          : AppColors.textTertiary,
+                      checked ? Icons.check_box : Icons.check_box_outline_blank,
+                      color:
+                          checked ? AppColors.accent : AppColors.textTertiary,
                     ),
                     const SizedBox(width: AppSpacing.md),
                     Expanded(
@@ -545,15 +540,14 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     final selected = multi
         ? List<String>.from(values[field.name] as List? ?? const [])
         : (values[field.name] == null
-              ? <String>[]
-              : [values[field.name].toString()]);
+            ? <String>[]
+            : [values[field.name].toString()]);
     final players = playersFromOptions(
       field.options,
       seats: widget.store.view?.seats,
     );
-    final picked = players
-        .where((player) => selected.contains(player.id))
-        .toList();
+    final picked =
+        players.where((player) => selected.contains(player.id)).toList();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Column(
@@ -603,42 +597,42 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                         style: TextStyle(color: AppColors.textTertiary),
                       )
                     : picked.isEmpty
-                    ? Row(
-                        children: [
-                          const Icon(
-                            Icons.person_add_alt,
-                            size: 18,
-                            color: AppColors.textTertiary,
-                          ),
-                          const SizedBox(width: AppSpacing.sm),
-                          Text(
-                            multi ? '点击选择成员' : '点击选择参与者',
-                            style: const TextStyle(
-                              color: AppColors.textTertiary,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Wrap(
-                        spacing: AppSpacing.sm,
-                        runSpacing: AppSpacing.sm,
-                        children: [
-                          for (final player in picked)
-                            Chip(
-                              avatar: RoleAvatar(
-                                roleId: player.roleId,
-                                size: 24,
-                                dead: player.dead,
+                        ? Row(
+                            children: [
+                              const Icon(
+                                Icons.person_add_alt,
+                                size: 18,
+                                color: AppColors.textTertiary,
                               ),
-                              label: Text(
-                                player.seatId != null
-                                    ? '${player.seatId}号 ${player.name}'
-                                    : player.name,
+                              const SizedBox(width: AppSpacing.sm),
+                              Text(
+                                multi ? '点击选择成员' : '点击选择参与者',
+                                style: const TextStyle(
+                                  color: AppColors.textTertiary,
+                                  fontSize: 14,
+                                ),
                               ),
-                            ),
-                        ],
-                      ),
+                            ],
+                          )
+                        : Wrap(
+                            spacing: AppSpacing.sm,
+                            runSpacing: AppSpacing.sm,
+                            children: [
+                              for (final player in picked)
+                                Chip(
+                                  avatar: RoleAvatar(
+                                    roleId: player.roleId,
+                                    size: 24,
+                                    dead: player.dead,
+                                  ),
+                                  label: Text(
+                                    player.seatId != null
+                                        ? '${player.seatId}号 ${player.name}'
+                                        : player.name,
+                                  ),
+                                ),
+                            ],
+                          ),
               ),
             ),
           ),
@@ -671,9 +665,8 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               Tag(
                 '${selected.length} / $min',
                 color: complete ? AppColors.success : AppColors.accent,
-                background: complete
-                    ? AppColors.successSoft
-                    : AppColors.accentSoft,
+                background:
+                    complete ? AppColors.successSoft : AppColors.accentSoft,
               ),
             ],
           ),
@@ -981,8 +974,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     }
     for (final field in widget.action.fields) {
       final value = values[field.name];
-      final empty =
-          value == null ||
+      final empty = value == null ||
           (value is String && value.trim().isEmpty) ||
           (value is List && value.isEmpty);
       if (field.required && empty) {
@@ -1024,18 +1016,19 @@ Future<List<String>?> _showOptionSheet(
   required List<String> selected,
   required bool multi,
   int? max,
-}) => showModalBottomSheet<List<String>>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  builder: (context) => _OptionSheet(
-    title: title,
-    options: options,
-    initial: selected,
-    multi: multi,
-    max: max,
-  ),
-);
+}) =>
+    showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => _OptionSheet(
+        title: title,
+        options: options,
+        initial: selected,
+        multi: multi,
+        max: max,
+      ),
+    );
 
 class _OptionSheet extends StatefulWidget {
   const _OptionSheet({
@@ -1197,11 +1190,11 @@ class _OptionSheetState extends State<_OptionSheet> {
                 Icon(
                   widget.multi
                       ? (picked
-                            ? Icons.check_box
-                            : Icons.check_box_outline_blank)
+                          ? Icons.check_box
+                          : Icons.check_box_outline_blank)
                       : (picked
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_unchecked),
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked),
                   size: 20,
                   color: picked ? AppColors.accent : AppColors.textTertiary,
                 ),
@@ -1230,8 +1223,8 @@ class _DrawingPadState extends State<DrawingPad> {
   void clear() => setState(points.clear);
 
   Future<String> toDataUri() async {
-    final boundary =
-        boundaryKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final boundary = boundaryKey.currentContext!.findRenderObject()!
+        as RenderRepaintBoundary;
     final image = await boundary.toImage(pixelRatio: 2);
     final data = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
@@ -1240,35 +1233,35 @@ class _DrawingPadState extends State<DrawingPad> {
 
   @override
   Widget build(BuildContext context) => RepaintBoundary(
-    key: boundaryKey,
-    child: GestureDetector(
-      onPanStart: (event) => _add(event.localPosition),
-      onPanUpdate: (event) => _add(event.localPosition),
-      onPanEnd: (_) => setState(() => points.add(null)),
-      child: Container(
-        height: 200,
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(color: AppColors.border),
-          borderRadius: BorderRadius.circular(AppRadius.field),
-        ),
-        child: CustomPaint(
-          painter: _StrokePainter(points, AppColors.text),
-          child: hasDrawing
-              ? null
-              : const Center(
-                  child: Text(
-                    '在此手绘',
-                    style: TextStyle(
-                      color: AppColors.textTertiary,
-                      fontSize: 13,
+        key: boundaryKey,
+        child: GestureDetector(
+          onPanStart: (event) => _add(event.localPosition),
+          onPanUpdate: (event) => _add(event.localPosition),
+          onPanEnd: (_) => setState(() => points.add(null)),
+          child: Container(
+            height: 200,
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(AppRadius.field),
+            ),
+            child: CustomPaint(
+              painter: _StrokePainter(points, AppColors.text),
+              child: hasDrawing
+                  ? null
+                  : const Center(
+                      child: Text(
+                        '在此手绘',
+                        style: TextStyle(
+                          color: AppColors.textTertiary,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+            ),
+          ),
         ),
-      ),
-    ),
-  );
+      );
 
   void _add(Offset point) => setState(() => points.add(point));
 }

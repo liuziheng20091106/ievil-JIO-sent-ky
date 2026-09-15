@@ -11,3 +11,4 @@ gateway/napcat/
 gateway/*.log
 *.cmd.local
 *.env.local
+client/test/failures/
