@@ -60,6 +60,10 @@ class GameStore extends ChangeNotifier {
   String? gameId;
   GameView? view;
   LiveConnection? live;
+
+  /// 角色目录（id → 名称、好人技能、魔女化技能）；公开信息，用于角色详情与魔典说明。
+  List<RoleInfo> roles = const <RoleInfo>[];
+  List<String> defaultCodex = const <String>[];
   String connectionStatus = '未连接';
   String? error;
   bool restoring = true;
@@ -88,6 +92,8 @@ class GameStore extends ChangeNotifier {
     required GameView view,
     String? gameId,
     List<GameMessage> messages = const [],
+    List<RoleInfo> roles = const [],
+    List<String> defaultCodex = const [],
     LobbyGame? lobbyGame,
     FlutterSecureStorage? secureStorage,
   }) {
@@ -100,6 +106,8 @@ class GameStore extends ChangeNotifier {
     store.gameId = gameId;
     store.view = view;
     store.messages = [...messages];
+    store.roles = roles;
+    store.defaultCodex = defaultCodex;
     store.lobbyGame = lobbyGame;
     store.restoring = false;
     return store;
@@ -160,6 +168,29 @@ class GameStore extends ChangeNotifier {
     } else if (actor != null) {
       await refreshLobby();
     }
+  }
+
+  /// 角色目录只读一次即可：它是服务端的静态公开信息。
+  Future<void> loadCatalog() async {
+    if (api == null || roles.isNotEmpty) {
+      return;
+    }
+    try {
+      final catalog = RoleCatalog.fromJson(await api!.catalog());
+      roles = catalog.roles;
+      defaultCodex = catalog.defaultCodex;
+      notifyListeners();
+    } catch (_) {
+      // 目录取不到只影响角色详情与说明，不阻塞对局流程。
+    }
+  }
+
+  RoleInfo? roleInfo(String? roleId) {
+    if (roleId == null) return null;
+    for (final role in roles) {
+      if (role.id == roleId) return role;
+    }
+    return null;
   }
 
   Future<void> setEndpoint(String value) async {
@@ -276,6 +307,7 @@ class GameStore extends ChangeNotifier {
 
   Future<void> refreshLobby() async {
     if (api == null || actor == null) return;
+    await loadCatalog();
     try {
       final result = await api!.lobby();
       lobbyGame =
@@ -342,6 +374,7 @@ class GameStore extends ChangeNotifier {
     if (api == null) return;
     gameId = id;
     try {
+      await loadCatalog();
       _applyView(await api!.state(id));
       await loadMessages('all');
       await _startLive();

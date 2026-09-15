@@ -19,13 +19,18 @@ Future<void> showActionForm(
   GameStore store,
   ActionDescriptor action, {
   String? asSeat,
+  Map<String, dynamic>? initial,
 }) async {
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    builder: (_) =>
-        ActionFormSheet(store: store, action: action, asSeat: asSeat),
+    builder: (_) => ActionFormSheet(
+      store: store,
+      action: action,
+      asSeat: asSeat,
+      initial: initial,
+    ),
   );
 }
 
@@ -108,11 +113,15 @@ class ActionFormSheet extends StatefulWidget {
     required this.store,
     required this.action,
     this.asSeat,
+    this.initial,
   });
 
   final GameStore store;
   final ActionDescriptor action;
   final String? asSeat;
+
+  /// 快捷操作预填值；已有草稿优先，不会被覆盖。
+  final Map<String, dynamic>? initial;
 
   @override
   State<ActionFormSheet> createState() => _ActionFormSheetState();
@@ -130,6 +139,10 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
   void initState() {
     super.initState();
     values.addAll(widget.store.draftFor(widget.action, asSeat: widget.asSeat));
+    // 预填值只在没有草稿也没有字段默认值时生效。
+    widget.initial?.forEach((key, value) {
+      values.putIfAbsent(key, () => value);
+    });
     for (final field in widget.action.fields) {
       if (!values.containsKey(field.name) && field.raw.containsKey('default')) {
         values[field.name] = field.raw['default'];

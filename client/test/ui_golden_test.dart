@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:seven_double_client/src/app_icons.dart';
 import 'package:seven_double_client/src/design.dart';
 import 'package:seven_double_client/src/models.dart';
+import 'package:seven_double_client/src/participant_menu.dart';
 import 'package:seven_double_client/src/picks.dart';
 import 'package:seven_double_client/src/role_visuals.dart';
 import 'package:seven_double_client/src/shell.dart';
@@ -408,6 +409,28 @@ Actor actorJson({required bool host}) => Actor.fromJson(
             },
     );
 
+/// 角色目录夹具：与后端 catalog 的字段一致（id/name/normal/witch）。
+List<RoleInfo> catalogRoles() => [
+      RoleInfo.fromJson({
+        'id': 'emma',
+        'name': '艾玛',
+        'normal': '每个白天可打断一次他人发言；顺序发言时可改为最后发言。',
+        'witch': '第三天或更晚时，夜里可杀死所有其他角色。',
+      }),
+      RoleInfo.fromJson({
+        'id': 'hiro',
+        'name': '希罗',
+        'normal': '好人希罗即将死亡时，可回溯一次至前一天同一时点。',
+        'witch': '魔女希罗另有一次回溯额度，保留自身魔女化。',
+      }),
+      RoleInfo.fromJson({
+        'id': 'millia',
+        'name': '米莉亚',
+        'normal': '临死换牌：预结算一旦会出局就直接换上层牌重算。',
+        'witch': '魔女化后额外获得一次换牌。',
+      }),
+    ];
+
 Future<GameStore> previewStore({required bool host}) async {
   SharedPreferences.setMockInitialValues({});
   final preferences = await SharedPreferences.getInstance();
@@ -418,6 +441,7 @@ Future<GameStore> previewStore({required bool host}) async {
     view: GameView.fromJson(host ? hostViewJson() : playerViewJson()),
     gameId: 'game-demo',
     messages: messagesJson(),
+    roles: catalogRoles(),
   );
 }
 
@@ -619,6 +643,68 @@ void main() {
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('goldens/icon_gallery.png'),
+    );
+  });
+
+  test('发送者 id 能解析出席位、角色与禁言状态', () async {
+    final host = await previewStore(host: true);
+    // 主持人视图能拿到参与者名单：p1 是 1 号，角色取当前上层牌。
+    final first = participantRefFor(host, 'p1');
+    expect(first, isNotNull);
+    expect(first!.seatId, '1');
+    expect(first.roleId, 'emma');
+    expect(first.dead, isFalse);
+    // p5 在夹具里已出局。
+    final fifth = participantRefFor(host, 'p5');
+    expect(fifth!.seatId, '5');
+    expect(fifth.dead, isTrue);
+    // 主持人自己。
+    final hostRef = participantRefFor(host, 'host');
+    expect(hostRef!.isHost, isTrue);
+    // 未知发送者返回 null，不猜。
+    expect(participantRefFor(host, 'nobody'), isNull);
+    expect(participantRefFor(host, null), isNull);
+
+    // 玩家视角没有参与者名单，但可用席位里的 participant_id 关联。
+    final player = await previewStore(host: false);
+    final mine = participantRefFor(player, 'p1');
+    expect(mine, isNotNull);
+    expect(mine!.seatId, '1');
+  });
+
+  testWidgets('头像菜单与角色详情渲染', (tester) async {
+    final store = await previewStore(host: true);
+    await pumpAt(tester, store, const Size(520, 900));
+    final ref = participantRefFor(store, 'p2')!;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: Center(
+            child: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showAvatarMenu(context, store, ref),
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('goldens/avatar_menu_host.png'),
+    );
+
+    // 角色详情：公开技能说明与状态。
+    await tester.tap(find.text('查看角色技能与状态'));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('goldens/role_detail.png'),
     );
   });
 }

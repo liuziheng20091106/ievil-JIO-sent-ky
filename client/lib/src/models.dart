@@ -297,6 +297,45 @@ class GameMessage {
   late final String createdAt;
 }
 
+/// 角色目录条目：服务端的公开信息，用于角色详情与魔典说明。
+class RoleInfo {
+  RoleInfo.fromJson(Object? value) : raw = jsonObject(value, 'role') {
+    id = jsonString(raw['id'], 'role.id');
+    name = jsonString(raw['name'], 'role.name');
+    normal = raw['normal']?.toString() ?? '';
+    witch = raw['witch']?.toString() ?? '';
+    avatar = raw['avatar']?.toString();
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String name;
+  late final String normal;
+  late final String witch;
+  late final String? avatar;
+}
+
+/// 角色目录：`/api/catalog` 的裁剪结果。
+class RoleCatalog {
+  RoleCatalog.fromJson(Object? value) : raw = jsonObject(value, 'catalog') {
+    roles = raw['roles'] == null
+        ? const <RoleInfo>[]
+        : jsonArray(raw['roles'], 'catalog.roles')
+            .map(RoleInfo.fromJson)
+            .toList(growable: false);
+    defaultCodex = raw['default_codex'] == null
+        ? const <String>[]
+        : jsonArray(
+            raw['default_codex'],
+            'catalog.default_codex',
+          ).map((item) => item.toString()).toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  late final List<RoleInfo> roles;
+  late final List<String> defaultCodex;
+}
+
 class GameView {
   GameView.fromJson(Object? value) : raw = jsonObject(value, 'state') {
     uiVersion = jsonInt(raw['ui_version'], 'state.ui_version');

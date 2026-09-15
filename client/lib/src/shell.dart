@@ -9,6 +9,7 @@ import 'app_icons.dart';
 import 'design.dart';
 import 'message_time.dart';
 import 'models.dart';
+import 'participant_menu.dart';
 import 'picks.dart';
 import 'role_visuals.dart';
 import 'store.dart';
@@ -378,6 +379,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
             ],
           ),
         ),
+        if (store.actor!.isHost) _HostQuickTools(store: store),
         Expanded(
           child: store.messages.isEmpty
               ? const EmptyState(
@@ -402,7 +404,15 @@ class _ChatActionPageState extends State<ChatActionPage> {
                     }
                     final item =
                         store.messages[index - (store.hasMoreMessages ? 1 : 0)];
-                    return MessageBubble(message: item, self: store.actor?.id);
+                    return MessageBubble(
+                      message: item,
+                      self: store.actor?.id,
+                      store: store,
+                      onAvatar: (senderId) {
+                        final ref = participantRefFor(store, senderId);
+                        if (ref != null) showAvatarMenu(context, store, ref);
+                      },
+                    );
                   },
                 ),
         ),
@@ -750,6 +760,131 @@ class _ChannelSheet extends StatelessWidget {
 }
 
 /// 行动短名按钮：图标 + 短名。
+/// 主持人专用：在对局页直接执行最常用的房间管理，不必切到“管理”页。
+/// 只列出服务端当前真实给出的动作，缺席的自动隐藏。
+class _HostQuickTools extends StatelessWidget {
+  const _HostQuickTools({required this.store});
+  final GameStore store;
+
+  ActionDescriptor? _find(String id) {
+    for (final action in store.view?.allActions ?? const <ActionDescriptor>[]) {
+      if (action.id == id) return action;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final advance = _find('host.advance');
+    final auto = _find('host.auto');
+    final warn = _find('host.warn');
+    final mute = _find('room.mute');
+    final create = _find('channel.create');
+    final openJoin = _find('room.open_join');
+    final tools = <_QuickTool>[
+      if (openJoin != null)
+        _QuickTool(
+          action: openJoin,
+          label: openJoin.shortLabel,
+          icon: Icons.person_add_alt_outlined,
+        ),
+      if (advance != null)
+        _QuickTool(
+          action: advance,
+          label: '推进',
+          icon: Icons.play_circle_outline,
+        ),
+      if (auto != null)
+        _QuickTool(
+          action: auto,
+          label: auto.shortLabel,
+          icon: Icons.motion_photos_auto_outlined,
+        ),
+      if (warn != null)
+        _QuickTool(
+          action: warn,
+          label: '警告',
+          icon: Icons.timer_outlined,
+        ),
+      if (mute != null)
+        _QuickTool(
+          action: mute,
+          label: '禁言',
+          icon: Icons.volume_off_outlined,
+        ),
+      if (create != null)
+        _QuickTool(
+          action: create,
+          label: create.shortLabel,
+          icon: Icons.forum_outlined,
+        ),
+    ];
+    if (tools.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return SizedBox(
+      height: 38,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          0,
+          AppSpacing.md,
+          AppSpacing.sm,
+        ),
+        itemCount: tools.length,
+        separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
+        itemBuilder: (context, index) => tools[index].build(context, store),
+      ),
+    );
+  }
+}
+
+class _QuickTool {
+  const _QuickTool({
+    required this.action,
+    required this.label,
+    required this.icon,
+  });
+
+  final ActionDescriptor action;
+  final String label;
+  final IconData icon;
+
+  Widget build(BuildContext context, GameStore store) {
+    final danger = action.raw['danger'] == true;
+    final tint = danger ? AppColors.danger : AppColors.textSecondary;
+    final enabled = !store.writeBusy && action.unsupportedReason == null;
+    return Material(
+      color: AppColors.surfaceMuted,
+      borderRadius: BorderRadius.circular(AppRadius.chip),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.chip),
+        onTap: enabled ? () => showActionForm(context, store, action) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon,
+                  size: 15, color: enabled ? tint : AppColors.textTertiary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: enabled ? AppColors.text : AppColors.textTertiary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ActionChipButton extends StatelessWidget {
   const ActionChipButton(
       {super.key,
@@ -820,11 +955,20 @@ Future<void> openActionPicker(
 }
 
 /// 消息气泡：自己靠右、他人靠左、系统居中。
+/// 点击头像打开该发送者的快捷菜单（看技能、私信、主持人管理）。
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.message, this.self});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    this.self,
+    this.store,
+    this.onAvatar,
+  });
 
   final GameMessage message;
   final String? self;
+  final GameStore? store;
+  final ValueChanged<String?>? onAvatar;
 
   @override
   Widget build(BuildContext context) {
@@ -859,7 +1003,12 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!mine) ...[
-            RoleAvatar(roleId: message.avatarRoleId, size: 36),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap:
+                  onAvatar == null ? null : () => onAvatar!(message.senderId),
+              child: RoleAvatar(roleId: message.avatarRoleId, size: 38),
+            ),
             const SizedBox(width: AppSpacing.sm),
           ],
           Flexible(
@@ -870,10 +1019,16 @@ class MessageBubble extends StatelessWidget {
                 if (message.senderName != null && !mine)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 3, left: 2),
-                    child: Text(
-                      message.senderName!,
-                      style: const TextStyle(
-                          fontSize: 12, color: AppColors.textTertiary),
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: onAvatar == null
+                          ? null
+                          : () => onAvatar!(message.senderId),
+                      child: Text(
+                        message.senderName!,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textTertiary),
+                      ),
                     ),
                   ),
                 Container(
@@ -1020,7 +1175,10 @@ class BoardPage extends StatelessWidget {
             ),
           ),
         ),
-        SectionTitle('牌桌', subtitle: '每席两张角色牌，当前使用的牌在上层。'),
+        SectionTitle(
+          '牌桌',
+          subtitle: '每席两张角色牌，当前使用的牌在上层；点击席位可快捷操作。',
+        ),
         AnimatedSwitcher(
           duration: MediaQuery.disableAnimationsOf(context)
               ? Duration.zero
@@ -1031,7 +1189,20 @@ class BoardPage extends StatelessWidget {
               for (final seat in view.seats)
                 Padding(
                   padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                  child: SeatCard(seat: seat),
+                  child: SeatCard(
+                    seat: seat,
+                    onTap: seat['participant_id'] == null
+                        ? null
+                        : () {
+                            final ref = participantRefFor(
+                              store,
+                              seat['participant_id']?.toString(),
+                            );
+                            if (ref != null) {
+                              showAvatarMenu(context, store, ref);
+                            }
+                          },
+                  ),
                 ),
             ],
           ),
@@ -1066,8 +1237,11 @@ class BoardPage extends StatelessWidget {
 }
 
 class SeatCard extends StatelessWidget {
-  const SeatCard({super.key, required this.seat});
+  const SeatCard({super.key, required this.seat, this.onTap});
   final Map<String, dynamic> seat;
+
+  /// 点击整张席位卡打开该席位的快捷菜单。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1075,59 +1249,70 @@ class SeatCard extends StatelessWidget {
     final alive = seat['alive'] != false;
     final name = seat['name']?.toString() ?? '';
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Row(
-          children: [
-            DualAvatar(seat: seat, alive: alive),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        '${seat['id']} 号',
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.text),
-                      ),
-                      const SizedBox(width: AppSpacing.sm),
-                      Flexible(
-                        child: Text(
-                          name.isNotEmpty ? name : (occupied ? '等待命名' : '空席'),
-                          overflow: TextOverflow.ellipsis,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Row(
+            children: [
+              DualAvatar(seat: seat, alive: alive),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '${seat['id']} 号',
                           style: const TextStyle(
-                              fontSize: 14, color: AppColors.textSecondary),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.text),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Wrap(
-                    spacing: AppSpacing.sm,
-                    runSpacing: AppSpacing.xs,
-                    children: [
-                      Tag(
-                        alive ? '存活' : '已出局',
-                        color:
-                            alive ? AppColors.success : AppColors.textSecondary,
-                        background: alive
-                            ? AppColors.successSoft
-                            : AppColors.surfaceMuted,
-                      ),
-                      if (seat['online'] == true)
-                        const Tag('在线', icon: Icons.wifi_tethering),
-                      if (seat['ready'] == true)
-                        const Tag('已准备', icon: Icons.check),
-                    ],
-                  ),
-                ],
+                        const SizedBox(width: AppSpacing.sm),
+                        Flexible(
+                          child: Text(
+                            name.isNotEmpty ? name : (occupied ? '等待命名' : '空席'),
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 14, color: AppColors.textSecondary),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.xs,
+                      children: [
+                        Tag(
+                          alive ? '存活' : '已出局',
+                          color: alive
+                              ? AppColors.success
+                              : AppColors.textSecondary,
+                          background: alive
+                              ? AppColors.successSoft
+                              : AppColors.surfaceMuted,
+                        ),
+                        if (seat['online'] == true)
+                          const Tag('在线', icon: Icons.wifi_tethering),
+                        if (seat['ready'] == true)
+                          const Tag('已准备', icon: Icons.check),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              if (onTap != null)
+                const Icon(
+                  Icons.chevron_right,
+                  size: 20,
+                  color: AppColors.textTertiary,
+                ),
+            ],
+          ),
         ),
       ),
     );
