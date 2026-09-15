@@ -190,6 +190,8 @@ views.channels_for() 同时返回频道状态、邀请状态、成员摘要、ca
 5. 原生客户端（Flutter）
 
 目标平台只有 Android 玩家端与 Windows 主持人端。使用 Material 3 与 Flutter 自带的导航、动画和 HapticFeedback，除 flutter_secure_storage、shared_preferences 外不引入状态框架、路由框架、动态 UI 包或游戏引擎。
+应用显示名与窗口标题统一为“魔法裁判”：Android 用 AndroidManifest 的 android:label，Windows 用 runner 的窗口标题与 Runner.rc 的 ProductName/FileDescription；可执行文件名保持 ASCII 的 seven_double_client.exe，避免非 ASCII 文件名带来的工具链问题。
+界面字体统一为 HarmonyOS Sans SC（简体中文，随包内置 Regular/Medium/Bold 三档，约 23MB），由 pubspec 声明字体家族并在 ThemeData 的 fontFamily 启用；网页端同样改用该字体，由 public/fonts 同源提供并配 @font-face。字体随包内置是为了让原生客户端在离线或首屏时都能正确显示中文，不依赖系统是否安装。
 服务地址只接受无路径、查询和片段的服务根地址；loopback、localhost 与私有网段可以用 HTTP，其他主机必须 HTTPS。HTTP、/api/live 与头像地址都从同一根地址派生；请求超时 25 秒，写失败后只拉取一次状态核对，绝不自动重放。
 一个 GameApi 负责 QQ 挑战、me、大厅、主动加入、状态、命令、消息分页与发送、证物和登出；一个 LiveConnection 消费 sync/state/message/ping，65 秒无事件按 1、2、4、8、15 秒退避重连并按消息 ID 补齐。DTO 只解码服务端裁剪结果，不在 Dart 里重算规则。
 玩家“对局”页上方是可分页消息列表，下方固定聊天输入和短行动条；点击 2—4 字短名按钮弹出底部表单，展示完整说明、字段与最终确认。软键盘弹出时隐藏行动列表、只保留紧凑行动入口与未读提示。行动是否“新”按服务端描述的规范化键比较，首次同步只建立基线，不把旧行动伪报为新行动。

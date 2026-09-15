@@ -9,6 +9,10 @@ Future<void> main() async {
   runApp(SevenDoubleApp(store: store));
 }
 
+/// 界面统一使用 HarmonyOS Sans SC（简体中文，随包内置）。
+const appFontFamily = 'HarmonyOS Sans SC';
+const appTitle = '魔法裁判';
+
 class SevenDoubleApp extends StatelessWidget {
   const SevenDoubleApp({super.key, required this.store});
 
@@ -16,9 +20,10 @@ class SevenDoubleApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: '七人双角色',
+        title: appTitle,
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
+          fontFamily: appFontFamily,
           colorScheme: ColorScheme.fromSeed(
             seedColor: const Color(0xff6d5dfc),
             brightness: Brightness.light,
@@ -28,6 +33,7 @@ class SevenDoubleApp extends StatelessWidget {
           inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
         ),
         darkTheme: ThemeData(
+          fontFamily: appFontFamily,
           colorScheme: ColorScheme.fromSeed(
             seedColor: const Color(0xff9c8cff),
             brightness: Brightness.dark,
@@ -170,7 +176,7 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
     final challenge = widget.store.challengeInfo;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('七人双角色'),
+        title: const Text(appTitle),
         actions: [
           IconButton(
             tooltip: '更换服务器',

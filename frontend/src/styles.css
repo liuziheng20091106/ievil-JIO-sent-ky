@@ -1,5 +1,28 @@
+/* 界面统一使用 HarmonyOS Sans SC，字体随构建产物同源提供（见 public/fonts）。 */
+@font-face {
+  font-family: "HarmonyOS Sans SC";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/HarmonyOS_Sans_SC_Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "HarmonyOS Sans SC";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/HarmonyOS_Sans_SC_Medium.ttf") format("truetype");
+}
+@font-face {
+  font-family: "HarmonyOS Sans SC";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/HarmonyOS_Sans_SC_Bold.ttf") format("truetype");
+}
+
 :root {
-  font-family: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   color: #ede8f1;
   background: #191721;
   font-synthesis: none;

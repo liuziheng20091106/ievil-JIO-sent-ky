@@ -27,7 +27,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"seven_double_client", origin, size)) {
+  // 窗口标题；源码为 UTF-8，由 CMake 的 /utf-8 保证正确解析。
+  if (!window.Create(L"魔法裁判", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

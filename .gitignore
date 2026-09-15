@@ -9,3 +9,5 @@ data/
 gateway/.env
 gateway/napcat/
 gateway/*.log
+*.cmd.local
+*.env.local
