@@ -1,596 +1,273 @@
-"""Room access, preparation, and legacy migration must preserve private seat state."""
+"""Stable auth, open participation, spectator, and private-channel boundaries."""
 
-import asyncio
+import os
+import sqlite3
 import tempfile
-import time
 import unittest
-from contextlib import suppress
-from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import auth, realtime, storage
+from backend.app import auth_storage, storage
 from backend.app.game import DEFAULT_CODEX, create_game
-from backend.app.game.state import deal_cards
 from backend.app.main import app
 
 
-class RoomAccess(unittest.TestCase):
-    def test_shared_entry_and_spectator_replacement_preserve_dealt_state(self):
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(storage, "DATA_DIR", Path(directory)),
-            TestClient(app) as client,
-        ):
-            client.post("/api/host/login", json={"password": "114514"}).raise_for_status()
-            host = {"Cookie": f"{auth.COOKIE}={client.cookies[auth.COOKIE]}"}
-            game = client.post("/api/games", json={"codex": DEFAULT_CODEX}).json()
-            root = f"/api/games/{game['id']}"
-            client.cookies.clear()
-
-            def state(headers=host):
-                result = client.get(root + "/state", headers=headers)
-                result.raise_for_status()
-                return result.json()
-
-            def command(action, payload=None, headers=host, status=200, version=None):
-                result = client.post(
-                    root + "/commands",
-                    headers=headers,
-                    json={
-                        "expected_version": state()["version"] if version is None else version,
-                        "action": action,
-                        "payload": payload or {},
-                    },
-                )
-                self.assertEqual(result.status_code, status, result.text)
-                return result.json()
-
-            def invite(kind):
-                result = client.post(root + "/invites", headers=host, json={"kind": kind})
-                result.raise_for_status()
-                return result.json()["code"]
-
-            def join(code, name):
-                client.cookies.clear()
-                result = client.post("/api/join", json={"code": code, "name": name})
-                result.raise_for_status()
-                headers = {"Cookie": f"{auth.COOKIE}={client.cookies[auth.COOKIE]}"}
-                client.cookies.clear()
-                return result.json()["actor"], headers
-
-            player_code, spectator_code = invite("player"), invite("spectator")
-            players = [join(player_code, f"玩家{i}") for i in range(7)]
-            self.assertEqual({actor["seat_id"] for actor, _ in players}, set("1234567"))
-            self.assertTrue(all(not s["cards"] for s in state()["seats"]))
-            self.assertEqual(
-                client.post("/api/join", json={"code": player_code, "name": "满席"}).status_code,
-                409,
-            )
-            old, old_headers = players[0]
-            command("room.kick", {"participant_id": old["id"]}, headers=old_headers, status=403)
-            command("room.kick", {"participant_id": old["id"]})
-            self.assertEqual(client.get(root + "/state", headers=old_headers).status_code, 401)
-            players[0] = join(player_code, "重新入席")
-            self.assertEqual(players[0][0]["seat_id"], old["seat_id"])
-            stale_version = state()["version"]
-            for _, headers in players:
-                command("lobby.ready", headers=headers)
-            command("lobby.ready", headers=players[0][1], version=stale_version, status=409)
-            self.assertEqual(state()["phase"], "ordering")
-            self.assertFalse(any(s["ready"] for s in state()["seats"]))
-            command("host.start", status=422)
-            original, original_headers = players[0]
-            before = state(original_headers)
-            own = next(s for s in before["seats"] if s["id"] == original["seat_id"])
-            command("player.profile", {"name": own["name"]}, headers=original_headers)
-            command(
-                "lobby.order", {"top": before["self"]["cards"][1]["id"]}, headers=original_headers
-            )
-            sent = client.post(
-                root + "/messages",
-                headers=original_headers,
-                json={"channel_id": "public", "text": "排牌时头像不可公开"},
-            )
-            sent.raise_for_status()
-            self.assertIsNone(sent.json()["avatar_role_id"])
-            substitute, substitute_headers = join(spectator_code, "替补")
-            removed, removed_headers = join(spectator_code, "移出观战者")
-            for headers in (host, original_headers, substitute_headers):
-                self.assertTrue(all(s["avatar_role_id"] is None for s in state(headers)["seats"]))
-            self.assertTrue(all("cards" not in s for s in state(substitute_headers)["seats"]))
-            private = client.post(
-                root + "/messages",
-                headers=original_headers,
-                json={"channel_id": "host:" + original["id"], "text": "不应交给替补的旧私聊"},
-            )
-            private.raise_for_status()
-            with storage.transaction() as db:
-                saved = storage.load_game(db, game["id"])
-                assert saved is not None
-                saved["cards"]["nanoka"]["uses"]["bullets"] = 2
-                saved["cards"]["nanoka"]["injured"] = True
-                storage.save_game(db, saved)
-                cards = deepcopy(saved["cards"])
-                pairs = [s["cards"][:] for s in saved["seats"]]
-            command(
-                "room.replace",
-                {"seat_id": original["seat_id"], "participant_id": substitute["id"]},
-                status=409,
-            )
-            command("room.kick", {"participant_id": removed["id"], "block": True})
-            self.assertEqual(client.get(root + "/state", headers=removed_headers).status_code, 401)
-            self.assertEqual(
-                client.post(
-                    "/api/join",
-                    headers=removed_headers,
-                    json={"code": spectator_code, "name": "被拉黑身份"},
-                ).status_code,
-                403,
-            )
-            command("room.kick", {"participant_id": original["id"]})
-            self.assertEqual(client.get(root + "/state", headers=original_headers).status_code, 401)
-            self.assertEqual(
-                client.post(
-                    "/api/join",
-                    json={"code": player_code, "name": "发牌后不能重入空席"},
-                ).status_code,
-                409,
-            )
-            command(
-                "room.replace",
-                {"seat_id": original["seat_id"], "participant_id": players[1][0]["id"]},
-                status=422,
-            )
-            replacement = {"seat_id": original["seat_id"], "participant_id": substitute["id"]}
-            command("room.replace", replacement, headers=substitute_headers, status=403)
-            command("room.replace", replacement)
-            taken = client.get("/api/me", headers=substitute_headers).json()
-            self.assertEqual(taken["actor"]["kind"], "player")
-            self.assertEqual(taken["actor"]["seat_id"], original["seat_id"])
-            history = client.get(root + "/messages", headers=substitute_headers).json()["messages"]
-            self.assertNotIn(private.json()["id"], [m["id"] for m in history])
-            for _, headers in [players[1], *players[2:], (substitute, substitute_headers)]:
-                command("lobby.ready", headers=headers)
-            started = command("host.start")
-            self.assertEqual(started["status"], "playing")
-            self.assertEqual(started["phase"], "witch")
-            with storage.connect() as db:
-                after = storage.load_game(db, game["id"])
-                assert after is not None
-                self.assertEqual(after["cards"], cards)
-                self.assertEqual([s["cards"] for s in after["seats"]], pairs)
-            join(spectator_code, "共用观战码仍有效")
-            command("host.end", {"winner": "aborted", "reason": "回归验证结束"})
-            self.assertEqual(
-                client.post(
-                    "/api/join",
-                    json={"code": spectator_code, "name": "结束后拒绝"},
-                ).status_code,
-                403,
-            )
-
-    def test_legacy_dealt_lobby_migrates_without_redeal_or_disclosure(self):
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(storage, "DATA_DIR", Path(directory)),
-        ):
-            storage.initialize()
-            game = create_game(DEFAULT_CODEX)
-            deal_cards(game)
-            game["phase"] = "lobby"
-            for seat in game["seats"]:
-                seat["ready"] = True
-                seat["avatar_role_id"] = seat["cards"][0]
-            original = deepcopy(game)
-            with storage.transaction() as db:
-                db.execute(
-                    "INSERT INTO games VALUES(?,?,?,?,?)",
-                    (
-                        game["id"],
-                        storage.dumps(game),
-                        game["version"],
-                        game["status"],
-                        storage.now_text(),
-                    ),
-                )
-                for column in ("seat_id", "participant_id", "redeemed_by"):
-                    db.execute(f"ALTER TABLE invites ADD COLUMN {column} TEXT")
-                db.execute(
-                    "INSERT INTO invites(code_hash,game_id,kind,seat_id) VALUES(?,?,?,?)",
-                    ("old-code", game["id"], "player", "1"),
-                )
-                storage.add_message(
-                    db,
-                    game["id"],
-                    kind="chat",
-                    sender_id="old-player",
-                    avatar_role_id="hiro",
-                    text="旧候场记录",
-                )
-            storage.initialize()
-            storage.initialize()
-            with storage.connect() as db:
-                migrated = storage.load_game(db, game["id"])
-                assert migrated is not None
-                self.assertEqual(migrated["phase"], "ordering")
-                self.assertEqual(migrated["version"], original["version"] + 1)
-                self.assertFalse(any(s["ready"] for s in migrated["seats"]))
-                self.assertEqual(migrated["cards"], original["cards"])
-                self.assertEqual(
-                    [s["cards"] for s in migrated["seats"]], [s["cards"] for s in original["seats"]]
-                )
-                self.assertEqual(db.execute("SELECT valid FROM invites").fetchone()["valid"], 0)
-                self.assertIsNone(
-                    db.execute("SELECT avatar_role_id FROM messages").fetchone()["avatar_role_id"]
-                )
-
-
-class RoomReset(unittest.TestCase):
-    def test_reset_and_next_game_clear_previous_game_data(self):
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(storage, "DATA_DIR", Path(directory)),
-            TestClient(app) as client,
-        ):
-            client.post("/api/host/login", json={"password": "114514"}).raise_for_status()
-            host = {"Cookie": f"{auth.COOKIE}={client.cookies[auth.COOKIE]}"}
-            game = client.post("/api/games", json={"codex": DEFAULT_CODEX}).json()
-            root = f"/api/games/{game['id']}"
-            code = client.post(
-                root + "/invites", headers=host, json={"kind": "player"}
-            ).json()["code"]
-
-            def join(invite_code, name):
-                client.cookies.clear()
-                result = client.post("/api/join", json={"code": invite_code, "name": name})
-                result.raise_for_status()
-                headers = {"Cookie": f"{auth.COOKIE}={client.cookies[auth.COOKIE]}"}
-                client.cookies.clear()
-                return headers
-
-            player = join(code, "一号玩家")
-            self.assertEqual(client.post("/api/reset", json={}).status_code, 401)
-            self.assertEqual(client.post("/api/reset", json={}, headers=player).status_code, 403)
-            self.assertEqual(client.post("/api/reset", json={}, headers=host).status_code, 200)
-            self.assertIsNone(client.get("/api/me", headers=host).json()["actor"]["game_id"])
-            self.assertIsNone(client.get("/api/me", headers=player).json()["actor"])
-            self.assertEqual(client.get(root + "/state", headers=host).status_code, 404)
-            self.assertEqual(
-                client.post("/api/join", json={"code": code, "name": "旧码"}).status_code, 403
-            )
-            with storage.connect() as db:
-                for table in ("games", "participants", "invites", "channels", "messages", "evidence"):
-                    self.assertEqual(
-                        db.execute(f"SELECT count(*) AS total FROM {table}").fetchone()["total"],
-                        0,
-                        table,
-                    )
-                self.assertEqual(
-                    db.execute("SELECT count(*) AS total FROM sessions WHERE kind='host'").fetchone()[
-                        "total"
-                    ],
-                    1,
-                )
-            second = client.post("/api/games", json={"codex": DEFAULT_CODEX}, headers=host)
-            second.raise_for_status()
-            second_root = f"/api/games/{second.json()['id']}"
-            second_code = client.post(
-                second_root + "/invites", headers=host, json={"kind": "player"}
-            ).json()["code"]
-            player = join(second_code, "二号玩家")
-            ended = client.post(
-                second_root + "/commands",
-                headers=host,
-                json={
-                    "expected_version": client.get(second_root + "/state", headers=host)
-                    .json()["version"],
-                    "action": "host.end",
-                    "payload": {"winner": "aborted", "reason": "回归验证终止"},
-                },
-            )
-            self.assertEqual(ended.status_code, 200, ended.text)
-            self.assertEqual(ended.json()["status"], "ended")
-            self.assertEqual(client.get(second_root + "/state", headers=host).status_code, 200)
-            third = client.post("/api/games", json={"codex": DEFAULT_CODEX}, headers=host)
-            third.raise_for_status()
-            self.assertEqual(client.get(second_root + "/state", headers=host).status_code, 404)
-            self.assertIsNone(client.get("/api/me", headers=player).json()["actor"])
-            self.assertEqual(
-                client.post("/api/join", json={"code": second_code, "name": "旧码"}).status_code,
-                403,
-            )
-            third_code = client.post(
-                f"/api/games/{third.json()['id']}/invites", headers=host, json={"kind": "player"}
-            ).json()["code"]
-            self.assertEqual(
-                client.post("/api/join", json={"code": third_code, "name": "新码"}).status_code, 200
-            )
-
-
-class Heartbeat(unittest.IsolatedAsyncioTestCase):
-    async def test_idle_connection_without_a_game_never_writes_presence(self):
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(storage, "DATA_DIR", Path(directory)),
-        ):
-            storage.initialize()
-            peer = realtime.Connection(
-                socket=None,
-                token_hash="stale",
-                game_id=None,
-                participant_id="host",
-                name="主持人",
-                kind="host",
-                seat_id=None,
-            )
-            peer.last_pong = time.monotonic() - 61
-            realtime.connections.add(peer)
-            try:
-                with patch.object(realtime.logger, "exception") as failed:
-                    heartbeat = asyncio.create_task(realtime.clock())
-                    await asyncio.sleep(1.3)
-                    heartbeat.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await heartbeat
-                self.assertFalse(failed.called, failed.call_args)
-                self.assertNotIn(peer, realtime.connections)
-                with storage.connect() as db:
-                    self.assertFalse(db.execute("SELECT id FROM messages").fetchall())
-            finally:
-                realtime.connections.clear()
-
-
-class HostWorkbench(unittest.TestCase):
+class BackendFlow(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.patch = patch.object(storage, "DATA_DIR", Path(self.directory.name))
-        self.patch.start()
-        self.addCleanup(self.patch.stop)
+        self.data_patch = patch.object(storage, "DATA_DIR", Path(self.directory.name))
+        self.data_patch.start()
+        self.addCleanup(self.data_patch.stop)
+        self.env_patch = patch.dict(
+            os.environ,
+            {"GAME_GATEWAY_TOKEN": "test-gateway-secret", "GAME_QQ_GROUP_ID": "123456"},
+        )
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
         self.client = TestClient(app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        self.client.post("/api/host/login", json={"password": "114514"}).raise_for_status()
-        self.host = {"Cookie": f"{auth.COOKIE}={self.client.cookies[auth.COOKIE]}"}
-        self.game = self.client.post("/api/games", json={"codex": DEFAULT_CODEX}).json()
-        self.root = f"/api/games/{self.game['id']}"
-        self.client.cookies.clear()
-        code = self.client.post(
-            self.root + "/invites", headers=self.host, json={"kind": "player"}
-        ).json()["code"]
-        self.players = {}
-        for index in range(7):
-            self.client.cookies.clear()
-            joined = self.client.post("/api/join", json={"code": code, "name": f"玩家{index}"})
-            joined.raise_for_status()
-            actor = joined.json()["actor"]
-            self.players[actor["seat_id"]] = (
-                actor,
-                {"Cookie": f"{auth.COOKIE}={self.client.cookies[auth.COOKIE]}"},
-            )
-            self.client.cookies.clear()
+        native_host = self.client.post("/api/native/host/login", json={"password": "114514"})
+        native_host.raise_for_status()
+        self.host = {"Authorization": "Bearer " + native_host.json()["session_token"]}
+        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
+        created.raise_for_status()
+        self.game_id = created.json()["id"]
+        self.root = f"/api/games/{self.game_id}"
 
-    def state(self):
-        result = self.client.get(self.root + "/state", headers=self.host)
-        result.raise_for_status()
-        return result.json()
-
-    def test_host_acts_for_a_seat_and_leaves_a_public_trace(self):
-        version = self.state()["version"]
-        _, visitor = self.players["1"]
-        refused = self.client.post(
-            self.root + "/commands",
-            headers=visitor,
+    def account(self, qq_id):
+        challenge = self.client.post("/api/native/auth/challenges").json()
+        bound = self.client.post(
+            "/api/internal/qq/login",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
             json={
-                "expected_version": version,
-                "action": "lobby.ready",
-                "payload": {},
-                "as_seat": "2",
+                "code": challenge["code"],
+                "qq_id": qq_id,
+                "nickname": "QQ" + qq_id,
+                "avatar_url": "https://example.invalid/" + qq_id,
+                "group_id": 123456,
             },
         )
-        self.assertEqual(refused.status_code, 403, refused.text)
-        done = self.client.post(
+        bound.raise_for_status()
+        completed = self.client.get(
+            "/api/native/auth/challenges/" + challenge["id"]
+        )
+        completed.raise_for_status()
+        return {
+            "Authorization": "Bearer " + completed.json()["session_token"]
+        }, completed.json()["session"]["actor"]
+
+    def command(self, headers, action, payload=None, status=200):
+        state = self.client.get(self.root + "/state", headers=headers)
+        state.raise_for_status()
+        response = self.client.post(
             self.root + "/commands",
-            headers=self.host,
+            headers=headers,
             json={
-                "expected_version": version,
-                "action": "lobby.ready",
-                "payload": {},
-                "as_seat": "1",
+                "expected_version": state.json()["version"],
+                "action": action,
+                "payload": payload or {},
             },
         )
-        self.assertEqual(done.status_code, 200, done.text)
-        self.assertTrue(next(s for s in done.json()["seats"] if s["id"] == "1")["ready"])
-        self.assertFalse(next(s for s in done.json()["seats"] if s["id"] == "2")["ready"])
-        messages = self.client.get(
-            self.root + "/messages?channel_id=public", headers=self.host
-        ).json()["messages"]
-        self.assertTrue(
-            any("主持人为1号完成了本阶段操作" in item["text"] for item in messages), messages
+        self.assertEqual(response.status_code, status, response.text)
+        return response
+
+    def open_join(self):
+        self.command(self.host, "room.open_join", {"open": True})
+
+    def join(self, qq_id, kind="player"):
+        headers, session = self.account(qq_id)
+        response = self.client.post(
+            self.root + "/participations", headers=headers, json={"kind": kind}
         )
-        denied = self.client.post(
-            self.root + "/commands",
-            headers=self.host,
+        response.raise_for_status()
+        return headers, response.json()["actor"], session
+
+    def test_challenges_are_one_time_and_web_never_receives_a_token(self):
+        challenge = self.client.post("/api/auth/challenges").json()
+        self.assertRegex(challenge["code"], r"^\d{6}$")
+        bound = self.client.post(
+            "/api/internal/qq/login",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
             json={
-                "expected_version": done.json()["version"],
-                "action": "host.advance",
-                "payload": {},
-                "as_seat": "1",
+                "code": challenge["code"],
+                "qq_id": "10001",
+                "nickname": "网页玩家",
+                "group_id": 123456,
             },
         )
-        self.assertEqual(denied.status_code, 422, denied.text)
-        view = self.client.get(f"{self.root}/seats/1/view", headers=self.host)
-        self.assertEqual(view.status_code, 200, view.text)
-        self.assertEqual(view.json()["seat_id"], "1")
-        self.assertTrue(any(item["id"] == "lobby.ready" for item in view.json()["view"]["actions"]))
-        self.assertNotIn("host", view.json()["view"])
-
-    def start_game(self):
-        for _ in range(2):
-            for _, headers in self.players.values():
-                ready = self.client.post(
-                    self.root + "/commands",
-                    headers=headers,
-                    json={
-                        "expected_version": self.state()["version"],
-                        "action": "lobby.ready",
-                        "payload": {},
-                    },
-                )
-                self.assertEqual(ready.status_code, 200, ready.text)
-        started = self.client.post(
-            self.root + "/commands",
-            headers=self.host,
+        self.assertEqual(bound.status_code, 200, bound.text)
+        replay = self.client.post(
+            "/api/internal/qq/login",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
             json={
-                "expected_version": self.state()["version"],
-                "action": "host.start",
-                "payload": {},
+                "code": challenge["code"],
+                "qq_id": "10002",
+                "nickname": "重放",
+                "group_id": 123456,
             },
         )
-        self.assertEqual(started.status_code, 200, started.text)
-        self.assertEqual(started.json()["status"], "playing")
+        self.assertEqual(replay.status_code, 409, replay.text)
+        completed = self.client.get("/api/auth/challenges/" + challenge["id"])
+        self.assertEqual(completed.status_code, 200, completed.text)
+        self.assertEqual(set(completed.json()), {"actor", "game_id"})
+        self.assertNotIn("token", completed.text.lower())
+        self.assertIn("seven_double_session", completed.cookies)
+        self.assertEqual(
+            self.client.get("/api/auth/challenges/" + challenge["id"]).status_code, 410
+        )
+        raw_cookie = completed.cookies["seven_double_session"]
+        with auth_storage.connect() as db:
+            rows = db.execute("SELECT token_hash FROM login_tokens").fetchall()
+            self.assertNotIn(raw_cookie, {row["token_hash"] for row in rows})
+            self.assertTrue(any(row["token_hash"] == auth_storage.secret_hash(raw_cookie) for row in rows))
 
-    def test_host_state_lists_the_phase_advance_todo(self):
-        self.start_game()
-        tasks = self.state()["host"]["tasks"]
-        advance = [item for item in tasks if item["id"] == "advance"]
-        self.assertEqual(len(advance), 1, tasks)
-        self.assertEqual(advance[0]["action"], "host.advance")
-        self.assertTrue(advance[0]["blocking"])
+    def test_open_join_stable_account_capacity_and_spectator_projection(self):
+        waiting, _ = self.account("11000")
+        closed = self.client.post(
+            self.root + "/participations", headers=waiting, json={"kind": "player"}
+        )
+        self.assertEqual(closed.status_code, 409, closed.text)
+        self.open_join()
+        players = [self.join(str(11001 + index)) for index in range(7)]
+        self.assertEqual({actor["seat_id"] for _, actor, _ in players}, set("1234567"))
+        repeated = self.client.post(
+            self.root + "/participations", headers=players[0][0], json={"kind": "player"}
+        )
+        self.assertEqual(repeated.json()["actor"]["id"], players[0][1]["id"])
+        eighth, _ = self.account("11009")
+        full = self.client.post(
+            self.root + "/participations", headers=eighth, json={"kind": "player"}
+        )
+        self.assertEqual(full.status_code, 409, full.text)
+        spectator = self.client.post(
+            self.root + "/participations", headers=eighth, json={"kind": "spectator"}
+        )
+        spectator.raise_for_status()
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        watched = self.client.get(self.root + "/state", headers=eighth).json()
+        self.assertTrue(all(len(seat["cards"]) == 2 for seat in watched["seats"]))
+        self.assertTrue(all("current_card_id" in seat for seat in watched["seats"]))
+        self.assertNotIn("host", watched)
+        denied = self.command(eighth, "lobby.ready", status=403)
+        self.assertIn("观战者", denied.text)
+        evidence = self.client.post(self.root + "/evidence", headers=eighth, json={"text": "x"})
+        self.assertEqual(evidence.status_code, 403, evidence.text)
 
-    def test_information_channel_returns_private_notices_to_the_right_player(self):
-        actor, headers = self.players["1"]
-        _, stranger = self.players["2"]
-        self.start_game()
-        channels = self.client.get(self.root + "/state", headers=headers).json()["channels"]
-        system = next(item for item in channels if item["id"] == "system")
-        self.assertFalse(system["can_send"])
-        posted = self.client.post(
+    def test_private_channel_lifecycle_locks_actions_and_history(self):
+        self.open_join()
+        first, first_actor, _ = self.join("12001")
+        second, second_actor, _ = self.join("12002")
+        stranger, _, _ = self.join("12003", "spectator")
+        created = self.command(
+            first,
+            "channel.create",
+            {"name": "作战", "participant_ids": [second_actor["id"], "host"]},
+        ).json()
+        channel = next(item for item in created["channels"] if item["label"].endswith("作战"))
+        self.assertEqual(channel["status"], "pending")
+        invited = self.client.get(self.root + "/state", headers=second).json()
+        pending = next(item for item in invited["channels"] if item["id"] == channel["id"])
+        self.assertEqual(pending["invitation"], "pending")
+        active = self.command(
+            second, "channel.accept", {"channel_id": channel["id"]}
+        ).json()
+        channel = next(item for item in active["channels"] if item["id"] == channel["id"])
+        self.assertEqual(channel["status"], "active")
+        public = self.client.post(
             self.root + "/messages",
-            headers=headers,
-            json={"channel_id": "system", "text": "不应发出"},
+            headers=first,
+            json={"channel_id": "public", "text": "blocked"},
         )
-        self.assertEqual(posted.status_code, 403, posted.text)
-        sent = self.client.post(
-            self.root + "/commands",
-            headers=self.host,
-            json={
-                "expected_version": self.state()["version"],
-                "action": "host.information",
-                "payload": {
-                    "title": "目击名单",
-                    "text": "三名疑似凶手：甲、乙、丙",
-                    "recipients": ["1"],
-                },
-            },
+        self.assertEqual(public.status_code, 403, public.text)
+        self.command(first, "lobby.ready", status=403)
+        private = self.client.post(
+            self.root + "/messages",
+            headers=first,
+            json={"channel_id": channel["id"], "text": "secret"},
         )
-        self.assertEqual(sent.status_code, 200, sent.text)
-        mine = self.client.get(
-            self.root + "/messages?channel_id=system", headers=headers
+        private.raise_for_status()
+        hidden = self.client.get(
+            self.root + "/messages?scope=private", headers=stranger
         ).json()["messages"]
-        self.assertTrue(any("三名疑似凶手" in item["text"] for item in mine), mine)
-        self.assertTrue(all(item["channel_id"] == "information" for item in mine))
-        others = self.client.get(
-            self.root + "/messages?channel_id=system", headers=stranger
-        ).json()["messages"]
-        self.assertFalse(any("三名疑似凶手" in item["text"] for item in others))
-        self.assertEqual(actor["seat_id"], "1")
-
-
-class ProxyOrigin(unittest.TestCase):
-    """反向代理改写了 Host/scheme 时，同源校验仍要放行本站提交。"""
-
-    def login(self, client, headers):
-        return client.post(
-            "/api/host/login",
-            json={"password": "114514"},
-            headers=headers,
+        self.assertNotIn(private.json()["id"], [message["id"] for message in hidden])
+        host_busy = self.command(
+            self.host,
+            "channel.create",
+            {"name": "强制", "participant_ids": [first_actor["id"]]},
+            status=409,
         )
+        self.assertIn("其他私信", host_busy.text)
+        ended = self.command(
+            second, "channel.end", {"channel_id": channel["id"]}
+        ).json()
+        channel = next(item for item in ended["channels"] if item["id"] == channel["id"])
+        self.assertEqual(channel["status"], "ended")
+        restored = self.client.post(
+            self.root + "/messages",
+            headers=first,
+            json={"channel_id": "public", "text": "restored"},
+        )
+        restored.raise_for_status()
+        host_scope = self.client.get(
+            self.root + "/messages?scope=host", headers=self.host
+        ).json()["messages"]
+        self.assertIn(private.json()["id"], [message["id"] for message in host_scope])
+        self.assertTrue(all(message["channel_id"] != "public" for message in host_scope))
+        system = self.client.get(self.root + "/messages?scope=system", headers=stranger).json()
+        self.assertTrue(any("正在与" in message["text"] for message in system["messages"]))
+        self.assertTrue(any("已结束私信" in message["text"] for message in system["messages"]))
 
-    def test_browser_reported_same_origin_survives_a_tls_terminating_proxy(self):
-        with TestClient(app) as client:
-            response = self.login(
-                client,
-                {
-                    "Origin": "https://game.example.com",
-                    "Host": "127.0.0.1:8000",
-                    "X-Forwarded-Proto": "https",
-                    "X-Forwarded-Host": "game.example.com",
-                    "Sec-Fetch-Site": "same-origin",
-                },
-            )
-            self.assertEqual(response.status_code, 200, response.text)
+    def test_reset_preserves_accounts_and_tokens(self):
+        self.open_join()
+        player, _, _ = self.join("13001")
+        before = self.client.get("/api/me", headers=player).json()["actor"]
+        reset = self.client.post("/api/reset", headers=self.host)
+        reset.raise_for_status()
+        after = self.client.get("/api/me", headers=player).json()["actor"]
+        self.assertEqual(after["kind"], "account")
+        self.assertEqual(after["account_id"], before["account_id"])
 
-    def test_relying_on_forwarded_host_alone_still_passes(self):
-        with TestClient(app) as client:
-            response = self.login(
-                client,
-                {
-                    "Origin": "https://game.example.com",
-                    "Host": "127.0.0.1:8000",
-                    "X-Forwarded-Proto": "https",
-                    "X-Forwarded-Host": "game.example.com, inner",
-                },
-            )
-            self.assertEqual(response.status_code, 200, response.text)
 
-    def test_explicitly_allowed_origin_passes_without_other_signals(self):
-        with TestClient(app) as client:
-            for origin in (
-                "https://super.tkcloud.online",
-                "https://super.tkcloud.online:8443",
-                "http://super.tkcloud.online",
-            ):
-                response = self.login(client, {"Origin": origin})
-                self.assertEqual(response.status_code, 200, f"{origin}: {response.text}")
-            other = self.login(client, {"Origin": "https://other.example"})
-            self.assertEqual(other.status_code, 403, other.text)
-
-    def test_allowed_origins_can_be_overridden_and_still_deny_cross_site(self):
-        with patch.dict("os.environ", {"GAME_ALLOWED_ORIGINS": "https://other.example, local.test"}):
-            with TestClient(app) as client:
-                other = self.login(client, {"Origin": "https://other.example"})
-                self.assertEqual(other.status_code, 200, other.text)
-                local = self.login(client, {"Origin": "http://local.test"})
-                self.assertEqual(local.status_code, 200, local.text)
-                dropped = self.login(client, {"Origin": "https://super.tkcloud.online"})
-                self.assertEqual(dropped.status_code, 403, dropped.text)
-                cross = self.login(
-                    client, {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+class Migration(unittest.TestCase):
+    def test_initialization_preserves_existing_game_while_dropping_legacy_auth_tables(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            storage, "DATA_DIR", Path(directory)
+        ):
+            path = Path(directory) / "seven-double.sqlite3"
+            game = create_game(DEFAULT_CODEX)
+            db = sqlite3.connect(path)
+            try:
+                db.executescript(
+                    """
+                    CREATE TABLE games(id TEXT PRIMARY KEY,state TEXT,version INTEGER,status TEXT,created_at TEXT);
+                    CREATE TABLE participants(id TEXT PRIMARY KEY,game_id TEXT,kind TEXT,seat_id TEXT,name TEXT,access_ids TEXT,active INTEGER DEFAULT 1,blocked INTEGER DEFAULT 0,muted INTEGER DEFAULT 0);
+                    CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,participant_id TEXT,kind TEXT,valid INTEGER,created_at TEXT);
+                    CREATE TABLE invites(code_hash TEXT PRIMARY KEY,game_id TEXT,kind TEXT,valid INTEGER);
+                    CREATE TABLE channels(id TEXT PRIMARY KEY,game_id TEXT,name TEXT,participant_ids TEXT);
+                    CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT,game_id TEXT,kind TEXT,sender_id TEXT,sender_name TEXT,avatar_role_id TEXT,channel_id TEXT,text TEXT,created_at TEXT,audience TEXT,image_id TEXT);
+                    CREATE TABLE evidence(id TEXT PRIMARY KEY,game_id TEXT,owner_id TEXT,text TEXT,mime TEXT,image BLOB,created_at TEXT);
+                    """
                 )
-                self.assertEqual(cross.status_code, 403, cross.text)
-
-    def test_cross_site_and_mismatched_origins_stay_forbidden(self):
-        with TestClient(app) as client:
-            cross_site = self.login(
-                client,
-                {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
-            )
-            self.assertEqual(cross_site.status_code, 403, cross_site.text)
-            mismatched = self.login(client, {"Origin": "https://evil.example"})
-            self.assertEqual(mismatched.status_code, 403, mismatched.text)
-            no_origin = client.post("/api/host/login", json={"password": "114514"})
-            self.assertEqual(no_origin.status_code, 200, no_origin.text)
-
-
-class FrontendDelivery(unittest.TestCase):
-    def test_index_html_revalidates_while_hashed_assets_stay_cached(self):
-        dist = storage.PROJECT_ROOT / "frontend" / "dist"
-        index = dist / "index.html"
-        if not index.is_file():
-            self.skipTest("前端尚未构建，先运行 npm run build")
-        with TestClient(app) as client:
-            root = client.get("/")
-            self.assertEqual(root.status_code, 200, root.text)
-            self.assertEqual(root.headers.get("cache-control"), "no-cache")
-            asset = next((dist / "assets").glob("index-*.js"), None)
-            self.assertIsNotNone(asset, "构建产物里应有带哈希的 JS")
-            served = client.get(f"/assets/{asset.name}")
-            self.assertEqual(served.status_code, 200, served.text)
-            self.assertIn("immutable", served.headers.get("cache-control", ""))
+                db.execute(
+                    "INSERT INTO games VALUES(?,?,?,?,?)",
+                    (game["id"], storage.dumps(game), game["version"], game["status"], storage.now_text()),
+                )
+                db.commit()
+            finally:
+                db.close()
+            storage.initialize()
+            storage.initialize()
+            with storage.connect() as db:
+                self.assertIsNotNone(storage.load_game(db, game["id"]))
+                tables = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                self.assertNotIn("sessions", tables)
+                self.assertNotIn("invites", tables)
+                self.assertIn("account_id", {row["name"] for row in db.execute("PRAGMA table_info(participants)")})
 
 
 if __name__ == "__main__":

@@ -118,7 +118,7 @@ async def receiver(peer):
 
 
 async def live(socket):
-    if not auth.same_origin(socket):
+    if not auth.valid_bearer(socket) and not auth.same_origin(socket):
         await socket.close(code=4403)
         return
     peer = None

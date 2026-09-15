@@ -26,22 +26,16 @@ def initialize():
         );
         CREATE TABLE IF NOT EXISTS participants (
             id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
-            kind TEXT NOT NULL, seat_id TEXT, name TEXT NOT NULL,
+            account_id TEXT, kind TEXT NOT NULL, seat_id TEXT, name TEXT NOT NULL,
             access_ids TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
             blocked INTEGER NOT NULL DEFAULT 0, muted INTEGER NOT NULL DEFAULT 0
         );
-        CREATE TABLE IF NOT EXISTS sessions (
-            token_hash TEXT PRIMARY KEY, participant_id TEXT,
-            kind TEXT NOT NULL, valid INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS invites (
-            code_hash TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
-            kind TEXT NOT NULL, valid INTEGER NOT NULL DEFAULT 1
-        );
         CREATE TABLE IF NOT EXISTS channels (
             id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
-            name TEXT NOT NULL, participant_ids TEXT NOT NULL
+            name TEXT NOT NULL, creator_id TEXT NOT NULL,
+            status TEXT NOT NULL, participant_ids TEXT NOT NULL,
+            invited_ids TEXT NOT NULL, accepted_ids TEXT NOT NULL,
+            created_at TEXT NOT NULL, ended_at TEXT
         );
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,10 +52,39 @@ def initialize():
         );
         """)
     with transaction() as db:
-        if "seat_id" in {row["name"] for row in db.execute("PRAGMA table_info(invites)")}:
-            db.execute("UPDATE invites SET valid=0")
-            for column in ("seat_id", "participant_id", "redeemed_by"):
-                db.execute(f"ALTER TABLE invites DROP COLUMN {column}")
+        participant_columns = {row["name"] for row in db.execute("PRAGMA table_info(participants)")}
+        if "account_id" not in participant_columns:
+            db.execute("ALTER TABLE participants ADD COLUMN account_id TEXT")
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS participant_account "
+            "ON participants(game_id,account_id) WHERE account_id IS NOT NULL"
+        )
+        channel_columns = {row["name"] for row in db.execute("PRAGMA table_info(channels)")}
+        legacy_channels = "creator_id" not in channel_columns
+        additions = {
+            "creator_id": "TEXT NOT NULL DEFAULT 'host'",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+            "invited_ids": "TEXT NOT NULL DEFAULT '[]'",
+            "accepted_ids": "TEXT NOT NULL DEFAULT '[]'",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+            "ended_at": "TEXT",
+        }
+        for column, declaration in additions.items():
+            if column not in channel_columns:
+                db.execute(f"ALTER TABLE channels ADD COLUMN {column} {declaration}")
+        if legacy_channels:
+            for row in db.execute("SELECT id,participant_ids,created_at FROM channels").fetchall():
+                db.execute(
+                    "UPDATE channels SET invited_ids=?,accepted_ids=?,created_at=? WHERE id=?",
+                    (
+                        row["participant_ids"],
+                        row["participant_ids"],
+                        row["created_at"] or now_text(),
+                        row["id"],
+                    ),
+                )
+        db.execute("DROP TABLE IF EXISTS sessions")
+        db.execute("DROP TABLE IF EXISTS invites")
         for row in db.execute("SELECT state FROM games WHERE status='lobby'").fetchall():
             game = json.loads(row["state"])
             if game["phase"] == "lobby" and game["cards"]:
@@ -120,16 +143,11 @@ def save_game(db, game):
         "UPDATE games SET state=?,version=?,status=? WHERE id=?",
         (dumps(game), game["version"], game["status"], game["id"]),
     )
-    if game["status"] == "ended":
-        db.execute("UPDATE invites SET valid=0 WHERE game_id=?", (game["id"],))
-
 
 def purge(db):
-    """清空全部对局数据（含邀请码、参与身份、进度、聊天与证物）；主持人会话保留。"""
-    for table in ("messages", "evidence", "channels", "invites", "participants", "games"):
+    """Clear game data without touching global accounts or login tokens."""
+    for table in ("messages", "evidence", "channels", "participants", "games"):
         db.execute(f"DELETE FROM {table}")
-    db.execute("DELETE FROM sessions WHERE kind != 'host'")
-
 
 def add_message(
     db,
@@ -209,7 +227,38 @@ def message_view(row):
     return result
 
 
-def messages(db, game_id, actor, *, before=None, after=None, channel_id=None):
+def active_private_channel(db, game_id, participant_id):
+    if participant_id == "host":
+        return None
+    return db.execute(
+        """SELECT * FROM channels c WHERE c.game_id=? AND c.status='active'
+           AND EXISTS (SELECT 1 FROM json_each(c.participant_ids) WHERE value=?)
+           ORDER BY c.rowid LIMIT 1""",
+        (game_id, participant_id),
+    ).fetchone()
+
+
+def channel_members(row):
+    return json.loads(row["participant_ids"])
+
+
+def channel_visible(row, actor):
+    return actor["kind"] == "host" or actor["id"] in channel_members(row)
+
+
+def channel_send_reason(db, game, actor, channel_id):
+    if game["status"] == "ended":
+        return "本局已经结束"
+    participant = db.execute("SELECT muted FROM participants WHERE id=?", (actor["id"],)).fetchone()
+    if participant and participant["muted"]:
+        return "主持人已将你禁言"
+    active = active_private_channel(db, game["id"], actor["id"])
+    if actor["kind"] != "host" and active and channel_id != active["id"]:
+        return "私信期间只能在当前私信频道发言"
+    return ""
+
+
+def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, scope="all"):
     clauses, args = ["m.game_id=?"], [game_id]
     if actor["kind"] != "host":
         ids = actor["access_ids"]
@@ -225,11 +274,20 @@ def messages(db, game_id, actor, *, before=None, after=None, channel_id=None):
         clauses.append("m.id > ?")
         args.append(after)
     if channel_id is not None:
-        if channel_id == "system":
-            clauses.append("m.channel_id='information'")
-        else:
-            clauses.append("m.channel_id=?")
-            args.append(channel_id)
+        clauses.append("m.channel_id=?")
+        args.append("information" if channel_id == "system" else channel_id)
+    if scope == "public":
+        clauses.append("m.kind='chat' AND m.channel_id='public'")
+    elif scope == "private":
+        clauses.append("m.kind='chat' AND m.channel_id!='public' AND m.channel_id!='information'")
+    elif scope == "system":
+        clauses.append("m.kind!='chat'")
+    elif scope == "host":
+        clauses.append(
+            "m.kind='chat' AND m.channel_id!='public' AND EXISTS ("
+            "SELECT 1 FROM channels c, json_each(c.participant_ids) e "
+            "WHERE c.id=m.channel_id AND e.value='host')"
+        )
     order = "ASC" if after is not None else "DESC"
     rows = list(
         db.execute(

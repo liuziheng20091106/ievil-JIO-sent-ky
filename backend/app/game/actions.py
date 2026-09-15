@@ -17,6 +17,56 @@ from .state import (
 )
 
 
+SHORT_LABELS = {
+    "host.resolve": "裁定",
+    "host.water": "交水",
+    "host.end": "终止",
+    "host.codex": "魔典",
+    "host.advance": "推进",
+    "host.start": "开局",
+    "host.auto": "自动",
+    "host.warn": "警告",
+    "host.speech": "发言",
+    "host.damage": "伤害",
+    "host.state": "改状态",
+    "host.information": "发信息",
+    "host.madness": "疯狂",
+    "host.codex_order": "典序",
+    "host.rewind": "回溯",
+    "host.confirm_winner": "宣判",
+    "host.surrender": "交牌",
+    "hiro.rewind": "回溯",
+    "hiro.decline": "继续",
+    "lobby.order": "排牌",
+    "lobby.ready": "准备",
+    "player.profile": "称呼",
+    "night.submit": "夜行",
+    "night.clear": "清除",
+    "night.confirm": "确认",
+    "day.skill": "技能",
+    "day.challenge": "质疑",
+    "honoka.disguise": "示人",
+    "honoka.witness": "目击",
+    "hiro.exit": "出局",
+    "speech.done": "结束发言",
+    "speech.speak": "写发言",
+    "vote.nominate": "提名",
+    "vote.pass": "弃提名",
+    "vote.cast": "投票",
+    "execution.shoot": "开枪",
+    "execution.confirm": "放弃",
+    "balloon.choose": "选气球",
+    "balloon.agree": "同意",
+    "balloon.decline": "拒绝",
+    "balloon.propose": "提名单",
+    "photo.permission": "照片",
+    "water.use": "用水",
+    "meruru.revive": "复活",
+    "evidence.submit": "证物",
+    "player.surrender": "申请交牌",
+}
+
+
 def field(name, label, kind="text", options=None, required=True, **extra):
     item = {"name": name, "label": label, "type": kind, "required": required, **extra}
     if options is not None:
@@ -24,9 +74,14 @@ def field(name, label, kind="text", options=None, required=True, **extra):
     return item
 
 
-def action(action_id, label, fields=(), payload=None, group="行动", **extra):
+def action(action_id, label, fields=(), payload=None, group="行动", short_label=None, **extra):
+    short = short_label or SHORT_LABELS[action_id]
+    if not 2 <= len(short) <= 4:
+        raise ValueError(f"行动短名必须为2至4字：{action_id}")
     return {
+        "ui_version": 1,
         "id": action_id,
+        "short_label": short,
         "label": label,
         "fields": list(fields),
         "payload": payload or {},
@@ -843,7 +898,6 @@ def actions_for(game, actor):
                 "speech.done",
                 "本轮不发言（跳过我的顺序）",
                 group="流程",
-                instant=True,
             )
         )
     if (
@@ -857,7 +911,6 @@ def actions_for(game, actor):
                 "提前写发言（轮到你时公开）",
                 [field("text", "发言内容", "textarea")],
                 group="流程",
-                instant=True,
             )
         )
     if phase == "nomination" and card and sid not in game.get("nomination_done", []):
@@ -872,10 +925,9 @@ def actions_for(game, actor):
                 "提名候选（可提前）",
                 [target_field(game)],
                 group="投票",
-                instant=True,
             )
         )
-        result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票", instant=True))
+        result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票"))
     if phase == "voting" and s in eligible_voters(game) and sid not in game["votes"]:
         result.append(
             action(
@@ -937,10 +989,9 @@ def actions_for(game, actor):
                 "balloon.agree",
                 f"同意{proposal['by']}号的热气球名单",
                 group="热气球",
-                instant=True,
             )
         )
-        result.append(action("balloon.decline", "不同意该名单", group="热气球", instant=True))
+        result.append(action("balloon.decline", "不同意该名单", group="热气球"))
     if (
         game["half"] == "day"
         and card
@@ -964,7 +1015,6 @@ def actions_for(game, actor):
                     )
                 ],
                 group="热气球",
-                instant=True,
             )
         )
     for photo in game["photos"]:

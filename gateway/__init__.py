@@ -1,0 +1,1 @@
+"""Standalone NapCat gateway package."""

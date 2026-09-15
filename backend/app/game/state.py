@@ -166,6 +166,7 @@ def create_game(codex):
         "id": uid(),
         "version": 0,
         "status": "lobby",
+        "join_open": False,
         "day": 1,
         "half": "night",
         "phase": "lobby",

@@ -21,6 +21,15 @@ const groups: Record<string, string> = {
   phase: "阶段控制",
   abilities: "角色技能",
 };
+const fieldTypes: Record<Field["type"], true> = {
+  text: true,
+  textarea: true,
+  number: true,
+  select: true,
+  multiselect: true,
+  checkbox: true,
+  drawing: true,
+};
 
 function actionIdentity(action: UIAction) {
   return JSON.stringify(
@@ -55,6 +64,14 @@ export function ActionPanel({
   onOpenChange?: (open: boolean) => void;
 }) {
   const { state, session } = useGame();
+  const supported =
+    state?.ui_version === 1 &&
+    actions.every(
+      (action) =>
+        [...action.short_label].length >= 2 &&
+        [...action.short_label].length <= 4 &&
+        action.fields.every((field) => fieldTypes[field.type]),
+    );
   const [selected, setSelected] = useState<{
     action: UIAction;
     version: number;
@@ -115,6 +132,14 @@ export function ActionPanel({
       });
     return result;
   }, [actions, query]);
+  if (!supported)
+    return (
+      <section className="actions-section">
+        <p className="error" role="alert">
+          客户端版本不支持当前行动，请升级后再提交。
+        </p>
+      </section>
+    );
   return (
     <section className="actions-section">
       <div className="section-heading">
@@ -154,8 +179,7 @@ export function ActionPanel({
                 key={`${action.id}:${index}`}
                 onClick={() => select(action)}
               >
-                <span>{action.label}</span>
-                {action.description && <small>{action.description}</small>}
+                <span>{action.short_label}</span>
                 <span className="arrow" aria-hidden="true">
                   ↗
                 </span>
@@ -274,10 +298,8 @@ function ActionForm({
           return;
         }
       }
-      if (!action.instant) {
-        setReview(true);
-        return;
-      }
+      setReview(true);
+      return;
     }
     const payload = { ...values };
     for (const field of action.fields) {
@@ -302,9 +324,17 @@ function ActionForm({
     }
   };
   const stale = state?.version !== expectedVersion;
-  const latestAction = state?.actions.find(
-    (item) => actionIdentity(item) === actionIdentity(action),
-  );
+  const latestAction = [
+    ...(state?.actions ?? []),
+    ...(state?.channels?.flatMap((channel) => channel.actions ?? []) ?? []),
+  ].find((item) => actionIdentity(item) === actionIdentity(action));
+  const selectedTop =
+    action.id === "lobby.order"
+      ? state?.self.cards.find((card) => card.id === values.top)
+      : undefined;
+  const selectedBottom = selectedTop
+    ? state?.self.cards.find((card) => card.id !== selectedTop.id)
+    : undefined;
   return (
     <Modal
       title={action.label}
@@ -348,14 +378,28 @@ function ActionForm({
       )}
       <form onSubmit={(event) => void submit(event)}>
         {!review ? (
-          action.fields.map((field) => (
-            <ActionField
-              key={field.name}
-              field={field}
-              value={values[field.name]}
-              onChange={(value) => update(field.name, value)}
-            />
-          ))
+          <>
+            {action.fields.map((field) => (
+              <ActionField
+                key={field.name}
+                field={field}
+                value={values[field.name]}
+                onChange={(value) => update(field.name, value)}
+              />
+            ))}
+            {selectedTop && selectedBottom && (
+              <p className="hint" role="status">
+                上层：
+                {catalog.roles.find((role) => role.id === selectedTop.role_id)
+                  ?.name ?? selectedTop.role_id}
+                ；下层已自动选择：
+                {catalog.roles.find(
+                  (role) => role.id === selectedBottom.role_id,
+                )?.name ?? selectedBottom.role_id}
+                。
+              </p>
+            )}
+          </>
         ) : (
           <div className="action-review">
             <h3>确认目标与内容</h3>
@@ -446,13 +490,7 @@ function ActionForm({
             className={action.danger ? "danger-button" : "primary"}
             disabled={busy || stale}
           >
-            {busy
-              ? "正在提交…"
-              : review
-                ? "确认提交"
-                : action.instant
-                  ? "直接提交"
-                  : "核对并继续"}
+            {busy ? "正在提交…" : review ? "确认提交" : "核对并继续"}
           </button>
         </div>
       </form>

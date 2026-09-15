@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import { api, errorText } from "./api";
+import { ActionPanel } from "./Actions";
 import { Avatar, Evidence } from "./components";
 import { draftKey, useDraft } from "./drafts";
 import { useGame } from "./state";
@@ -14,6 +15,9 @@ import type { Message, MessagePage } from "./types";
 export function Chat({ onRole }: { onRole: (id: string) => void }) {
   const { state, session, messages, mergeMessages, connection, catalog } =
     useGame();
+  const [messageScope, setMessageScope] = useState<
+    "all" | "public" | "private" | "system" | "host"
+  >("all");
   const [target, setTarget] = useState("public");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -28,18 +32,49 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     {
       id: "public",
       label: "公共讨论",
+      status: "active" as const,
+      members: [],
       can_send: state?.can_chat ?? false,
       reason: state?.chat_reason,
     },
   ];
   const sendable = channels.filter((item) => item.can_send);
-  const channel = sendable.find((item) => item.id === target) ?? sendable[0];
+  const channel =
+    channels.find((item) => item.id === target && item.can_send) ??
+    sendable[0] ??
+    channels[0];
   const activeId = channel?.id ?? "public";
   const feed = useRef<string | null>(null);
   feed.current = state?.id ?? null;
-  const scope = draftKey(state?.id ?? null, session.actor?.id ?? null, "chat");
-  const [draft, setDraft, clearDraft, draftError] = useDraft(scope, "");
-  const rows = messages;
+  const draftScope = draftKey(
+    state?.id ?? null,
+    session.actor?.id ?? null,
+    "chat",
+    activeId,
+  );
+  const [draft, setDraft, clearDraft, draftError] = useDraft(draftScope, "");
+  const rows = messages.filter((message) => {
+    if (messageScope === "all") return true;
+    if (messageScope === "public")
+      return message.kind === "chat" && message.channel_id === "public";
+    if (messageScope === "private")
+      return message.kind === "chat" && message.channel_id !== "public";
+    if (messageScope === "host") return message.sender_id === "host";
+    return ["notice", "presence", "information", "alert"].includes(
+      message.kind,
+    );
+  });
+  const channelActions = [
+    ...(state?.actions.filter((action) => action.id.startsWith("channel.")) ?? []),
+    ...channels.flatMap((item) => item.actions ?? []),
+  ].filter(
+    (action, index, all) =>
+      all.findIndex(
+        (item) =>
+          item.id === action.id &&
+          JSON.stringify(item.payload ?? {}) === JSON.stringify(action.payload ?? {}),
+      ) === index,
+  );
   const lastId = rows.at(-1)?.id ?? 0;
   const scrollBottom = () => {
     const node = scroller.current;
@@ -64,7 +99,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     setUnread(0);
     previousLast.current = 0;
     api<MessagePage>(
-      `/games/${state.id}/messages`,
+      `/games/${state.id}/messages?scope=${messageScope}`,
       undefined,
       controller.signal,
     )
@@ -84,7 +119,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
         }
       });
     return () => controller.abort();
-  }, [state?.id, mergeMessages]);
+  }, [state?.id, messageScope, mergeMessages]);
   useLayoutEffect(() => {
     const node = scroller.current;
     if (!node) return;
@@ -109,7 +144,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     setError("");
     try {
       const page = await api<MessagePage>(
-        `/games/${state.id}/messages?before=${rows[0].id}`,
+        `/games/${state.id}/messages?before=${rows[0].id}&scope=${messageScope}`,
       );
       if (feed.current !== state.id) return;
       if (scroller.current)
@@ -165,10 +200,33 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     <section className="chat-panel" aria-label="聊天记录与输入">
       <div className="chat-header">
         <div>
-          <span className="eyebrow">公开与私密已合并 · 只显示你有权看到的</span>
-          <h2>全部消息</h2>
+          <span className="eyebrow">公屏与私信独立查看 · 历史由服务器按权限筛选</span>
+          <h2>{messageScope === "all" ? "全部消息" : "筛选消息"}</h2>
+        </div>
+        <div className="segmented" aria-label="消息筛选">
+          {(
+            ["all", "public", "private", "system", "host"] as const
+          ).map((scope) => (
+            <button
+              type="button"
+              key={scope}
+              className={messageScope === scope ? "active" : ""}
+              onClick={() => setMessageScope(scope)}
+            >
+              {{
+                all: "全部",
+                public: "公屏",
+                private: "私信",
+                system: "系统",
+                host: "主持人",
+              }[scope]}
+            </button>
+          ))}
         </div>
       </div>
+      {channelActions.length > 0 && (
+        <ActionPanel actions={channelActions} title="私信操作" />
+      )}
       <div
         className="chat-scroll"
         ref={scroller}
@@ -196,9 +254,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
           <div className="empty chat-empty">
             <span className="seal">言</span>
             <h3>{loading ? "正在读取对话" : "故事从第一句话开始"}</h3>
-            <p>
-              这里按时间顺序合并显示你有权看到的全部消息：公开讨论、私聊，以及只发给你的系统裁定与私密信息。
-            </p>
+            <p>当前筛选范围内还没有消息。</p>
           </div>
         )}
         {rows.map((message) =>

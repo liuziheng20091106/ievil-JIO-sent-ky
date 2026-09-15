@@ -15,7 +15,8 @@ import { useGame } from "./state";
 import type {
   GameView,
   HostTask,
-  Invite,
+  Lobby,
+  LoginChallenge,
   Message,
   Seat,
   SeatView,
@@ -99,9 +100,11 @@ export function App() {
                   <span className="identity-label">
                     {session.actor.kind === "host"
                       ? "主持人 · 月代雪"
-                      : session.actor.kind === "spectator"
-                        ? `观战 · ${session.actor.name}`
-                        : `${session.actor.seat_id}号 · ${session.actor.name}`}
+                      : session.actor.kind === "account"
+                        ? `QQ · ${session.actor.name}`
+                        : session.actor.kind === "spectator"
+                          ? `观战 · ${session.actor.name}`
+                          : `${session.actor.seat_id}号 · ${session.actor.name}`}
                   </span>
                   <button
                     className="quiet"
@@ -136,6 +139,8 @@ export function App() {
               onCreated={() => setNewGame(false)}
               onCancel={state ? () => setNewGame(false) : undefined}
             />
+          ) : session.actor.kind === "account" && !state ? (
+            <LobbyEntry />
           ) : state ? (
             <Room onRole={setRoleId} onNewGame={() => setNewGame(true)} />
           ) : (
@@ -202,42 +207,63 @@ export function App() {
 }
 
 function Entry() {
-  const { authenticate, setError: setGlobalError } = useGame();
-  const [mode, setMode] = useState<"join" | "host">("join");
-  const [code, setCode] = useState(
-    () => new URLSearchParams(location.search).get("code") ?? "",
-  );
-  const [name, setName, clearName, draftError] = useDraft(
-    draftKey(null, null, "entry-name"),
-    "",
-  );
+  const { authenticate, refresh } = useGame();
+  const [mode, setMode] = useState<"qq" | "host">("qq");
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+
+  useEffect(() => {
+    if (!challenge || challenge.status !== "pending") return;
+    let active = true;
+    let timer: NodeJS.Timeout | undefined;
+    const poll = async () => {
+      try {
+        const next = await api<LoginChallenge>(
+          `/auth/challenges/${encodeURIComponent(challenge.id)}`,
+        );
+        if (!active) return;
+        setChallenge(next);
+        if (next.status === "completed") await refresh();
+        else timer = setTimeout(() => void poll(), 1500);
+      } catch (failure) {
+        if (active) setError(errorText(failure));
+      }
+    };
+    timer = setTimeout(() => void poll(), 800);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [challenge?.id, challenge?.status, refresh]);
+
+  const startQQ = async () => {
     setBusy(true);
     setError("");
     try {
-      await authenticate(
-        mode === "host" ? "/host/login" : "/join",
-        mode === "host"
-          ? { password }
-          : { code: code.trim(), name: name.trim() },
-      );
-      if (mode === "join") {
-        try {
-          clearName();
-        } catch (failure) {
-          setGlobalError(errorText(failure));
-        }
-      }
+      setChallenge(await api<LoginChallenge>("/auth/challenges", {}));
     } catch (failure) {
       setError(errorText(failure));
     } finally {
       setBusy(false);
     }
   };
+
+  const submitHost = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await authenticate("/host/login", { password });
+      setPassword("");
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="entry-layout">
       <section className="entry-story">
@@ -276,18 +302,16 @@ function Entry() {
       </section>
       <section className="entry-form panel">
         <span className="eyebrow">欢迎来到魔法裁判</span>
-        <h2>
-          {mode === "join" ? "入席，一起等待发牌。" : "今晚，由你翻开魔典。"}
-        </h2>
+        <h2>{mode === "qq" ? "登录后主动加入或观战。" : "今晚，由你翻开魔典。"}</h2>
         <div className="segmented" aria-label="选择登录方式">
           <button
-            className={mode === "join" ? "active" : ""}
+            className={mode === "qq" ? "active" : ""}
             onClick={() => {
-              setMode("join");
+              setMode("qq");
               setError("");
             }}
           >
-            邀请码加入
+            QQ 登录
           </button>
           <button
             className={mode === "host" ? "active" : ""}
@@ -299,80 +323,140 @@ function Entry() {
             主持人登录
           </button>
         </div>
-        <form onSubmit={(event) => void submit(event)}>
-          {mode === "join" ? (
-            <>
-              <label className="field">
-                <span>本局邀请码</span>
-                <input
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  required
-                  maxLength={128}
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  placeholder="输入主持人私发的邀请码"
-                />
-              </label>
-              <label className="field">
-                <span>公开称呼</span>
-                <input
-                  autoComplete="nickname"
-                  required
-                  maxLength={30}
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="其他玩家将看到这个名字"
-                />
-              </label>
-              <p className="hint">
-                玩家共用一个邀请码，随机进入空席。七人首次准备后私下发牌，调整上下顺序并再次准备后开局。
-              </p>
-            </>
-          ) : (
-            <>
-              <label className="field">
-                <span>主持人密码</span>
-                <input
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="输入主持人密码"
-                />
-              </label>
-              <p className="hint">
-                主持人可以查看本局全部角色与私密信息。请勿向玩家共享你的会话。
-              </p>
-            </>
-          )}
-          {draftError && mode === "join" && (
-            <p className="error" role="alert">
-              {draftError}
+        {mode === "qq" ? (
+          <div className="entry-login-flow">
+            <p className="hint">
+              生成验证码后，在指定 QQ 群发送完整文字。群内昵称和头像将作为本局公开身份。
             </p>
-          )}
-          {error && (
-            <p className="error" role="alert">
-              {error}
+            {challenge?.status === "pending" && challenge.code && (
+              <div className="invite-code" role="status">
+                <span className="eyebrow">请在 QQ 群发送</span>
+                <input
+                  readOnly
+                  value={`活动登录 ${challenge.code}`}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <small>
+                  验证码有效至
+                  {new Date(challenge.expires_at).toLocaleTimeString("zh-CN")}
+                </small>
+              </div>
+            )}
+            <button
+              type="button"
+              className="primary full-width"
+              disabled={busy}
+              onClick={() => void startQQ()}
+            >
+              {busy
+                ? "正在生成…"
+                : challenge
+                  ? "重新生成验证码"
+                  : "生成 QQ 登录码"}
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={(event) => void submitHost(event)}>
+            <label className="field">
+              <span>主持人密码</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="输入主持人密码"
+              />
+            </label>
+            <p className="hint">
+              主持人可以查看本局全部角色与私密信息。请勿向玩家共享你的会话。
             </p>
-          )}
-          <button className="primary full-width" disabled={busy}>
-            {busy
-              ? "正在进入…"
-              : mode === "join"
-                ? "入席，开启故事 →"
-                : "进入主持人工作台 →"}
-          </button>
-        </form>
-        <div className="entry-note">
-          <span>关于这场游戏</span>
-          <p>
-            邀请仅在本局有效。刷新或短暂掉线使用原会话恢复；失去凭证时，请以观战身份加入并联系主持人接管原席。
+            <button className="primary full-width" disabled={busy}>
+              {busy ? "正在进入…" : "进入主持人工作台 →"}
+            </button>
+          </form>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
           </p>
+        )}
+        <div className="entry-note">
+          <span>持久登录</span>
+          <p>验证成功后按 QQ 账号恢复参与身份；刷新、换设备或重连不会重新分席。</p>
         </div>
       </section>
+    </main>
+  );
+}
+
+function LobbyEntry() {
+  const { refresh } = useGame();
+  const [lobby, setLobby] = useState<Lobby | null>(null);
+  const [busy, setBusy] = useState<"player" | "spectator" | "">("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api<Lobby>("/lobby", undefined, controller.signal)
+      .then(setLobby)
+      .catch((failure) => {
+        if (!controller.signal.aborted) setError(errorText(failure));
+      });
+    return () => controller.abort();
+  }, []);
+
+  const participate = async (kind: "player" | "spectator") => {
+    if (!lobby?.game) return;
+    setBusy(kind);
+    setError("");
+    try {
+      await api<Session>(`/games/${lobby.game.id}/participations`, { kind });
+      await refresh();
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <main className="loading-screen lobby-entry">
+      <span className="seal">候</span>
+      <h1>{lobby?.game ? "本局已开放" : "等待主持人开放对局"}</h1>
+      {lobby?.game ? (
+        <>
+          <p>
+            当前还有 {lobby.game.player_seats_available} 个玩家席位。选择后立即生效，无需主持人审核。
+          </p>
+          <div className="button-row">
+            <button
+              className="primary"
+              disabled={busy !== "" || !lobby.game.can_join_player}
+              onClick={() => void participate("player")}
+            >
+              {busy === "player" ? "加入中…" : "加入对局"}
+            </button>
+            <button
+              className="secondary"
+              disabled={busy !== "" || !lobby.game.can_join_spectator}
+              onClick={() => void participate("spectator")}
+            >
+              {busy === "spectator" ? "进入中…" : "选择观战"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p>你已登录。主持人宣布对局可用后，可直接选择加入或观战。</p>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <button className="quiet" onClick={() => location.reload()}>
+        刷新大厅
+      </button>
     </main>
   );
 }
@@ -506,10 +590,10 @@ function CreateGame({
             ))}
           </div>
           <p>
-            将随机生成魔典顺序，建立七个空席。玩家通过同一个邀请码随机入席；全员首次准备后才发牌。
+            将随机生成魔典顺序并建立七个空席。创建后由主持人点击“开放加入”，已登录账号即可主动选择玩家或观战。
           </p>
           <p className="hint">
-            建立新对局会清空上一局的全部数据（邀请码、玩家、进度、聊天与证物）。
+            建立新对局会清空上一局的参与身份、进度、聊天与证物，但不会删除 QQ 账号或登录令牌。
           </p>
           <button
             className="primary full-width"
@@ -530,7 +614,7 @@ function CreateGame({
 }
 
 const phaseHints: Record<string, string> = {
-  lobby: "用本局邀请码入席并点「准备」；七人全部准备后系统自动发牌。",
+  lobby: "主持人开放加入后，登录玩家主动入席并点「准备」；七人全部准备后系统自动发牌。",
   ordering: "私下选定上层牌后再次「准备」；七人齐全由主持人开局。",
   witch:
     "系统检测本日魔女化并私下通知被选中的人；无人需要操作，稍候自动进入夜晚。",
@@ -557,8 +641,7 @@ function Room({
   onRole: (id: string) => void;
   onNewGame: () => void;
 }) {
-  const { state, session, connection, command, setError, busy, messages } =
-    useGame();
+  const { state, session, connection, busy, messages } = useGame();
   const [tab, setTab] = useState<Tab>("chat");
   const [center, setCenter] = useState<"chat" | "table">("chat");
   const [side, setSide] = useState<"cards" | "actions">("actions");
@@ -568,7 +651,6 @@ function Room({
   const [inspecting, setInspecting] = useState<string | null>(null);
   const [flash, setFlash] = useState("");
   const [alerts, setAlerts] = useState<Message[]>([]);
-  const [opening, setOpening] = useState(false);
   const seenMessage = useRef<number | null>(null);
   useEffect(() => {
     if (!messages.length) return;
@@ -649,18 +731,7 @@ function Room({
     payload?: Record<string, unknown>,
     values?: Record<string, unknown>,
   ) => setRequest({ id, payload, values, token: Date.now() });
-  const runHost = async (id: string, payload: Record<string, unknown> = {}) => {
-    const action = state.actions.find((item) => item.id === id);
-    if (!action) return;
-    setOpening(true);
-    try {
-      await command(action, payload, state.version);
-    } catch (failure) {
-      setError(errorText(failure));
-    } finally {
-      setOpening(false);
-    }
-  };
+  const advanceAction = state.actions.find((item) => item.id === "host.advance");
   const autoToggle = state.actions.find((item) => item.id === "host.auto");
   const autoPaused = state.public.auto_advance_off === true;
   const tabs: { id: Tab; label: string; count?: number; urgent?: boolean }[] = [
@@ -740,36 +811,34 @@ function Room({
             deadline={state.public.auto_advance_at ?? null}
             label="自动推进"
           />
-          {isHost && (
+          {isHost && advanceAction && (
             <button
               className="primary advance-button"
-              disabled={busy || opening || blockingTasks.length > 0}
+              disabled={busy || blockingTasks.length > 0}
               title={
                 blockingTasks.length
                   ? `还有 ${blockingTasks.length} 项待处理，见「裁决」列表`
-                  : "结算并推进到下一阶段"
+                  : advanceAction.description || advanceAction.label
               }
-              onClick={() => void runHost("host.advance")}
+              onClick={() => pick("host.advance")}
             >
-              {opening
-                ? "推进中…"
-                : blockingTasks.length
-                  ? `还有 ${blockingTasks.length} 项待处理`
-                  : "完成当前阶段 / 推进"}
+              {blockingTasks.length
+                ? `${blockingTasks.length}项待办`
+                : advanceAction.short_label}
             </button>
           )}
           {isHost && autoToggle && (
             <button
               className="quiet auto-toggle"
-              disabled={busy || opening}
+              disabled={busy}
               title={
                 autoPaused
                   ? "恢复后：无人待办时 5 秒自动进入下一阶段"
                   : "暂停后本阶段只由主持人手动推进"
               }
-              onClick={() => void runHost("host.auto")}
+              onClick={() => pick("host.auto")}
             >
-              {autoPaused ? "恢复自动推进" : "暂停自动推进"}
+              {autoToggle.short_label}
             </button>
           )}
           {isHost && (
@@ -919,14 +988,14 @@ function Room({
               <HostTasks
                 onPick={pick}
                 onWarn={(seatId) =>
-                  void runHost("host.warn", { seat_id: seatId })
+                  pick("host.warn", undefined, { seat_id: seatId })
                 }
               />
             )}
             {isHost && (
               <NightLedger
                 onWarn={(seatId) =>
-                  void runHost("host.warn", { seat_id: seatId })
+                  pick("host.warn", undefined, { seat_id: seatId })
                 }
               />
             )}
@@ -1168,7 +1237,7 @@ function PublicTable({
             </button>
           )}
           <p className="hint">
-            本局记录只读，未获准的信息不会因结局自动公开。下一局须使用新邀请码；开启下一局时本局记录会一并清空，需要保留请先截图或抄录。
+            本局记录只读，未获准的信息不会因结局自动公开。开启下一局时本局记录会一并清空，但 QQ 登录保持有效；需要保留记录请先截图或抄录。
           </p>
         </section>
       )}
@@ -1819,35 +1888,10 @@ function HostManagement({
   onInspect?: (id: string) => void;
 }) {
   const { state, session, catalog, refresh } = useGame();
-  const [invites, setInvites] = useState<Record<string, Invite>>({});
-  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState("");
   const [resetOpen, setResetOpen] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
   if (!state || session.actor?.kind !== "host") return null;
-  const issue = async (key: Invite["kind"]) => {
-    setBusy(key);
-    setError("");
-    try {
-      const invite = await api<Invite>(`/games/${state.id}/invites`, {
-        kind: key,
-      });
-      setInvites((previous) => ({ ...previous, [key]: invite }));
-    } catch (failure) {
-      setError(errorText(failure));
-    } finally {
-      setBusy("");
-    }
-  };
-  const copy = async (text: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(key);
-    } catch {
-      setError("浏览器未授权剪贴板，请选择下方文字码手动复制。");
-    }
-  };
   const reset = async () => {
     setResetBusy(true);
     setError("");
@@ -1862,70 +1906,19 @@ function HostManagement({
       setResetBusy(false);
     }
   };
-  const inviteControls = (key: string) =>
-    invites[key] && (
-      <div className="invite-code">
-        <label>
-          <span className="sr-only">
-            统一{key === "spectator" ? "观战" : "玩家"}邀请码
-          </span>
-          <input
-            readOnly
-            value={invites[key].code}
-            onFocus={(event) => event.target.select()}
-          />
-        </label>
-        <div className="button-row">
-          <button
-            className="quiet"
-            onClick={() => void copy(invites[key].code, key)}
-          >
-            {copied === key ? "已复制文字码" : "复制文字码"}
-          </button>
-          <button
-            className="quiet"
-            onClick={() =>
-              void copy(
-                `${location.origin}/?code=${encodeURIComponent(invites[key].code)}`,
-                `${key}-link`,
-              )
-            }
-          >
-            {copied === `${key}-link` ? "已复制加入链接" : "复制加入链接"}
-          </button>
-        </div>
-      </div>
-    );
   return (
     <div className="management-content">
       <div className="section-heading">
-        <h2>七席邀请与双牌</h2>
+        <h2>七席参与与双牌</h2>
         <span className="tag gold">仅主持人可见</span>
       </div>
       <p className="hint">
-        玩家共用一个码，随机进入空席；全员首次准备后发牌。重新生成会撤销同类旧码，不影响已入场会话。发牌后失去凭证或更换玩家，请从观战者中接管原席，不重发牌。
+        主持人开放加入后，已登录账号可直接选择玩家或观战，无需审核。发牌后更换玩家仍从观战者中接管原席，不重发牌或重置技能。
       </p>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
-      )}
-      {state.phase === "lobby" && state.status === "lobby" && (
-        <section className="spectator-invite">
-          <h3>统一玩家入口</h3>
-          <button
-            className="secondary"
-            disabled={!!busy}
-            onClick={() => void issue("player")}
-          >
-            {busy === "player"
-              ? "生成中…"
-              : invites.player
-                ? "重新生成统一玩家邀请码"
-                : "生成统一玩家邀请码"}
-          </button>
-          {inviteControls("player")}
-        </section>
       )}
       <div className="invite-grid">
         {state.seats.map((seat) => (
@@ -1987,24 +1980,10 @@ function HostManagement({
         ))}
       </div>
       <section className="spectator-invite">
-        <h3>观战与替补入口</h3>
+        <h3>主动参局与替补</h3>
         <p className="hint">
-          观战码可供多人使用，不分配角色。需要替补时，先移出原玩家，再选择观战者接管空席；继承范围及已提交行动须单独确认。
+          “开放加入”由下方房间管理操作控制。玩家满席或发牌后，登录账号仍可选择观战；需要替补时再由主持人分配现有空席。
         </p>
-        {state.status !== "ended" && (
-          <button
-            className="secondary"
-            disabled={!!busy}
-            onClick={() => void issue("spectator")}
-          >
-            {busy === "spectator"
-              ? "生成中…"
-              : invites.spectator
-                ? "重新生成统一观战邀请码"
-                : "生成统一观战邀请码"}
-          </button>
-        )}
-        {inviteControls("spectator")}
       </section>
       <Codex />
       <details className="record-section">
@@ -2020,7 +1999,7 @@ function HostManagement({
       <section className="spectator-invite">
         <h3>初始化</h3>
         <p className="hint">
-          清除全部对局数据：邀请码、玩家与观战身份、登录会话、取牌与阶段进度、聊天记录、证物图片。删除后无法恢复，主持人登录保留。开启下一局时也会自动清空上一局。
+          清除全部对局数据：玩家与观战参与身份、取牌与阶段进度、聊天记录、证物图片。删除后无法恢复；QQ 账号、登录令牌和主持人登录保留。
         </p>
         <button
           className="danger-button"
@@ -2038,10 +2017,10 @@ function HostManagement({
           }}
         >
           <p>
-            将删除本局的一切数据：邀请码、七席玩家与观战者、登录会话、双牌与阶段进度、聊天记录、证物图片。
+            将删除本局的一切数据：七席玩家与观战参与身份、双牌与阶段进度、聊天记录、证物图片。
           </p>
           <p className="hint">
-            删除后无法恢复，所有玩家与观战者会被登出。主持人登录保留，清空后可直接建立新对局。
+            删除后无法恢复，参与身份会失效；QQ 账号、玩家登录令牌和主持人登录保留，可直接建立下一局。
           </p>
           <div className="button-row">
             <button

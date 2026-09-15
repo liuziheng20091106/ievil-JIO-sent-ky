@@ -179,6 +179,7 @@ def card_view(game, card, host=False):
 
 def game_view(game, actor):
     host = actor.get("kind") == "host"
+    spectator = actor.get("kind") == "spectator"
     require(host or actor.get("game_id") == game["id"], "没有本局查看权限")
     own = player_seat(game, actor) if actor.get("kind") == "player" else None
     own_id = own["id"] if own else None
@@ -211,8 +212,9 @@ def game_view(game, actor):
             "ready": s["ready"] if host or s["id"] == own_id else None,
             "alive": lobby or (pub["alive"] if pub else current(game, s) is not None),
         }
-        if host:
+        if host or spectator:
             entry["cards"] = [card_view(game, game["cards"][cid], True) for cid in s["cards"]]
+            entry["current_card_id"] = current(game, s)["id"] if current(game, s) else None
         seats.append(entry)
     access = set(actor.get("access_ids", [])) | {actor.get("id")}
     information = [
@@ -263,6 +265,7 @@ def game_view(game, actor):
             "label": "秘密选择中",
         }
     view = {
+        "ui_version": 1,
         "id": game["id"],
         "version": game["version"],
         "status": game["status"],
@@ -351,6 +354,8 @@ def game_view(game, actor):
             game["status"] != "ended",
             "" if game["status"] != "ended" else "对局已结束",
         )
+    elif spectator and game["status"] != "ended":
+        can_chat, reason = True, ""
     elif own and game["status"] == "lobby":
         can_chat, reason = True, ""
     elif own and game["status"] == "playing":

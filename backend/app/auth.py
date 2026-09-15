@@ -1,4 +1,4 @@
-"""Cookie authentication and game-bound participant authorization."""
+"""Bearer/cookie authentication and stable-account game authorization."""
 
 import hashlib
 import json
@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
-from . import storage
+from . import auth_storage, storage
 
 COOKIE = "seven_double_session"
 DEFAULT_ALLOWED_ORIGINS = "super.tkcloud.online"
@@ -19,18 +19,15 @@ def secret_hash(value):
 
 
 def allowed_origins():
-    """显式放行的来源，写 host 或 host:port（贴整条 URL 也可以）；用 GAME_ALLOWED_ORIGINS 覆盖。"""
     raw = os.environ.get("GAME_ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
-    hosts = []
-    for item in raw.split(","):
-        item = item.strip().lower()
-        if item:
-            hosts.append(urlsplit(item).netloc or item)
-    return hosts
+    return [
+        urlsplit(item.strip().lower()).netloc or item.strip().lower()
+        for item in raw.split(",")
+        if item.strip()
+    ]
 
 
 def forwarded(connection, header):
-    """反向代理可能改写 Host/scheme，取 X-Forwarded-* 的第一个值当作对外值。"""
     value = connection.headers.get(header)
     return value.split(",")[0].strip() if value else ""
 
@@ -48,7 +45,6 @@ def same_origin(connection):
     if not origin:
         return connection.scope["type"] != "websocket"
     if site == "same-origin":
-        # 浏览器自己判定为同源，代理改写 Host 或终结 TLS 都不影响。
         return True
     if parsed.scheme not in ("http", "https"):
         return False
@@ -60,63 +56,121 @@ def same_origin(connection):
     return parsed.scheme == scheme and parsed.netloc.lower() == host.lower()
 
 
-def token_hash(connection):
-    token = connection.cookies.get(COOKIE)
+def raw_token(connection):
+    authorization = connection.headers.get("authorization")
+    if authorization is not None:
+        parts = authorization.split(" ")
+        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1] or any(
+            char.isspace() for char in parts[1]
+        ):
+            return None
+        return parts[1]
+    return connection.cookies.get(COOKIE)
+
+
+def bearer_hash(connection):
+    authorization = connection.headers.get("authorization")
+    if authorization is None:
+        return None
+    token = raw_token(connection)
     return secret_hash(token) if token else None
 
 
+def token_hash(connection):
+    token = raw_token(connection)
+    return secret_hash(token) if token else None
+
+
+def valid_bearer(connection):
+    return bool(auth_storage.token_row(bearer_hash(connection)))
+
+
+def gateway_authorized(connection):
+    expected = os.environ.get("GAME_GATEWAY_TOKEN", "")
+    supplied = connection.headers.get("x-gateway-token", "")
+    return bool(expected) and secrets.compare_digest(supplied.encode(), expected.encode())
+
+
+def account_actor(account):
+    return {
+        "id": account["id"],
+        "account_id": account["id"],
+        "kind": "account",
+        "game_id": None,
+        "seat_id": None,
+        "name": account["nickname"],
+        "qq_id": account["qq_id"],
+        "avatar_url": account["avatar_url"],
+        "access_ids": [account["id"]],
+    }
+
+
 def actor_for_token(db, hashed, game_id=None):
-    if not hashed:
+    token = auth_storage.token_row(hashed)
+    if not token:
         return None
-    session = db.execute(
-        "SELECT * FROM sessions WHERE token_hash=? AND valid=1", (hashed,)
-    ).fetchone()
-    if not session:
-        return None
-    if session["kind"] == "host":
+    if token["kind"] == "host":
         return {
             "id": "host",
+            "account_id": None,
             "kind": "host",
             "game_id": game_id or storage.current_game_id(db),
             "seat_id": None,
             "name": "主持人",
             "access_ids": ["host"],
         }
-    participant = db.execute(
-        "SELECT * FROM participants WHERE id=? AND active=1 AND blocked=0",
-        (session["participant_id"],),
-    ).fetchone()
-    if not participant or (game_id and participant["game_id"] != game_id):
+    account = auth_storage.account(token["account_id"])
+    if not account:
         return None
+    target_game = game_id or storage.current_game_id(db)
+    participant = (
+        db.execute(
+            "SELECT * FROM participants WHERE game_id=? AND account_id=? AND active=1 AND blocked=0",
+            (target_game, account["id"]),
+        ).fetchone()
+        if target_game
+        else None
+    )
+    if not participant:
+        return None if game_id else account_actor(account)
     game = storage.load_game(db, participant["game_id"])
     if not game:
-        return None
+        return None if game_id else account_actor(account)
     if participant["kind"] == "player" and not any(
         seat["id"] == participant["seat_id"] and seat["occupant_id"] == participant["id"]
         for seat in game["seats"]
     ):
-        return None
-    return {key: participant[key] for key in ("id", "kind", "game_id", "seat_id", "name")} | {
-        "access_ids": json.loads(participant["access_ids"])
+        return None if game_id else account_actor(account)
+    return {
+        **{key: participant[key] for key in ("id", "account_id", "kind", "game_id", "seat_id", "name")},
+        "qq_id": account["qq_id"],
+        "avatar_url": account["avatar_url"],
+        "access_ids": json.loads(participant["access_ids"]),
     }
 
 
 def require_actor(db, connection, game_id=None, host=False):
     actor = actor_for_token(db, token_hash(connection), game_id)
     if not actor:
-        raise HTTPException(401, "登录已失效，请重新加入或联系主持人")
+        raise HTTPException(401, "登录已失效或尚未加入本局")
     if host and actor["kind"] != "host":
         raise HTTPException(403, "仅主持人可以进行此操作")
     return actor
 
 
-def issue_session(db, kind, participant_id=None):
-    token = secrets.token_urlsafe(32)
-    db.execute(
-        "INSERT INTO sessions(token_hash,participant_id,kind,created_at) VALUES(?,?,?,?)",
-        (secret_hash(token), participant_id, kind, storage.now_text()),
-    )
-    return token
+def require_account(connection):
+    token = auth_storage.token_row(token_hash(connection))
+    if not token or token["kind"] != "player" or not token["account_id"]:
+        raise HTTPException(401, "请先通过QQ群完成登录")
+    account = auth_storage.account(token["account_id"])
+    if not account:
+        raise HTTPException(401, "登录已失效")
+    return account
+
+
+def issue_session(db, kind, account_id=None):
+    with auth_storage.transaction() as auth_db:
+        return auth_storage.issue_token(auth_db, kind, account_id)
 
 
 def set_cookie(response, request, token):
@@ -127,7 +181,7 @@ def set_cookie(response, request, token):
         samesite="lax",
         secure=request.url.scheme == "https",
         path="/",
-        max_age=60 * 60 * 24 * 30,
+        max_age=60 * 60 * 24 * auth_storage.TOKEN_DAYS,
     )
 
 
@@ -135,7 +189,6 @@ def revoke_participant(db, participant_id, *, block=False):
     db.execute(
         "UPDATE participants SET active=0,blocked=? WHERE id=?", (int(block), participant_id)
     )
-    db.execute("UPDATE sessions SET valid=0 WHERE participant_id=?", (participant_id,))
 
 
 def me(actor):

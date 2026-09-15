@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from . import api, auth, realtime, storage
+from . import api, auth, auth_storage, realtime, storage
 from .game import GameError
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app):
     storage.initialize()
+    auth_storage.initialize()
     timer = asyncio.create_task(realtime.clock())
     try:
         yield
@@ -38,7 +39,7 @@ app.include_router(api.router)
 @app.middleware("http")
 async def request_boundary(request: Request, call_next):
     if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
-        if not auth.same_origin(request):
+        if not auth.valid_bearer(request) and not auth.same_origin(request):
             return JSONResponse({"detail": "仅允许从本站提交操作"}, status_code=403)
         body = bytearray()
         async for chunk in request.stream():

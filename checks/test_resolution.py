@@ -682,7 +682,7 @@ class SpeechOrder(unittest.TestCase):
             item for item in actions_for(game, player(game, "3")) if item["id"] == "speech.done"
         )
         self.assertEqual(early["label"], "本轮不发言（跳过我的顺序）")
-        self.assertTrue(early["instant"])
+        self.assertNotIn("instant", early)
         self.assertFalse(early.get("blocking"))
         command(game, player(game, "3"), "speech.done", {})
         self.assertIn("3", game["speech_passed"])
@@ -697,7 +697,7 @@ class SpeechOrder(unittest.TestCase):
         speak = next(
             item for item in actions_for(game, player(game, "4")) if item["id"] == "speech.speak"
         )
-        self.assertTrue(speak["instant"])
+        self.assertNotIn("instant", speak)
         self.assertEqual([(f["name"], f["type"]) for f in speak["fields"]], [("text", "textarea")])
         with self.assertRaises(GameError):
             command(game, player(game, "4"), "speech.speak", {"text": "   "})
@@ -945,7 +945,9 @@ class NominationFlow(unittest.TestCase):
         day = arranged_game("speech")
         actions = actions_for(day, player(day, "1"))
         nomination = next(item for item in actions if item["id"] == "vote.nominate")
-        self.assertTrue(nomination["instant"])
+        self.assertEqual(nomination["ui_version"], 1)
+        self.assertTrue(2 <= len(nomination["short_label"]) <= 4)
+        self.assertNotIn("instant", nomination)
         self.assertFalse(nomination.get("blocking"))
         night = arranged_game("night", "night")
         self.assertNotIn(

@@ -67,6 +67,15 @@ def validate_command(game, actor, action, payload):
     ]
     require(bool(choices), "此操作不可用，请刷新当前状态")
     descriptor = choices[0]
+    require(descriptor.get("ui_version") == 1, "行动协议版本不受支持")
+    require(
+        all(
+            field.get("type")
+            in {"text", "textarea", "number", "select", "multiselect", "checkbox", "drawing"}
+            for field in descriptor["fields"]
+        ),
+        "行动字段类型不受支持",
+    )
     allowed = set(descriptor["payload"]) | {f["name"] for f in descriptor["fields"]}
     if "image" in allowed:
         allowed.add("image_id")

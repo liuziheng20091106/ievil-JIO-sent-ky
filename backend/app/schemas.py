@@ -16,13 +16,27 @@ class Create(Input):
     codex: list[str] = Field(min_length=11, max_length=11)
 
 
-class Invite(Input):
+class Participation(Input):
     kind: Literal["player", "spectator"]
 
 
-class Join(Input):
-    code: str = Field(min_length=8, max_length=128)
-    name: str = Field(min_length=1, max_length=32)
+class QQLogin(Input):
+    code: str = Field(pattern=r"^\d{6}$")
+    qq_id: str = Field(pattern=r"^\d{5,20}$")
+    nickname: str = Field(min_length=1, max_length=64)
+    avatar_url: str = Field(default="", max_length=500)
+    group_id: StrictInt
+
+
+class QQMember(Input):
+    qq_id: str = Field(pattern=r"^\d{5,20}$")
+    nickname: str = Field(min_length=1, max_length=64)
+    avatar_url: str = Field(default="", max_length=500)
+
+
+class QQMemberSync(Input):
+    group_id: StrictInt
+    members: list[QQMember] = Field(max_length=5000)
 
 
 class Command(Input):
@@ -56,8 +70,15 @@ class Replace(Input):
 
 class Channel(Input):
     name: str = Field(min_length=1, max_length=40)
-    participant_ids: list[str] = Field(min_length=1, max_length=100)
+    participant_ids: list[str] = Field(min_length=1, max_length=20)
 
+
+class ChannelRef(Input):
+    channel_id: str = Field(min_length=1, max_length=100)
+
+
+class OpenJoin(Input):
+    open: StrictBool
 
 class Mute(Input):
     participant_id: str

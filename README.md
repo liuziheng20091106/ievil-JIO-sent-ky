@@ -6,15 +6,18 @@
 
 - 七人双角色：发牌后玩家私下决定上下牌顺序，上层出局后启用下层。
 - 真人主持人：开局、阶段推进、概率与未写明情况均由主持人裁定；系统知情的阶段无人待办时 5 秒后自动推进，主持人可随时暂停或手动推进。
-- 共享邀请码：玩家用本局统一邀请码随机入场，观战者用观战码入场。
-- 两段式准备：全员首次准备后发牌，再次全员准备后开局。
-- 服务端裁剪：角色牌、魔女化状态等私密信息按身份下发，前端隐藏不作为授权。
-- 单机部署：一个 Python 进程 + 一个 SQLite 文件，生产前端由后端同源提供。
+- QQ 账号登录：玩家在指定 QQ 群发送“活动登录 123456”完成验证，登录令牌长期有效；账号与对局参与身份分离。
+- 开放参局：主持人“开放加入”后，已登录账号自行选择加入或观战，无需审核；发牌前随机占用空席，同一账号不能重复分席。
+- 公屏与私信分离：公屏、私信、系统信息各自独立列表与已读游标；私信有邀请、同意、拒绝、结束的完整生命周期。
+- 服务端裁剪：角色牌、魔女化状态、私信锁定等全部在服务端判定，前端隐藏不作为授权。
+- 多端：React 网页由后端同源提供，另有 Flutter 原生 Android / Windows 客户端。
 
 ## 环境要求
 
 - Python 3.14+
 - Node.js >= 22.12
+- Flutter 3.35+（仅构建原生客户端时需要）
+- NapCat（QQ 网关，仅 QQ 登录时需要）
 
 ## 安装与启动
 
@@ -25,19 +28,72 @@ start.cmd
 
 然后打开 <http://localhost:8000>。默认绑定 `0.0.0.0`，局域网内可直接访问；`start.cmd` 的参数会透传给 `run.py`（如 `start.cmd --port 9000`）。
 
-主持人登录使用固定密码，见 `backend/app/api.py`。
+主持人登录使用固定密码，见 `backend/app/api.py`。这是唯一保留的非 QQ 登录入口。
+
+## QQ 网关（NapCat）
+
+QQ 登录依赖 NapCat 的 OneBot WebSocket 实现，网关把群消息里的六位登录码绑定到账号：
+
+```cmd
+copy gateway\.env.example gateway\.env
+run-gateway.cmd
+```
+
+`gateway/.env` 必填项：
+
+| 变量 | 说明 |
+| --- | --- |
+| `NAPCAT_WS_URL` | NapCat 的 OneBot WebSocket 地址，默认 `ws://127.0.0.1:3001` |
+| `NAPCAT_TOKEN` | NapCat 访问令牌，无则留空 |
+| `GAME_BACKEND_URL` | 后端地址，默认 `http://127.0.0.1:8000` |
+| `GAME_GATEWAY_TOKEN` | 网关与后端共享的密钥，须与后端环境变量一致 |
+| `GAME_QQ_GROUP_ID` | 允许登录的 QQ 群号 |
+
+`gateway/.env`、`gateway/napcat/`、`gateway/*.log` 已在 `.gitignore` 中：NapCat 登录态、设备文件、访问令牌和网关共享密钥不得入库，也不得写入 Flutter 资源或网页构建产物。
+
+网关把 `X-Gateway-Token` 放在请求头调用 `/api/internal/qq/login`，后端用 `secrets.compare_digest` 校验；挑战码一次性消费，过期或重放一律拒绝。
+
+## 数据与备份
+
+`data/` 目录（可用 `GAME_DATA_DIR` 覆盖）下有两个 SQLite 文件，备份边界不同：
+
+| 文件 | 内容 | 清空对局时 |
+| --- | --- | --- |
+| `seven-double.sqlite3` | 对局状态、参与身份、频道、消息、证物图片 | 全部删除 |
+| `auth.sqlite3` | QQ 账号、登录挑战、登录令牌（只存 SHA-256 后的令牌） | 保留 |
+
+“一键初始化”和“开启下一局”只清空对局库：QQ 账号、玩家登录令牌和主持人登录都不会失效。踢人或本局拉黑只让对应参与身份失效，不影响账号在其他对局登录。
+
+## Flutter 原生客户端
+
+```cmd
+cd client
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --debug
+flutter build windows --debug
+```
+
+客户端启动后先填写服务根地址：局域网可用 HTTP，公网地址必须 HTTPS。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。
 
 ## 反向代理
 
-服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。提交类接口会校验同源，代理需要把原始 `Host` 透传给后端（`proxy_set_header Host $host;`）或补上 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；代理不在本机时再用 `start.cmd --trusted-proxies <代理地址>`（或环境变量 `GAME_TRUSTED_PROXIES`）声明可信代理，代理地址不固定可写 `*`。
+服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。代理需要：
 
-`super.tkcloud.online` 属于显式放行的来源：只要请求的 `Origin` 是它，就算代理吞掉了 `Sec-Fetch-*`、改写了 `Host` 也放行。换站点用 `GAME_ALLOWED_ORIGINS` 覆盖（逗号分隔，可写 `host`、`host:port` 或整条 URL），默认值见 `backend/app/auth.py`。
+- 透传原始 `Host`（`proxy_set_header Host $host;`）或补 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；
+- 转发 `Authorization` 请求头（原生客户端使用 Bearer 令牌，不要被代理丢弃）；
+- 允许 WebSocket 升级到 `/api/live`。
+
+代理不在本机时用 `start.cmd --trusted-proxies <代理地址>`（或环境变量 `GAME_TRUSTED_PROXIES`）声明可信代理，代理地址不固定可写 `*`。
+
+自带有效 Bearer 令牌的请求跳过浏览器同源校验；网页 Cookie 写请求和 WebSocket 仍要求同源。`super.tkcloud.online` 属于显式放行的来源，换站点用 `GAME_ALLOWED_ORIGINS` 覆盖（逗号分隔，可写 `host`、`host:port` 或整条 URL），默认值见 `backend/app/auth.py`。
 
 ## 检查
 
 ```cmd
 .venv\Scripts\python.exe -m unittest discover -s checks -v
-.venv\Scripts\python.exe -m ruff check backend checks run.py
+.venv\Scripts\python.exe -m ruff check backend checks run.py gateway
 cd frontend && npm.cmd run build
 ```
 
@@ -46,9 +102,11 @@ cd frontend && npm.cmd run build
 ## 目录结构
 
 ```
-backend/app/    FastAPI 服务、SQLite 存储、会话与实时推送
+backend/app/    FastAPI 服务、SQLite 存储、账号令牌、实时推送
 backend/app/game/  规则、结算与可见性裁剪
-frontend/src/  React + TypeScript 界面
+frontend/src/  React + TypeScript 网页界面
+client/        Flutter Android / Windows 原生客户端
+gateway/       NapCat OneBot QQ 登录网关
 checks/        后端回归检查
 docs/          游戏规则与设计方案
 img/           角色头像

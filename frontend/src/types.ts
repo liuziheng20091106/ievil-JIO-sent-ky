@@ -11,10 +11,14 @@ export interface Catalog {
 }
 export interface Actor {
   id: string;
-  kind: "host" | "player" | "spectator";
+  account_id?: string;
+  kind: "account" | "host" | "player" | "spectator";
   game_id: string | null;
   seat_id: string | null;
   name: string;
+  qq_id?: string;
+  avatar_url?: string | null;
+  access_ids?: string[];
 }
 export interface Session {
   actor: Actor | null;
@@ -60,12 +64,12 @@ export interface Field {
 }
 export interface UIAction {
   id: string;
+  short_label: string;
   label: string;
   description?: string;
   group?: string;
   danger?: boolean;
   blocking?: boolean;
-  instant?: boolean;
   payload?: Record<string, unknown>;
   fields: Field[];
 }
@@ -129,8 +133,15 @@ export interface Information {
 export interface Channel {
   id: string;
   label: string;
+  status: "pending" | "active" | "ended";
+  creator_id?: string;
+  members: { id: string; name: string; kind: Actor["kind"] }[];
+  invited_ids?: string[];
+  accepted_ids?: string[];
+  invitation?: "none" | "pending" | "accepted";
   can_send: boolean;
   reason?: string;
+  actions?: UIAction[];
 }
 export interface NightAction {
   id: string;
@@ -151,6 +162,7 @@ export interface NightAction {
   [key: string]: unknown;
 }
 export interface GameView {
+  ui_version: number;
   id: string;
   version: number;
   status: "lobby" | "playing" | "ended";
@@ -246,9 +258,25 @@ export interface MessagePage {
   messages: Message[];
   has_more: boolean;
 }
-export interface Invite {
-  code: string;
-  kind: "player" | "spectator";
+export interface LoginChallenge {
+  id: string;
+  code?: string;
+  expires_at: string;
+  status: "pending" | "completed";
+  session?: Session;
+}
+export interface LobbyGame {
+  id: string;
+  status: GameView["status"];
+  phase: string;
+  join_open: boolean;
+  player_seats_available: number;
+  can_join_player: boolean;
+  can_join_spectator: boolean;
+}
+export interface Lobby {
+  game: LobbyGame | null;
+  participation: Actor | null;
 }
 export type LiveEvent =
   | { type: "sync"; state: GameView; messages: Message[] }
