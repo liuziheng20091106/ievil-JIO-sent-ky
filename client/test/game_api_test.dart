@@ -76,7 +76,8 @@ void main() {
     expect(view.version, 3);
     expect(view.actions.single.shortLabel, '准备');
     expect(view.actions.single.unsupportedReason, isNull);
-    expect(requests.single.value(HttpHeaders.authorizationHeader), 'Bearer token-abc');
+    expect(requests.single.value(HttpHeaders.authorizationHeader),
+        'Bearer token-abc');
     expect(requests.single.value(HttpHeaders.acceptHeader), 'application/json');
     api.close();
   });
@@ -110,15 +111,18 @@ void main() {
     api.close();
   });
 
-  test('live connection carries the bearer token and forwards events', () async {
+  test('live connection carries the bearer token and forwards events',
+      () async {
     final events = <Map<String, dynamic>>[];
     final connected = <String>[];
     final live = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     live.listen((request) async {
       expect(request.uri.path, '/api/live');
-      expect(request.headers.value(HttpHeaders.authorizationHeader), 'Bearer token-abc');
+      expect(request.headers.value(HttpHeaders.authorizationHeader),
+          'Bearer token-abc');
       final socket = await WebSocketTransformer.upgrade(request);
-      socket.add(jsonEncode({'type': 'sync', 'state': stateJson(), 'messages': <dynamic>[]}));
+      socket.add(jsonEncode(
+          {'type': 'sync', 'state': stateJson(), 'messages': <dynamic>[]}));
       await Future<void>.delayed(const Duration(milliseconds: 200));
       await socket.close();
     });

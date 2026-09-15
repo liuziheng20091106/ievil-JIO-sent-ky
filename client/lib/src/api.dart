@@ -18,11 +18,13 @@ class GameApi {
       jsonObject(await _request('POST', '/api/native/auth/challenges'));
 
   Future<Map<String, dynamic>> challenge(String id) async => jsonObject(
-        await _request('GET', '/api/native/auth/challenges/${Uri.encodeComponent(id)}'),
+        await _request(
+            'GET', '/api/native/auth/challenges/${Uri.encodeComponent(id)}'),
       );
 
   Future<Map<String, dynamic>> hostLogin(String password) async => jsonObject(
-        await _request('POST', '/api/native/host/login', body: {'password': password}),
+        await _request('POST', '/api/native/host/login',
+            body: {'password': password}),
       );
 
   Future<Map<String, dynamic>> me() async =>
@@ -31,13 +33,16 @@ class GameApi {
   Future<Map<String, dynamic>> lobby() async =>
       jsonObject(await _request('GET', '/api/lobby'));
 
-  Future<GameView> createGame() async {
-    final catalog = jsonObject(await _request('GET', '/api/catalog'));
-    final codex = jsonArray(catalog['default_codex'], 'catalog.default_codex');
-    return GameView.fromJson(await _request('POST', '/api/games', body: {'codex': codex}));
-  }
+  Future<Map<String, dynamic>> catalog() async =>
+      jsonObject(await _request('GET', '/api/catalog'));
 
-  Future<Map<String, dynamic>> participate(String gameId, String kind) async => jsonObject(
+  /// 主持人建局必须显式给出 11 名魔典角色；不再静默使用默认名单。
+  Future<GameView> createGame(List<String> codex) async => GameView.fromJson(
+        await _request('POST', '/api/games', body: {'codex': codex}),
+      );
+
+  Future<Map<String, dynamic>> participate(String gameId, String kind) async =>
+      jsonObject(
         await _request(
           'POST',
           '/api/games/${Uri.encodeComponent(gameId)}/participations',
@@ -46,7 +51,8 @@ class GameApi {
       );
 
   Future<GameView> state(String gameId) async => GameView.fromJson(
-        await _request('GET', '/api/games/${Uri.encodeComponent(gameId)}/state'),
+        await _request(
+            'GET', '/api/games/${Uri.encodeComponent(gameId)}/state'),
       );
 
   Future<GameView> seatPerspective(String gameId, String seatId) async {
@@ -100,14 +106,16 @@ class GameApi {
     );
   }
 
-  Future<GameMessage> sendMessage(String gameId, String channelId, String text) async =>
+  Future<GameMessage> sendMessage(
+          String gameId, String channelId, String text) async =>
       GameMessage.fromJson(await _request(
         'POST',
         '/api/games/${Uri.encodeComponent(gameId)}/messages',
         body: {'channel_id': channelId, 'text': text},
       ));
 
-  Future<String> uploadEvidence(String gameId, {String text = '', String? image}) async {
+  Future<String> uploadEvidence(String gameId,
+      {String text = '', String? image}) async {
     final body = jsonObject(await _request(
       'POST',
       '/api/games/${Uri.encodeComponent(gameId)}/evidence',
@@ -121,9 +129,11 @@ class GameApi {
       'GET',
       '/api/games/${Uri.encodeComponent(gameId)}/evidence/${Uri.encodeComponent(evidenceId)}',
     );
-    final bytes = await response.fold<List<int>>(<int>[], (all, part) => all..addAll(part));
+    final bytes = await response
+        .fold<List<int>>(<int>[], (all, part) => all..addAll(part));
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException(utf8.decode(bytes, allowMalformed: true), statusCode: response.statusCode);
+      throw ApiException(utf8.decode(bytes, allowMalformed: true),
+          statusCode: response.statusCode);
     }
     return bytes;
   }
@@ -150,7 +160,9 @@ class GameApi {
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       var detail = '请求失败 (${response.statusCode})';
-      if (decoded is Map && decoded['detail'] != null) detail = decoded['detail'].toString();
+      if (decoded is Map && decoded['detail'] != null) {
+        detail = decoded['detail'].toString();
+      }
       throw ApiException(detail, statusCode: response.statusCode);
     }
     return decoded ?? <String, dynamic>{};
@@ -163,12 +175,15 @@ class GameApi {
     Map<String, dynamic>? body,
   }) async {
     try {
-      final request = await _client.openUrl(method, endpoint.api(path, query)).timeout(
-            const Duration(seconds: 25),
-          );
+      final request =
+          await _client.openUrl(method, endpoint.api(path, query)).timeout(
+                const Duration(seconds: 25),
+              );
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       final token = this.token;
-      if (token != null) request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      if (token != null) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
@@ -232,7 +247,8 @@ class LiveConnection {
         onStatus('已连接');
         await onConnected();
         _watchdog = Timer.periodic(const Duration(seconds: 10), (_) {
-          if (DateTime.now().difference(_lastEvent) > const Duration(seconds: 65)) {
+          if (DateTime.now().difference(_lastEvent) >
+              const Duration(seconds: 65)) {
             _socket?.close(4000, 'event timeout');
           }
         });
@@ -242,7 +258,8 @@ class LiveConnection {
           if (value is! String) continue;
           final decoded = jsonDecode(value);
           if (decoded is! Map) continue;
-          final event = decoded.map((key, value) => MapEntry(key.toString(), value));
+          final event =
+              decoded.map((key, value) => MapEntry(key.toString(), value));
           if (event['type'] == 'ping') {
             socket.add(jsonEncode({'type': 'pong'}));
           } else {
@@ -259,7 +276,8 @@ class LiveConnection {
         _socket = null;
       }
       if (_stopped) break;
-      final seconds = _delays[attempt < _delays.length ? attempt : _delays.length - 1];
+      final seconds =
+          _delays[attempt < _delays.length ? attempt : _delays.length - 1];
       if (attempt < _delays.length - 1) attempt++;
       await Future<void>.delayed(Duration(seconds: seconds));
     }

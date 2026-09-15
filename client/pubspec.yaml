@@ -10,7 +10,12 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_secure_storage: ^9.2.4
+  # 直接使用，用于拼接 Windows 上两个插件的存储目录路径（旧数据迁移）。
+  path: ^1.9.0
+  path_provider: ^2.1.5
   shared_preferences: ^2.5.3
+  # 只用于渲染绘制的 SVG 图标（月代雪标志、行动图标），不引入状态或路由框架。
+  flutter_svg: ^2.0.17
 
 dev_dependencies:
   flutter_test:
@@ -19,6 +24,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/logo.png
+    - assets/avatars/
+    - assets/icons/
 
   fonts:
     - family: HarmonyOS Sans SC

@@ -209,6 +209,9 @@ def game_view(game, actor):
             if pub
             else fallen_upper_role(game, s),
             "occupied": bool(s["occupant_id"]),
+            # 行动选项里的人物用的是参与者 id，客户端需要它把选项关联到席位与角色，
+            # 否则选择界面只能显示座位号而无法显示头像与角色。
+            "participant_id": s["occupant_id"],
             "ready": s["ready"] if host or s["id"] == own_id else None,
             "alive": lobby or (pub["alive"] if pub else current(game, s) is not None),
         }

@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:seven_double_client/src/action_sheet.dart';
 import 'package:seven_double_client/src/models.dart';
 
-Map<String, dynamic> actionJson({int uiVersion = 1, String fieldType = 'text'}) => {
+Map<String, dynamic> actionJson(
+        {int uiVersion = 1, String fieldType = 'text'}) =>
+    {
       'id': 'test.action',
       'ui_version': uiVersion,
       'short_label': '测试',
@@ -18,14 +20,24 @@ Map<String, dynamic> actionJson({int uiVersion = 1, String fieldType = 'text'}) 
 void main() {
   test('accepts exactly the seven supported field types', () {
     for (final type in ActionField.supportedTypes) {
-      expect(ActionDescriptor.fromJson(actionJson(fieldType: type)).unsupportedReason, isNull);
+      expect(
+          ActionDescriptor.fromJson(actionJson(fieldType: type))
+              .unsupportedReason,
+          isNull);
     }
-    expect(ActionDescriptor.fromJson(actionJson(uiVersion: 2)).unsupportedReason, isNotNull);
-    expect(ActionDescriptor.fromJson(actionJson(fieldType: 'remote_widget')).unsupportedReason, isNotNull);
+    expect(
+        ActionDescriptor.fromJson(actionJson(uiVersion: 2)).unsupportedReason,
+        isNotNull);
+    expect(
+        ActionDescriptor.fromJson(actionJson(fieldType: 'remote_widget'))
+            .unsupportedReason,
+        isNotNull);
   });
 
-  testWidgets('unsupported actions are visibly blocked in preview', (tester) async {
-    final action = ActionDescriptor.fromJson(actionJson(fieldType: 'remote_widget'));
+  testWidgets('unsupported actions are visibly blocked in preview',
+      (tester) async {
+    final action =
+        ActionDescriptor.fromJson(actionJson(fieldType: 'remote_widget'));
     await tester.pumpWidget(MaterialApp(
       home: Builder(
         builder: (context) => TextButton(

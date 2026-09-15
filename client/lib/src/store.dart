@@ -1,11 +1,46 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
 import 'models.dart';
+
+/// Windows 下 shared_preferences 与 flutter_secure_storage 的存放目录都取自
+/// exe 版本资源里的 ProductName（缺失时才回退到 exe 文件名）。应用显示名从
+/// seven_double_client 改成“魔法裁判”后，目录名随之改变，旧登录数据会留在旧目录。
+/// 这里把旧目录的数据一次性搬到当前目录，避免用户重新填写服务器并重新登录。
+/// 只补齐缺失的文件，不覆盖、不删除，因此可以重复执行。
+/// [currentDirectory] 与 [legacyDirectory] 仅用于测试注入。
+Future<void> migrateLegacyWindowsData({
+  Directory? currentDirectory,
+  Directory? legacyDirectory,
+}) async {
+  if (currentDirectory == null && !Platform.isWindows) return;
+  const files = ['shared_preferences.json', 'flutter_secure_storage.dat'];
+  try {
+    final current = currentDirectory ?? await getApplicationSupportDirectory();
+    // 调用 getApplicationSupportDirectory 会创建当前目录，因此用它来探测旧目录。
+    final legacy = legacyDirectory ??
+        Directory(p.join(current.parent.path, 'seven_double_client'));
+    if (legacy.path == current.path || !legacy.existsSync()) return;
+    for (final name in files) {
+      final source = File(p.join(legacy.path, name));
+      final target = File(p.join(current.path, name));
+      if (source.existsSync() && !target.existsSync()) {
+        await source.copy(target.path);
+        debugPrint('已迁移旧登录数据：$name');
+      }
+    }
+  } catch (failure) {
+    // 迁移失败不应阻止启动；用户仍可重新填写服务器地址并登录。
+    debugPrint('旧登录数据迁移跳过：$failure');
+  }
+}
 
 class GameStore extends ChangeNotifier {
   GameStore._(this.preferences, this.secureStorage);
@@ -45,15 +80,42 @@ class GameStore extends ChangeNotifier {
   String? _loadedPhaseKey;
   int _challengeGeneration = 0;
 
+  /// 仅供测试与界面预览：直接注入已经准备好的状态，不触发网络与本地存储。
+  static GameStore forPreview({
+    required SharedPreferences preferences,
+    required ServerEndpoint endpoint,
+    required Actor actor,
+    required GameView view,
+    String? gameId,
+    List<GameMessage> messages = const [],
+    LobbyGame? lobbyGame,
+    FlutterSecureStorage? secureStorage,
+  }) {
+    final store = GameStore._(
+      preferences,
+      secureStorage ?? const FlutterSecureStorage(),
+    );
+    store._useEndpoint(endpoint);
+    store.actor = actor;
+    store.gameId = gameId;
+    store.view = view;
+    store.messages = [...messages];
+    store.lobbyGame = lobbyGame;
+    store.restoring = false;
+    return store;
+  }
+
   static Future<GameStore> create({
     SharedPreferences? preferences,
     FlutterSecureStorage? secureStorage,
   }) async {
+    await migrateLegacyWindowsData();
     final store = GameStore._(
       preferences ?? await SharedPreferences.getInstance(),
-      secureStorage ?? const FlutterSecureStorage(
-        aOptions: AndroidOptions(encryptedSharedPreferences: true),
-      ),
+      secureStorage ??
+          const FlutterSecureStorage(
+            aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          ),
     );
     await store._restore();
     return store;
@@ -138,18 +200,23 @@ class GameStore extends ChangeNotifier {
         final result = await api!.challenge(id);
         if (generation != _challengeGeneration) return;
         if (result['status'] == 'completed') {
-          final token = jsonString(result['session_token'], 'challenge.session_token');
+          final token =
+              jsonString(result['session_token'], 'challenge.session_token');
           api!.token = token;
-          await _consumeSession(jsonObject(result['session'], 'challenge.session'), token: token);
+          await _consumeSession(
+              jsonObject(result['session'], 'challenge.session'),
+              token: token);
           challengeInfo = null;
           notifyListeners();
           await refreshLobby();
           return;
         }
         challengeInfo = {...challengeInfo!, ...result};
-        final expiresAt = DateTime.tryParse(result['expires_at']?.toString() ?? '');
+        final expiresAt =
+            DateTime.tryParse(result['expires_at']?.toString() ?? '');
         if (result['status'] == 'expired' ||
-            (expiresAt != null && DateTime.now().toUtc().isAfter(expiresAt.toUtc()))) {
+            (expiresAt != null &&
+                DateTime.now().toUtc().isAfter(expiresAt.toUtc()))) {
           error = '登录码已过期，请重新获取';
           challengeInfo = null;
           notifyListeners();
@@ -174,7 +241,8 @@ class GameStore extends ChangeNotifier {
       final result = await api!.hostLogin(password);
       final token = jsonString(result['session_token'], 'login.session_token');
       api!.token = token;
-      await _consumeSession(jsonObject(result['session'], 'login.session'), token: token);
+      await _consumeSession(jsonObject(result['session'], 'login.session'),
+          token: token);
       if (gameId != null) {
         await enterGame(gameId!);
       } else {
@@ -187,7 +255,8 @@ class GameStore extends ChangeNotifier {
     }
   }
 
-  Future<void> _consumeSession(Map<String, dynamic> result, {required String token}) async {
+  Future<void> _consumeSession(Map<String, dynamic> result,
+      {required String token}) async {
     final value = result['actor'];
     actor = value == null ? null : Actor.fromJson(value);
     gameId = result['game_id']?.toString();
@@ -209,7 +278,8 @@ class GameStore extends ChangeNotifier {
     if (api == null || actor == null) return;
     try {
       final result = await api!.lobby();
-      lobbyGame = result['game'] == null ? null : LobbyGame.fromJson(result['game']);
+      lobbyGame =
+          result['game'] == null ? null : LobbyGame.fromJson(result['game']);
       final participation = result['participation'];
       if (participation != null) {
         actor = Actor.fromJson(participation);
@@ -225,13 +295,14 @@ class GameStore extends ChangeNotifier {
     if (gameId != null && view == null) await enterGame(gameId!);
   }
 
-  Future<void> createGame() async {
+  /// 建局必须由主持人先确认 11 名魔典角色。
+  Future<void> createGame(List<String> codex) async {
     if (api == null || !actor!.isHost || writeBusy) return;
     writeBusy = true;
     error = null;
     notifyListeners();
     try {
-      final created = await api!.createGame();
+      final created = await api!.createGame(codex);
       gameId = created.id;
       view = created;
       await preferences.setString(_gameKey, gameId!);
@@ -305,7 +376,8 @@ class GameStore extends ChangeNotifier {
       switch (event['type']) {
         case 'sync':
           _applyView(GameView.fromJson(event['state']));
-          final incoming = jsonArray(event['messages'], 'sync.messages').map(GameMessage.fromJson);
+          final incoming = jsonArray(event['messages'], 'sync.messages')
+              .map(GameMessage.fromJson);
           _mergeMessages(incoming);
         case 'state':
           _applyView(GameView.fromJson(event['state']));
@@ -326,14 +398,18 @@ class GameStore extends ChangeNotifier {
     if (_actionBaseline == null) {
       final saved = preferences.getStringList(actionPreference);
       _actionBaseline = saved?.toSet() ?? actionKeys;
-      if (saved == null) preferences.setStringList(actionPreference, actionKeys.toList());
+      if (saved == null) {
+        preferences.setStringList(actionPreference, actionKeys.toList());
+      }
     } else {
       newActionCount = actionKeys.difference(_actionBaseline!).length;
     }
 
     final warning = next.self['warning_deadline'] != null
         ? 1
-        : (next.host['tasks'] is List ? (next.host['tasks'] as List).length : 0);
+        : (next.host['tasks'] is List
+            ? (next.host['tasks'] as List).length
+            : 0);
     warningCount = warning;
 
     final privateKey = jsonEncode({
@@ -352,7 +428,9 @@ class GameStore extends ChangeNotifier {
     if (seenPhase == null || _loadedPhaseKey == null) {
       // 首次同步或重连：只建立基线，不把当前阶段当成刚发生的变化。
       _loadedPhaseKey = phaseKey;
-      if (seenPhase != phaseKey) preferences.setString(phasePreference, phaseKey);
+      if (seenPhase != phaseKey) {
+        preferences.setString(phasePreference, phaseKey);
+      }
     } else if (seenPhase != phaseKey && pendingPhaseKey != phaseKey) {
       pendingPhaseKey = phaseKey;
     }
@@ -375,7 +453,8 @@ class GameStore extends ChangeNotifier {
     final keys = view?.allActions.map((item) => item.protocolKey).toSet() ?? {};
     _actionBaseline = keys;
     newActionCount = 0;
-    await preferences.setStringList(_preferenceKey('actions_seen'), keys.toList());
+    await preferences.setStringList(
+        _preferenceKey('actions_seen'), keys.toList());
     notifyListeners();
   }
 
@@ -423,7 +502,8 @@ class GameStore extends ChangeNotifier {
     if (api == null || gameId == null) return;
     final after = messages.isEmpty ? 0 : messages.last.id;
     try {
-      final page = await api!.messages(gameId!, scope: messageScope, after: after);
+      final page =
+          await api!.messages(gameId!, scope: messageScope, after: after);
       _mergeMessages(page.messages);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -459,13 +539,15 @@ class GameStore extends ChangeNotifier {
 
   Future<void> markMessagesRead() async {
     if (messages.isNotEmpty) {
-      await preferences.setInt(_preferenceKey('messages_read_$messageScope'), messages.last.id);
+      await preferences.setInt(
+          _preferenceKey('messages_read_$messageScope'), messages.last.id);
     }
     unreadMessageCount = 0;
     notifyListeners();
   }
 
-  int get _readCursor => preferences.getInt(_preferenceKey('messages_read_$messageScope')) ?? 0;
+  int get _readCursor =>
+      preferences.getInt(_preferenceKey('messages_read_$messageScope')) ?? 0;
 
   void selectChannel(String channelId) {
     selectedChannelId = channelId;
@@ -486,7 +568,8 @@ class GameStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final message = await api!.sendMessage(id, selectedChannelId, text.trim());
+      final message =
+          await api!.sendMessage(id, selectedChannelId, text.trim());
       _mergeMessages([message]);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -564,7 +647,8 @@ class GameStore extends ChangeNotifier {
   }
 
   Map<String, dynamic> draftFor(ActionDescriptor action, {String? asSeat}) {
-    final encoded = preferences.getString('draft:${draftKey(action, asSeat: asSeat)}');
+    final encoded =
+        preferences.getString('draft:${draftKey(action, asSeat: asSeat)}');
     if (encoded == null) return {};
     try {
       return jsonObject(jsonDecode(encoded), 'draft');
@@ -578,14 +662,16 @@ class GameStore extends ChangeNotifier {
     Map<String, dynamic> values, {
     String? asSeat,
   }) async {
-    await preferences.setString('draft:${draftKey(action, asSeat: asSeat)}', jsonEncode(values));
+    await preferences.setString(
+        'draft:${draftKey(action, asSeat: asSeat)}', jsonEncode(values));
   }
 
   Future<void> clearDraft(ActionDescriptor action, {String? asSeat}) async {
     await preferences.remove('draft:${draftKey(action, asSeat: asSeat)}');
   }
 
-  String _preferenceKey(String suffix) => '${endpoint ?? ''}:${gameId ?? ''}:${actor?.accountId ?? ''}:$suffix';
+  String _preferenceKey(String suffix) =>
+      '${endpoint ?? ''}:${gameId ?? ''}:${actor?.accountId ?? ''}:$suffix';
 
   Future<void> logout() async {
     _challengeGeneration++;

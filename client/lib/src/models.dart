@@ -75,7 +75,8 @@ class ServerEndpoint {
     if (!path.startsWith('/')) throw ArgumentError.value(path, 'path');
     final cleanQuery = <String, String>{
       for (final entry in query.entries)
-        if (entry.value != null && entry.value!.isNotEmpty) entry.key: entry.value!,
+        if (entry.value != null && entry.value!.isNotEmpty)
+          entry.key: entry.value!,
     };
     return httpUri.resolve(path).replace(
           queryParameters: cleanQuery.isEmpty ? null : cleanQuery,
@@ -89,7 +90,8 @@ class ServerEndpoint {
 
   Uri avatarUri(String value) {
     final parsed = Uri.tryParse(value);
-    final result = parsed != null && parsed.hasScheme ? parsed : httpUri.resolve(value);
+    final result =
+        parsed != null && parsed.hasScheme ? parsed : httpUri.resolve(value);
     if ((result.scheme != 'http' && result.scheme != 'https') ||
         (result.scheme == 'http' && !_isPrivateHost(result.host))) {
       throw const FormatException('头像地址必须使用安全的 HTTP(S) 地址');
@@ -142,9 +144,12 @@ class LobbyGame {
   String get status => jsonString(raw['status'], 'game.status');
   String get phase => jsonString(raw['phase'], 'game.phase');
   bool get joinOpen => jsonBool(raw['join_open'], 'game.join_open');
-  int get seatsAvailable => jsonInt(raw['player_seats_available'], 'game.player_seats_available');
-  bool get canJoinPlayer => jsonBool(raw['can_join_player'], 'game.can_join_player');
-  bool get canJoinSpectator => jsonBool(raw['can_join_spectator'], 'game.can_join_spectator');
+  int get seatsAvailable =>
+      jsonInt(raw['player_seats_available'], 'game.player_seats_available');
+  bool get canJoinPlayer =>
+      jsonBool(raw['can_join_player'], 'game.can_join_player');
+  bool get canJoinSpectator =>
+      jsonBool(raw['can_join_spectator'], 'game.can_join_spectator');
 }
 
 class ActionField {
@@ -152,7 +157,9 @@ class ActionField {
     name = jsonString(raw['name'], 'field.name');
     label = jsonString(raw['label'], 'field.label');
     type = jsonString(raw['type'], 'field.type');
-    required = raw['required'] == null ? true : jsonBool(raw['required'], 'field.required');
+    required = raw['required'] == null
+        ? true
+        : jsonBool(raw['required'], 'field.required');
     options = raw['options'] == null
         ? const []
         : jsonArray(raw['options'], 'field.options')
@@ -177,9 +184,8 @@ class ActionField {
   late final bool required;
   late final List<Map<String, dynamic>> options;
 
-  String? get unsupportedReason => supportedTypes.contains(type)
-      ? null
-      : '客户端版本不支持字段类型“$type”，请升级';
+  String? get unsupportedReason =>
+      supportedTypes.contains(type) ? null : '客户端版本不支持字段类型“$type”，请升级';
 }
 
 class ActionDescriptor {
@@ -264,7 +270,8 @@ class GameChannel {
   late final String reason;
   late final List<ActionDescriptor> actions;
 
-  bool get isPrivate => id != 'public' && id != 'system' && !id.startsWith('host:');
+  bool get isPrivate =>
+      id != 'public' && id != 'system' && !id.startsWith('host:');
 }
 
 class GameMessage {
@@ -273,7 +280,9 @@ class GameMessage {
     kind = raw['kind']?.toString() ?? 'chat';
     text = jsonString(raw['text'], 'message.text');
     channelId = raw['channel_id']?.toString() ?? 'system';
+    senderId = raw['sender_id']?.toString();
     senderName = raw['sender_name']?.toString();
+    avatarRoleId = raw['avatar_role_id']?.toString();
     createdAt = raw['created_at']?.toString() ?? '';
   }
 
@@ -282,7 +291,9 @@ class GameMessage {
   late final String kind;
   late final String text;
   late final String channelId;
+  late final String? senderId;
   late final String? senderName;
+  late final String? avatarRoleId;
   late final String createdAt;
 }
 
@@ -321,13 +332,12 @@ class GameView {
       : jsonArray(raw['seats'], 'state.seats')
           .map((item) => jsonObject(item, 'seat'))
           .toList(growable: false);
-  Map<String, dynamic> get self => raw['self'] == null
-      ? const {}
-      : jsonObject(raw['self'], 'state.self');
-  Map<String, dynamic> get host => raw['host'] == null
-      ? const {}
-      : jsonObject(raw['host'], 'state.host');
+  Map<String, dynamic> get self =>
+      raw['self'] == null ? const {} : jsonObject(raw['self'], 'state.self');
+  Map<String, dynamic> get host =>
+      raw['host'] == null ? const {} : jsonObject(raw['host'], 'state.host');
 
-  Iterable<ActionDescriptor> get channelActions => channels.expand((item) => item.actions);
+  Iterable<ActionDescriptor> get channelActions =>
+      channels.expand((item) => item.actions);
   Iterable<ActionDescriptor> get allActions => [...actions, ...channelActions];
 }
