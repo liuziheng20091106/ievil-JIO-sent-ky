@@ -524,7 +524,8 @@ void main() {
   testWidgets('主持人端管理页渲染', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       final store = await previewStore(host: true);
-      await pumpAt(tester, store, const Size(1280, 800));
+      // 用足够高的窗口渲染整页，让页尾的「席位代操作」入口也进入 golden。
+      await pumpAt(tester, store, const Size(1280, 1500));
       await expectLater(
         find.byType(GameShell),
         matchesGoldenFile('goldens/host_chat.png'),

@@ -1319,42 +1319,60 @@ class SeatCard extends StatelessWidget {
   }
 }
 
+/// 从服务端已授权的字段解出「当前使用的牌」与「下层牌」。
+/// 主持人/观战视角用 `cards` 与 `current_card_id`，其他视角回落到公开的
+/// `avatar_role_id`/`previous_role_id`，不猜测未公开的牌。
+({String? current, String? other}) dualRoleIds(Map<String, dynamic> seat) {
+  final cards = seat['cards'];
+  final currentId = seat['current_card_id']?.toString();
+  if (cards is List && cards.isNotEmpty) {
+    Map<dynamic, dynamic>? active;
+    Map<dynamic, dynamic>? idle;
+    for (final raw in cards) {
+      if (raw is! Map) continue;
+      if (active == null &&
+          currentId != null &&
+          raw['id']?.toString() == currentId) {
+        active = raw;
+      } else {
+        idle ??= raw;
+      }
+    }
+    active ??= cards.first is Map ? cards.first as Map : null;
+    return (
+      current: active?['role_id']?.toString(),
+      other: idle?['role_id']?.toString(),
+    );
+  }
+  return (
+    current: seat['avatar_role_id']?.toString(),
+    other: seat['previous_role_id']?.toString(),
+  );
+}
+
 /// 每席两张圆头像，约 50% 重叠，当前使用的牌在上层。
+/// `size` 是单张头像直径，`overlap` 是两张的重叠宽度；紧凑入口按比例一起缩小。
 class DualAvatar extends StatelessWidget {
-  const DualAvatar({super.key, required this.seat, required this.alive});
+  const DualAvatar({
+    super.key,
+    required this.seat,
+    required this.alive,
+    this.size = 46,
+    this.overlap = 24,
+  });
 
   final Map<String, dynamic> seat;
   final bool alive;
+  final double size;
+  final double overlap;
 
   @override
   Widget build(BuildContext context) {
-    final cards = seat['cards'];
-    String? current;
-    String? other;
-    final currentId = seat['current_card_id']?.toString();
-    if (cards is List && cards.isNotEmpty) {
-      Map<dynamic, dynamic>? active;
-      Map<dynamic, dynamic>? idle;
-      for (final raw in cards) {
-        if (raw is! Map) continue;
-        if (active == null &&
-            currentId != null &&
-            raw['id']?.toString() == currentId) {
-          active = raw;
-        } else {
-          idle ??= raw;
-        }
-      }
-      active ??= cards.first is Map ? cards.first as Map : null;
-      current = active?['role_id']?.toString();
-      other = idle?['role_id']?.toString();
-    } else {
-      current = seat['avatar_role_id']?.toString();
-      other = seat['previous_role_id']?.toString();
-    }
-    const size = 46.0;
+    final roles = dualRoleIds(seat);
+    final current = roles.current;
+    final other = roles.other;
     final avatars = SizedBox(
-      width: size + 24,
+      width: size + overlap,
       height: size,
       child: Stack(
         clipBehavior: Clip.none,
@@ -1363,12 +1381,20 @@ class DualAvatar extends StatelessWidget {
               left: 0,
               top: 2,
               child: _LayeredAvatar(
-                  roleId: other, size: size, dead: !alive, front: false)),
+                  roleId: other,
+                  size: size,
+                  dead: !alive,
+                  front: false,
+                  overlap: overlap)),
           Positioned(
-              left: 24,
+              left: overlap,
               top: 0,
               child: _LayeredAvatar(
-                  roleId: current, size: size, dead: !alive, front: true)),
+                  roleId: current,
+                  size: size,
+                  dead: !alive,
+                  front: true,
+                  overlap: overlap)),
         ],
       ),
     );
@@ -1387,12 +1413,16 @@ class _LayeredAvatar extends StatelessWidget {
     required this.size,
     required this.dead,
     required this.front,
+    required this.overlap,
   });
 
   final String? roleId;
   final double size;
   final bool dead;
   final bool front;
+
+  /// 两张头像的重叠宽度，用来按比例决定描边粗细。
+  final double overlap;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1414,7 +1444,8 @@ class _LayeredAvatar extends StatelessWidget {
           dead: dead,
           border: Border.all(
             color: front ? AppColors.accent : AppColors.border,
-            width: front ? 2 : 1.5,
+            // 桌上大图保持原观感；紧凑入口按尺寸等比收细，避免糊成一团。
+            width: overlap >= 23 ? (front ? 2 : 1.5) : 1.25,
           ),
         ),
       );
@@ -1621,6 +1652,82 @@ class HostManagementPage extends StatefulWidget {
 class _HostManagementPageState extends State<HostManagementPage> {
   static const groups = ['当前待办', '流程', '玩家', '私密信息', '纠错'];
 
+  /// 代操作入口的状态：已读取的席位行动数（null 表示还没有读取结果），
+  /// 以及正在读取视角的席位。读取结果按对局版本缓存，版本一变就作废。
+  final Map<String, int> _seatActionCounts = <String, int>{};
+  String? _loadingSeat;
+  int _countsVersion = -1;
+
+  GameStore get _store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧后再预读，避免在 build 期间触发网络与状态更新。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _preloadSeatActions());
+  }
+
+  /// 预读各席位的视角，把可代操作的行动数直接显示在入口上。
+  /// 预读失败（离线、预览、服务端拒绝）不打扰主持人，点击时再给出真实原因。
+  Future<void> _preloadSeatActions() async {
+    if (!mounted) return;
+    final store = _store;
+    if (store.api == null || store.view == null) return;
+    final seats = store.view!.seats
+        .where((seat) => seat['occupied'] == true)
+        .toList(growable: false);
+    for (final seat in seats) {
+      final id = seat['id']?.toString();
+      if (id == null) continue;
+      try {
+        await _refreshSeatActions(id);
+      } on ApiException {
+        return;
+      }
+      if (!mounted) return;
+    }
+  }
+
+  /// 读取一个席位的视角并只保留可代操作的行动；返回过滤后的列表。
+  Future<List<ActionDescriptor>> _refreshSeatActions(String seatId,
+      {bool showProgress = false}) async {
+    final store = _store;
+    if (showProgress && mounted) setState(() => _loadingSeat = seatId);
+    try {
+      final perspective = await store.seatPerspective(seatId);
+      final actions = seatActionsOf(perspective.actions);
+      if (!mounted) return actions;
+      setState(() {
+        if (store.view != null) _countsVersion = store.view!.version;
+        _seatActionCounts[seatId] = actions.length;
+      });
+      return actions;
+    } finally {
+      // 无论成功还是失败都清掉进度；失败原因由调用方提示。
+      if (mounted && _loadingSeat == seatId) {
+        setState(() => _loadingSeat = null);
+      }
+    }
+  }
+
+  Map<String, _SeatTileSlot> get _seatTiles {
+    final store = _store;
+    final view = store.view;
+    if (view == null) return const {};
+    if (_countsVersion != view.version) {
+      _countsVersion = view.version;
+      _seatActionCounts.clear();
+    }
+    return {
+      for (final seat in view.seats)
+        if (seat['id'] != null)
+          seat['id'].toString(): _SeatTileSlot(
+            loading: _loadingSeat == seat['id'].toString(),
+            count: _seatActionCounts[seat['id'].toString()],
+          ),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
@@ -1756,19 +1863,28 @@ class _HostManagementPageState extends State<HostManagementPage> {
             ),
         ],
         SectionTitle('席位代操作', subtitle: '先读取该席位当前视角，再提交它实际可用的行动。'),
-        Wrap(
-          spacing: AppSpacing.sm,
-          runSpacing: AppSpacing.sm,
-          children: [
-            for (final seat in view.seats)
-              ActionChip(
-                avatar: DualAvatar(seat: seat, alive: seat['alive'] != false),
-                label: Text('${seat['id']} 号'),
-                onPressed: seat['occupied'] == true && !store.writeBusy
-                    ? () => _seatActions(seat['id'].toString())
-                    : null,
-              ),
-          ],
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: _seatTiles.isNotEmpty
+                ? Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    children: [
+                      for (final seat in view.seats)
+                        _SeatActionTile(
+                          seat: seat,
+                          slot: _seatTiles[seat['id']?.toString()],
+                          onTap: seat['occupied'] == true && !store.writeBusy
+                              ? () => _seatActions(seat['id'].toString())
+                              : null,
+                        ),
+                    ],
+                  )
+                : const Text('本局还没有可以代操作的席位。',
+                    style: TextStyle(
+                        fontSize: 13, color: AppColors.textTertiary)),
+          ),
         ),
       ],
     );
@@ -1785,14 +1901,14 @@ class _HostManagementPageState extends State<HostManagementPage> {
 
   Future<void> _seatActions(String seatId) async {
     final store = widget.store;
+    if (_loadingSeat != null) return;
     try {
-      final perspective = await store.seatPerspective(seatId);
+      // 优先用预读结果；没有预读结果才在点击时读一次，并显示读取进度。
+      final actions = _seatActionCounts.containsKey(seatId)
+          ? seatActionsOf((await store.seatPerspective(seatId)).actions)
+          : await _refreshSeatActions(seatId, showProgress: true);
       if (!mounted) return;
-      final actions = perspective.actions
-          .where((action) => !action.id.startsWith('channel.'))
-          .toList();
       if (actions.isEmpty) {
-        setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('该席位当前没有可代操作的行动')),
         );
@@ -1837,6 +1953,188 @@ class _HostManagementPageState extends State<HostManagementPage> {
       return '玩家';
     }
     return '流程';
+  }
+}
+
+/// 席位代操作里可提交的行动：频道动作属于私信管理，不属于该席位的游戏行动。
+List<ActionDescriptor> seatActionsOf(Iterable<ActionDescriptor> actions) =>
+    actions.where((action) => !action.id.startsWith('channel.')).toList();
+
+/// 代操作入口的读取状态：`count` 为空表示还没读到该席位的视角。
+class _SeatTileSlot {
+  const _SeatTileSlot({this.loading = false, this.count});
+
+  final bool loading;
+  final int? count;
+}
+
+/// 单个席位的代操作入口：双头像 + 席位号 + 当前可代操作的行动数。
+/// 只显示服务端已授权的牌面；未占用的席位不可点击。
+class _SeatActionTile extends StatelessWidget {
+  const _SeatActionTile({required this.seat, this.slot, this.onTap});
+
+  static const double width = 104;
+  static const double _avatarSize = 30;
+
+  final Map<String, dynamic> seat;
+  final _SeatTileSlot? slot;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = seat['id']?.toString() ?? '-';
+    final occupied = seat['occupied'] == true;
+    final alive = seat['alive'] != false;
+    final name = seat['name']?.toString() ?? '';
+    final loading = slot?.loading == true;
+    final count = slot?.count;
+    final enabled = onTap != null;
+
+    final stripWidth = _avatarSize * 1.5;
+    final strip = SizedBox(
+      width: stripWidth,
+      height: _avatarSize,
+      child: occupied
+          ? DualAvatar(
+              seat: seat,
+              alive: alive,
+              size: _avatarSize,
+              overlap: _avatarSize * .5,
+            )
+          : Center(
+              child: Container(
+                width: _avatarSize,
+                height: _avatarSize,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.surfaceMuted,
+                  border: Border.all(color: AppColors.border, width: 1.5),
+                ),
+                child: const Text('?',
+                    style: TextStyle(
+                        fontSize: _avatarSize * .45,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textTertiary)),
+              ),
+            ),
+    );
+
+    final (String value, Color valueColor) = !occupied
+        ? ('空席', AppColors.textTertiary)
+        : !alive
+            ? ('已出局', AppColors.textSecondary)
+            : loading
+                ? ('读取中', AppColors.textTertiary)
+                : count == null
+                    ? ('点击读取', AppColors.textTertiary)
+                    : count == 0
+                        ? ('无可用行动', AppColors.textTertiary)
+                        : ('$count 项行动', AppColors.accent);
+
+    return Semantics(
+      button: enabled,
+      enabled: enabled,
+      label: '$id 号${occupied ? ' · ${name.isEmpty ? '等待命名' : name}' : ' · 空席'}'
+          '${count != null ? ' · $value' : ''}',
+      child: Tooltip(
+        message: occupied
+            ? '$id 号${name.isEmpty ? '' : ' · $name'}；${slot?.count == null ? '点击读取该席位视角' : value}'
+            : '$id 号空席，暂无可代操作的身份',
+        child: Material(
+          color: AppColors.surfaceMuted,
+          borderRadius: BorderRadius.circular(AppRadius.field),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.field),
+            onTap: onTap,
+            child: Container(
+              width: width,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.field),
+                border: Border.all(
+                  color: enabled ? AppColors.border : AppColors.borderStrong,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text('$id 号',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: enabled
+                                ? AppColors.text
+                                : AppColors.textTertiary,
+                          )),
+                      const Spacer(),
+                      if (loading)
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else if (count == 0)
+                        const Icon(Icons.check_rounded,
+                            size: 13, color: AppColors.textTertiary)
+                      else if (count != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppColors.accentSoft,
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.chip),
+                          ),
+                          child: Text('$count',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.accent,
+                              )),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  Row(
+                    children: [
+                      strip,
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Text(
+                          occupied ? (name.isEmpty ? '等待命名' : name) : '—',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: enabled
+                                ? AppColors.textSecondary
+                                : AppColors.textTertiary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color:
+                            enabled ? valueColor : AppColors.textTertiary,
+                      )),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
