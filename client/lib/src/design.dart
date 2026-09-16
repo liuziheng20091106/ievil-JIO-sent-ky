@@ -43,6 +43,19 @@ class AppRadius {
   static const chip = 999.0;
 }
 
+/// 宽屏断点：达到后同屏显示多个界面，不再用悬浮底栏一次只露出一页。
+/// 采用 Material 3 窗口尺寸类：840（expanded）起两栏，1200（large）起三栏。
+/// 平板竖屏与手机仍在 840 以下，保持原来的单页加底栏。
+class AppBreakpoints {
+  const AppBreakpoints._();
+
+  /// 平板横屏与小窗口桌面：状态与对局同屏，「我的/管理」收进右侧抽屉。
+  static const dualPane = 840.0;
+
+  /// 电脑：状态、对局与「我的/管理」三栏同屏。
+  static const triplePane = 1200.0;
+}
+
 class AppSpacing {
   const AppSpacing._();
 

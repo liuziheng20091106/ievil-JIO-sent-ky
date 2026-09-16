@@ -524,8 +524,9 @@ void main() {
   testWidgets('主持人端管理页渲染', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       final store = await previewStore(host: true);
-      // 用足够高的窗口渲染整页，让页尾的「席位代操作」入口也进入 golden。
-      await pumpAt(tester, store, const Size(1280, 1500));
+      // 宽屏改成同屏多栏、「管理」不再是底栏页签，单页 golden 用窄屏渲染；
+      // 窗口仍要够高，让页尾的「席位代操作」入口也进入 golden。
+      await pumpAt(tester, store, const Size(480, 1500));
       await expectLater(
         find.byType(GameShell),
         matchesGoldenFile('goldens/host_chat.png'),
@@ -537,6 +538,50 @@ void main() {
         find.byType(GameShell),
         matchesGoldenFile('goldens/host_manage.png'),
       );
+    });
+  });
+
+  testWidgets('屏幕够宽时同屏显示多个界面，窄屏仍是一次一页', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      // 电脑宽屏：状态、对局、管理三栏同屏，悬浮底栏不再出现。
+      final desktop = await previewStore(host: true);
+      await pumpAt(tester, desktop, const Size(1440, 1000));
+      expect(find.byType(PaneFrame), findsNWidgets(3));
+      expect(find.byType(NavigationBar), findsNothing);
+      expect(find.byType(BoardPage).hitTestable(), findsOneWidget);
+      expect(find.byType(ChatActionPage).hitTestable(), findsOneWidget);
+      expect(find.byType(HostManagementPage).hitTestable(), findsOneWidget);
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/wide_host_panes.png'),
+      );
+
+      // 平板横屏：状态与对局两栏，「我的/管理」收进右侧抽屉。
+      final tablet = await previewStore(host: true);
+      await pumpAt(tester, tablet, const Size(1024, 800));
+      expect(find.byType(PaneFrame), findsNWidgets(2));
+      expect(find.byType(NavigationBar), findsNothing);
+      expect(find.byType(BoardPage).hitTestable(), findsOneWidget);
+      expect(find.byType(ChatActionPage).hitTestable(), findsOneWidget);
+      expect(find.byType(HostManagementPage), findsNothing);
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/wide_host_tablet.png'),
+      );
+
+      await tester.tap(find.byTooltip('管理'));
+      await tester.pumpAndSettle();
+      expect(find.byType(HostManagementPage).hitTestable(), findsOneWidget);
+
+      // 窄屏（手机/平板竖屏）保持单页加底栏，不强行塞多栏。
+      final phone = await previewStore(host: false);
+      await pumpAt(tester, phone, const Size(420, 880));
+      expect(find.byType(PaneFrame), findsNothing);
+      expect(find.byType(NavigationBar).hitTestable(), findsOneWidget);
+      expect(find.byType(ProfilePage).hitTestable(), findsNothing);
+      await tester.tap(find.text('我的'));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(ProfilePage).hitTestable(), findsOneWidget);
     });
   });
 

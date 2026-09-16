@@ -23,9 +23,14 @@ class GameShell extends StatefulWidget {
 }
 
 class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
+  final GlobalKey<ScaffoldState> _scaffold = GlobalKey<ScaffoldState>();
   int index = 0;
   int lastActions = 0;
   int lastWarnings = 0;
+
+  /// 已经按当前宽屏档位登记过「已查看」的页面；0 表示窄屏单页布局。
+  /// 只在档位变化时登记一次，避免每帧写偏好引起重复重建。
+  int viewedTier = 0;
   AppLifecycleState lifecycle = AppLifecycleState.resumed;
 
   bool get host => widget.store.actor!.isHost;
@@ -65,14 +70,42 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  /// 宽屏同屏显示的页面直接算作已查看：对局栏始终可见，三栏时「我的/管理」也可见。
+  /// 窄屏（tier 0）仍由底栏选择触发，保持原来的角标语义。
+  void markVisiblePages(int tier) {
+    if (tier == viewedTier) return;
+    viewedTier = tier;
+    if (tier == 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.store.markMessagesRead();
+      widget.store.markActionsViewed();
+      if (tier >= 3) markThirdPageViewed();
+    });
+  }
+
+  /// 「我的/管理」栏可见（三栏同屏或抽屉已打开）时清掉它的待办角标。
+  void markThirdPageViewed() {
+    if (host) {
+      widget.store.markActionsViewed();
+    } else {
+      widget.store.markPrivateViewed();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
-    final pages = <Widget>[
-      ChatActionPage(store: store),
-      BoardPage(store: store),
-      if (host) HostManagementPage(store: store) else ProfilePage(store: store),
-    ];
+    final view = store.view;
+    final actor = store.actor;
+    // 返回大厅（returnToLobby）会先清空视图再让上层切页；这一步为空的瞬间不重建整页，
+    // 避免在路由切换前用空视图构建对局界面。
+    if (view == null || actor == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    final ended = view.status == 'ended';
     final labels = host ? const ['对局', '状态', '管理'] : const ['对局', '状态', '我的'];
     final icons = host
         ? const [
@@ -91,104 +124,280 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       host ? store.newActionCount : store.privateStateCount,
     ];
     final urgent = store.warningCount > 0 || store.newActionCount > 0;
-    return Scaffold(
-      extendBody: true,
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              store.view!.phaseLabel,
-              style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.text),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 平板/电脑屏幕够宽就同屏显示多栏，不再让底栏把页面藏起来：
+        // 达到 dualPane 后状态与对局并排，达到 triplePane 再接上「我的/管理」。
+        final threePane = constraints.maxWidth >= AppBreakpoints.triplePane;
+        final twoPane = constraints.maxWidth >= AppBreakpoints.dualPane;
+        markVisiblePages(twoPane ? (threePane ? 3 : 2) : 0);
+        final inset = twoPane ? AppSpacing.lg : AppSpacing.bottomBar;
+        final chat = ChatActionPage(store: store, bottomInset: inset);
+        final board = BoardPage(store: store, bottomInset: inset);
+        final third = host
+            ? HostManagementPage(store: store, bottomInset: inset)
+            : ProfilePage(store: store, bottomInset: inset);
+        return Scaffold(
+          key: _scaffold,
+          extendBody: !twoPane,
+          appBar: AppBar(
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  ended ? '本局已落幕' : view.phaseLabel,
+                  style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text),
+                ),
+                Text(
+                  ended
+                      ? '结局可只读查看'
+                      : '第 ${view.day} 日 · ${view.half == 'night' ? '夜间' : '白天'}',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.textTertiary),
+                ),
+              ],
             ),
-            Text(
-              '第 ${store.view!.day} 日 · ${store.view!.half == 'night' ? '夜间' : '白天'}',
-              style:
-                  const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-            ),
-          ],
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: AppSpacing.lg),
-            child: Center(
-              child: Tooltip(
-                message: '连接状态：${store.connectionStatus}',
-                child: Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: store.connectionStatus == '已连接'
-                        ? AppColors.successSoft
-                        : AppColors.warningSoft,
-                    shape: BoxShape.circle,
+            actions: [
+              if (ended)
+                Padding(
+                  padding: const EdgeInsets.only(right: AppSpacing.sm),
+                  child: TextButton.icon(
+                    onPressed: store.writeBusy
+                        ? null
+                        : () => returnToLobby(context, store),
+                    icon: const Icon(Icons.meeting_room_outlined, size: 18),
+                    label: const Text('返回大厅'),
                   ),
-                  child: Icon(
-                    store.connectionStatus == '已连接'
-                        ? Icons.cloud_done_outlined
-                        : Icons.cloud_off_outlined,
-                    size: 18,
-                    color: store.connectionStatus == '已连接'
-                        ? AppColors.success
-                        : AppColors.warning,
+                ),
+              // 两栏时「我的/管理」收进右侧抽屉，入口保留该页的待办角标。
+              if (twoPane && !threePane)
+                Padding(
+                  padding: const EdgeInsets.only(right: AppSpacing.sm),
+                  child: IconButton(
+                    tooltip: labels[2],
+                    onPressed: () => _scaffold.currentState?.openEndDrawer(),
+                    icon: Badge.count(
+                      count: counts[2],
+                      isLabelVisible: counts[2] > 0,
+                      backgroundColor: AppColors.accent,
+                      child: Icon(icons[2], color: AppColors.text),
+                    ),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.only(right: AppSpacing.lg),
+                child: Center(
+                  child: Tooltip(
+                    message: '连接状态：${store.connectionStatus}',
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: store.connectionStatus == '已连接'
+                            ? AppColors.successSoft
+                            : AppColors.warningSoft,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        store.connectionStatus == '已连接'
+                            ? Icons.cloud_done_outlined
+                            : Icons.cloud_off_outlined,
+                        size: 18,
+                        color: store.connectionStatus == '已连接'
+                            ? AppColors.success
+                            : AppColors.warning,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          IndexedStack(index: index, children: pages),
-          if (store.pendingPhaseKey != null) PhaseOverlay(store: store),
-        ],
-      ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-        child: Material(
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: .10),
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadius.sheet),
-          clipBehavior: Clip.antiAlias,
-          child: NavigationBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            selectedIndex: index,
-            onDestinationSelected: (value) {
-              setState(() => index = value);
-              if (Platform.isAndroid) HapticFeedback.selectionClick();
-              if (value == 0) {
-                store.markMessagesRead();
-                store.markActionsViewed();
-              } else if (value == 2 && !host) {
-                store.markPrivateViewed();
-              } else if (value == 2 && host) {
-                store.markActionsViewed();
-              }
-            },
-            destinations: [
-              for (var item = 0; item < 3; item++)
-                NavigationDestination(
-                  icon: Badge.count(
-                    count: counts[item],
-                    isLabelVisible: counts[item] > 0,
-                    backgroundColor: item == 0 && urgent
-                        ? AppColors.danger
-                        : AppColors.accent,
-                    child: Icon(icons[item]),
-                  ),
-                  label: labels[item],
-                ),
             ],
           ),
-        ),
-      ),
+          endDrawer: twoPane && !threePane
+              ? Drawer(
+                  width: 380,
+                  child: SafeArea(
+                    child: PaneFrame(
+                      label: labels[2],
+                      count: counts[2],
+                      trailing: IconButton(
+                        tooltip: '收起',
+                        onPressed: () =>
+                            _scaffold.currentState?.closeEndDrawer(),
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                      child: third,
+                    ),
+                  ),
+                )
+              : null,
+          onEndDrawerChanged: (open) {
+            if (open) markThirdPageViewed();
+          },
+          body: Stack(
+            children: [
+              if (twoPane)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                        width: 340,
+                        child: PaneFrame(label: '状态', child: board)),
+                    const PaneDivider(),
+                    Expanded(
+                      child: PaneFrame(
+                        label: '对局',
+                        count: counts[0],
+                        urgent: urgent,
+                        child: chat,
+                      ),
+                    ),
+                    if (threePane) ...[
+                      const PaneDivider(),
+                      SizedBox(
+                        width: 360,
+                        child: PaneFrame(
+                          label: labels[2],
+                          count: counts[2],
+                          child: third,
+                        ),
+                      ),
+                    ],
+                  ],
+                )
+              else
+                IndexedStack(index: index, children: [chat, board, third]),
+              if (store.pendingPhaseKey != null) PhaseOverlay(store: store),
+            ],
+          ),
+          bottomNavigationBar: twoPane
+              ? null
+              : SafeArea(
+                  minimum: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                  child: Material(
+                    elevation: 10,
+                    shadowColor: Colors.black.withValues(alpha: .10),
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadius.sheet),
+                    clipBehavior: Clip.antiAlias,
+                    child: NavigationBar(
+                      backgroundColor: Colors.transparent,
+                      elevation: 0,
+                      selectedIndex: index,
+                      onDestinationSelected: (value) {
+                        setState(() => index = value);
+                        if (Platform.isAndroid) HapticFeedback.selectionClick();
+                        if (value == 0) {
+                          store.markMessagesRead();
+                          store.markActionsViewed();
+                        } else if (value == 2 && !host) {
+                          store.markPrivateViewed();
+                        } else if (value == 2 && host) {
+                          store.markActionsViewed();
+                        }
+                      },
+                      destinations: [
+                        for (var item = 0; item < 3; item++)
+                          NavigationDestination(
+                            icon: Badge.count(
+                              count: counts[item],
+                              isLabelVisible: counts[item] > 0,
+                              backgroundColor: item == 0 && urgent
+                                  ? AppColors.danger
+                                  : AppColors.accent,
+                              child: Icon(icons[item]),
+                            ),
+                            label: labels[item],
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+        );
+      },
     );
+  }
+}
+
+/// 宽屏栏位标题条：说明这一栏是什么，并把该页待办数量留在标题上。
+class PaneFrame extends StatelessWidget {
+  const PaneFrame({
+    super.key,
+    required this.label,
+    required this.child,
+    this.count = 0,
+    this.urgent = false,
+    this.trailing,
+  });
+
+  final String label;
+  final Widget child;
+  final int count;
+  final bool urgent;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: 46,
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            decoration: const BoxDecoration(
+              color: AppColors.background,
+              border: Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary),
+                ),
+                const Spacer(),
+                if (count > 0)
+                  Tag(
+                    '$count',
+                    color: urgent ? AppColors.danger : AppColors.accent,
+                    background:
+                        urgent ? AppColors.dangerSoft : AppColors.accentSoft,
+                  ),
+                if (trailing != null) trailing!,
+              ],
+            ),
+          ),
+          Expanded(child: child),
+        ],
+      );
+}
+
+/// 宽屏栏位之间的细分隔线。
+class PaneDivider extends StatelessWidget {
+  const PaneDivider({super.key});
+
+  @override
+  Widget build(BuildContext context) => const VerticalDivider(
+        width: 1,
+        thickness: 1,
+        color: AppColors.border,
+      );
+}
+
+/// 从已终止的对局返回主界面（大厅）：主持人可在此建下一局，其他身份等待新局。
+/// 对局记录在服务器上保持只读，这里只解除本设备对它的绑定。
+Future<void> returnToLobby(BuildContext context, GameStore store) async {
+  try {
+    await store.returnToLobby();
+  } on ApiException catch (failure) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    }
   }
 }
 
@@ -282,8 +491,15 @@ class _PhaseOverlayState extends State<PhaseOverlay> {
 
 /// 对局页：上方消息、下方输入与行动入口。
 class ChatActionPage extends StatefulWidget {
-  const ChatActionPage({super.key, required this.store});
+  const ChatActionPage({
+    super.key,
+    required this.store,
+    this.bottomInset = AppSpacing.bottomBar,
+  });
   final GameStore store;
+
+  /// 底部为悬浮底栏预留的高度；宽屏没有底栏，由外壳传入更小的值。
+  final double bottomInset;
 
   @override
   State<ChatActionPage> createState() => _ChatActionPageState();
@@ -422,6 +638,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
           controller: message,
           keyboard: keyboard,
           actions: actions,
+          bottomInset: widget.bottomInset,
           error: sendError,
           onSend: send,
           onClearError: () => setState(() => sendError = null),
@@ -451,6 +668,7 @@ class _Composer extends StatelessWidget {
     required this.controller,
     required this.keyboard,
     required this.actions,
+    required this.bottomInset,
     required this.onSend,
     required this.onClearError,
     this.error,
@@ -461,6 +679,7 @@ class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final bool keyboard;
   final List<ActionDescriptor> actions;
+  final double bottomInset;
   final VoidCallback onSend;
   final VoidCallback onClearError;
   final String? error;
@@ -472,8 +691,8 @@ class _Composer extends StatelessWidget {
       color: AppColors.surface,
       child: SafeArea(
         top: false,
-        minimum: const EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.bottomBar),
+        minimum: EdgeInsets.fromLTRB(
+            AppSpacing.md, AppSpacing.sm, AppSpacing.md, bottomInset),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1112,19 +1331,26 @@ class MessageBubble extends StatelessWidget {
 
 /// 状态页：牌桌 + 阶段信息。
 class BoardPage extends StatelessWidget {
-  const BoardPage({super.key, required this.store});
+  const BoardPage({
+    super.key,
+    required this.store,
+    this.bottomInset = AppSpacing.bottomBar,
+  });
   final GameStore store;
+
+  /// 底部为悬浮底栏预留的高度；宽屏由外壳传入更小的值。
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
     final view = store.view!;
     final result = view.raw['result'];
     return ListView(
-      padding: const EdgeInsets.fromLTRB(
+      padding: EdgeInsets.fromLTRB(
         AppSpacing.lg,
         AppSpacing.sm,
         AppSpacing.lg,
-        AppSpacing.bottomBar,
+        bottomInset,
       ),
       children: [
         Card(
@@ -1213,19 +1439,52 @@ class BoardPage extends StatelessWidget {
             color: AppColors.hostSoft,
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Row(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.emoji_events_outlined,
-                      color: AppColors.host),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Text(
-                      '${result['winner'] ?? result['reason'] ?? result}',
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.emoji_events_outlined,
+                          color: AppColors.host),
+                      const SizedBox(width: AppSpacing.md),
+                      Expanded(
+                        child: Text(
+                          _resultTitle(result),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (result['reason']?.toString().isNotEmpty == true) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    Text(
+                      result['reason'].toString(),
                       style: const TextStyle(
                           fontSize: 14, height: 1.5, color: AppColors.text),
                     ),
-                  ),
+                  ],
+                  // 对局终止或分出胜负后，本局只读；这里给出回到主界面的入口。
+                  if (view.status == 'ended') ...[
+                    const SizedBox(height: AppSpacing.lg),
+                    FilledButton.icon(
+                      onPressed: store.writeBusy
+                          ? null
+                          : () => returnToLobby(context, store),
+                      icon: const Icon(Icons.meeting_room_outlined, size: 18),
+                      label: const Text('返回主界面（大厅）'),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    const Text(
+                      '本局记录在主持人开启下一局前仍可只读查看；返回大厅后，主持人可建立新一局。',
+                      style: TextStyle(
+                          fontSize: 12, color: AppColors.textTertiary),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1235,6 +1494,16 @@ class BoardPage extends StatelessWidget {
     );
   }
 }
+
+/// 结算标题：终止对局不再显示成一个阵营获胜。
+String _resultTitle(Map<dynamic, dynamic> result) =>
+    switch (result['winner']?.toString() ?? '') {
+      'good' => '好人获胜',
+      'witch' => '魔女获胜',
+      'aborted' => '本局已终止',
+      final other when other.isNotEmpty => other,
+      _ => '本局已结束',
+    };
 
 class SeatCard extends StatelessWidget {
   const SeatCard({super.key, required this.seat, this.onTap});
@@ -1453,8 +1722,15 @@ class _LayeredAvatar extends StatelessWidget {
 
 /// 我的页：账号、双牌、退出。
 class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key, required this.store});
+  const ProfilePage({
+    super.key,
+    required this.store,
+    this.bottomInset = AppSpacing.bottomBar,
+  });
   final GameStore store;
+
+  /// 底部为悬浮底栏预留的高度；宽屏由外壳传入更小的值。
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
@@ -1463,11 +1739,11 @@ class ProfilePage extends StatelessWidget {
     final currentId = self['current_card_id']?.toString();
     final actor = store.actor!;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(
+      padding: EdgeInsets.fromLTRB(
         AppSpacing.lg,
         AppSpacing.sm,
         AppSpacing.lg,
-        AppSpacing.bottomBar,
+        bottomInset,
       ),
       children: [
         Card(
@@ -1642,8 +1918,15 @@ class _OwnCard extends StatelessWidget {
 
 /// 主持人管理页：待办 / 流程 / 玩家 / 私密信息 / 纠错 + 席位代操作。
 class HostManagementPage extends StatefulWidget {
-  const HostManagementPage({super.key, required this.store});
+  const HostManagementPage({
+    super.key,
+    required this.store,
+    this.bottomInset = AppSpacing.bottomBar,
+  });
   final GameStore store;
+
+  /// 底部为悬浮底栏预留的高度；宽屏由外壳传入更小的值。
+  final double bottomInset;
 
   @override
   State<HostManagementPage> createState() => _HostManagementPageState();
@@ -1750,11 +2033,11 @@ class _HostManagementPageState extends State<HostManagementPage> {
     }
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(
+      padding: EdgeInsets.fromLTRB(
         AppSpacing.lg,
         AppSpacing.sm,
         AppSpacing.lg,
-        AppSpacing.bottomBar,
+        widget.bottomInset,
       ),
       children: [
         Card(
@@ -1882,8 +2165,8 @@ class _HostManagementPageState extends State<HostManagementPage> {
                     ],
                   )
                 : const Text('本局还没有可以代操作的席位。',
-                    style: TextStyle(
-                        fontSize: 13, color: AppColors.textTertiary)),
+                    style:
+                        TextStyle(fontSize: 13, color: AppColors.textTertiary)),
           ),
         ),
       ],
@@ -2086,8 +2369,7 @@ class _SeatActionTile extends StatelessWidget {
                               horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
                             color: AppColors.accentSoft,
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.chip),
+                            borderRadius: BorderRadius.circular(AppRadius.chip),
                           ),
                           child: Text('$count',
                               style: const TextStyle(
@@ -2125,8 +2407,7 @@ class _SeatActionTile extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color:
-                            enabled ? valueColor : AppColors.textTertiary,
+                        color: enabled ? valueColor : AppColors.textTertiary,
                       )),
                 ],
               ),

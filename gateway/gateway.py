@@ -165,7 +165,7 @@ class QQGateway:
         qq_id = str(event.get("user_id") or sender.get("user_id") or "").strip()
         nickname = str(sender.get("card") or sender.get("nickname") or qq_id).strip()
         if qq_id and await self.bind_login(code=match.group(1), qq_id=qq_id, nickname=nickname):
-            await self.acknowledge(connection, f"{nickname}，登录成功~请回到活动页面。")
+            await self.acknowledge(connection, f"{nickname}，登录成功~")
 
     async def run(self) -> None:
         delay = 2.0

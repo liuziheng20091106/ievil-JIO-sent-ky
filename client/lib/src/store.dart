@@ -161,12 +161,36 @@ class GameStore extends ChangeNotifier {
         }
       }
     }
+    // 上次已经回到主界面的对局，不该在重启后被重新拉回：服务器那边这一局仍是
+    // 当前局，只有本客户端知道用户已经离开，所以在这里按服务器的当前局清掉绑定。
+    if (actor != null && gameId != null && await lobbyHasNoGame()) {
+      gameId = null;
+      await preferences.remove(_gameKey);
+    }
     restoring = false;
     notifyListeners();
     if (actor != null && gameId != null) {
       await enterGame(gameId!);
     } else if (actor != null) {
       await refreshLobby();
+    }
+  }
+
+  /// 服务器是否已经没有进行中的对局（已结束、被初始化，或尚未建局）。
+  /// 离线或取不到大厅时返回 false，宁可保留本地绑定也不误清。
+  Future<bool> lobbyHasNoGame() async {
+    if (api == null) return false;
+    try {
+      final result = await api!.lobby();
+      if (result['game'] == null) return true;
+      return jsonString(
+            jsonObject(result['game'], 'lobby.game')['status'],
+            'lobby.game.status',
+            fallback: '',
+          ) ==
+          'ended';
+    } on ApiException {
+      return false;
     }
   }
 
@@ -387,6 +411,32 @@ class GameStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 从已终止的对局返回主界面：断开本局的只读视图与实时连接，回到大厅。
+  /// 不改动服务器上的参与身份与记录，主持人建下一局时由服务器统一清空。
+  Future<void> returnToLobby() async {
+    await live?.stop();
+    live = null;
+    gameId = null;
+    view = null;
+    messages = [];
+    hasMoreMessages = false;
+    selectedChannelId = 'public';
+    messageScope = 'all';
+    newActionCount = 0;
+    warningCount = 0;
+    privateStateCount = 0;
+    unreadMessageCount = 0;
+    pendingPhaseKey = null;
+    _actionBaseline = null;
+    _privateStateBaseline = null;
+    _loadedPhaseKey = null;
+    error = null;
+    await preferences.remove(_gameKey);
+    notifyListeners();
+    await refreshLobby();
+    notifyListeners();
+  }
+
   Future<void> _startLive() async {
     final endpoint = this.endpoint;
     final token = api?.token;
@@ -425,6 +475,10 @@ class GameStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 把一份可见状态当作刚刚同步进来的结果处理：与实时事件和命令返回走同一路径。
+  /// 供回归检查使用，界面代码只调用 enterGame / execute 等动作入口。
+  void applyView(GameView next) => _applyView(next);
+
   void _applyView(GameView next) {
     final actionKeys = next.allActions.map((item) => item.protocolKey).toSet();
     final actionPreference = _preferenceKey('actions_seen');
@@ -458,7 +512,12 @@ class GameStore extends ChangeNotifier {
     final phaseKey = '${next.id}:${next.day}:${next.half}:${next.phase}';
     final phasePreference = _preferenceKey('phase_seen');
     final seenPhase = preferences.getString(phasePreference);
-    if (seenPhase == null || _loadedPhaseKey == null) {
+    if (next.status == 'ended') {
+      // 落幕不是新阶段：不再弹出阶段动画，也不留下待确认的阶段性提醒。
+      _loadedPhaseKey = phaseKey;
+      pendingPhaseKey = null;
+      preferences.setString(phasePreference, phaseKey);
+    } else if (seenPhase == null || _loadedPhaseKey == null) {
       // 首次同步或重连：只建立基线，不把当前阶段当成刚发生的变化。
       _loadedPhaseKey = phaseKey;
       if (seenPhase != phaseKey) {
