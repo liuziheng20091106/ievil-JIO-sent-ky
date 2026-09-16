@@ -130,6 +130,19 @@ class GameStore extends ChangeNotifier {
   }
 
   Future<void> _restore() async {
+    // 这里是应用启动路径：任何异常（存储读取失败、服务器响应形状异常、
+    // 网络栈抛出的非预期类型）都不允许漏到 GameStore.create() 之外，
+    // 否则 main() 里 await create() 会直接白屏退出且无法自愈。
+    try {
+      await _restoreInner();
+    } catch (failure) {
+      error = '恢复登录状态失败：$failure';
+      restoring = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _restoreInner() async {
     final savedEndpoint = preferences.getString(_endpointKey);
     if (savedEndpoint != null) {
       try {
@@ -159,6 +172,10 @@ class GameStore extends ChangeNotifier {
         } else {
           error = failure.message;
         }
+      } on FormatException catch (failure) {
+        // 服务器返回了客户端不认识的形状：宁可当作未登录处理也不崩溃，
+        // 但保留本地绑定，下一次手动刷新还能恢复。
+        error = '登录状态异常：${failure.message}';
       }
     }
     // 上次已经回到主界面的对局，不该在重启后被重新拉回：服务器那边这一局仍是
@@ -246,13 +263,51 @@ class GameStore extends ChangeNotifier {
     if (api == null) return;
     final generation = ++_challengeGeneration;
     error = null;
-    challengeInfo = await api!.createChallenge();
+    Map<String, dynamic> info;
+    try {
+      info = await api!.createChallenge();
+    } on ApiException catch (failure) {
+      // 获取登录码是用户直接点击的动作：失败必须当场反馈，
+      // 否则按钮恢复原状而界面毫无变化（此前该异常会被 main 吞掉）。
+      if (generation == _challengeGeneration) {
+        error = failure.message;
+        notifyListeners();
+      }
+      return;
+    } on FormatException catch (failure) {
+      if (generation == _challengeGeneration) {
+        error = '登录码响应异常：${failure.message}';
+        notifyListeners();
+      }
+      return;
+    }
+    if (generation != _challengeGeneration) return;
+    challengeInfo = info;
     notifyListeners();
-    final id = jsonString(challengeInfo!['id'], 'challenge.id');
+    String id;
+    try {
+      id = jsonString(info['id'], 'challenge.id');
+    } on FormatException catch (failure) {
+      error = '登录码响应异常：${failure.message}';
+      challengeInfo = null;
+      notifyListeners();
+      return;
+    }
+    // 网络持续故障时不能以 2 秒间隔无限轮询：连续失败 5 次、
+    // 或总时长超过 10 分钟（远长于挑战有效期）就停下来报错。
+    var consecutiveFailures = 0;
+    final deadline = DateTime.now().add(const Duration(minutes: 10));
     while (generation == _challengeGeneration && challengeInfo != null) {
+      if (DateTime.now().isAfter(deadline)) {
+        error = '登录等待超时，请重新获取登录码';
+        challengeInfo = null;
+        notifyListeners();
+        return;
+      }
       await Future<void>.delayed(const Duration(seconds: 2));
       try {
         final result = await api!.challenge(id);
+        consecutiveFailures = 0;
         if (generation != _challengeGeneration) return;
         if (result['status'] == 'completed') {
           final token =
@@ -279,12 +334,25 @@ class GameStore extends ChangeNotifier {
         }
         notifyListeners();
       } on ApiException catch (failure) {
+        if (generation != _challengeGeneration) return;
         error = failure.message;
         notifyListeners();
         if (failure.statusCode == 404 || failure.statusCode == 410) {
           challengeInfo = null;
           return;
         }
+        if (++consecutiveFailures >= 5) {
+          error = '网络持续异常，已停止等待登录码，请稍后重试';
+          challengeInfo = null;
+          notifyListeners();
+          return;
+        }
+      } on FormatException catch (failure) {
+        if (generation != _challengeGeneration) return;
+        error = '登录码状态响应异常：${failure.message}';
+        challengeInfo = null;
+        notifyListeners();
+        return;
       }
     }
   }
@@ -307,6 +375,10 @@ class GameStore extends ChangeNotifier {
       error = failure.message;
       notifyListeners();
       rethrow;
+    } on FormatException catch (failure) {
+      // 主持人登录成功但响应形状异常：同样要反馈给界面而不是被 main 吞掉。
+      error = '登录响应异常：${failure.message}';
+      notifyListeners();
     }
   }
 
@@ -346,6 +418,8 @@ class GameStore extends ChangeNotifier {
       error = null;
     } on ApiException catch (failure) {
       error = failure.message;
+    } on FormatException catch (failure) {
+      error = '服务器返回了无法解析的名单：${failure.message}';
     }
     notifyListeners();
     if (gameId != null && view == null) await enterGame(gameId!);
@@ -365,6 +439,9 @@ class GameStore extends ChangeNotifier {
       await enterGame(gameId!);
     } on ApiException catch (failure) {
       error = failure.message;
+      rethrow;
+    } on FormatException catch (failure) {
+      error = '服务器返回了无法解析的对局：${failure.message}';
       rethrow;
     } finally {
       writeBusy = false;
@@ -387,6 +464,9 @@ class GameStore extends ChangeNotifier {
       await enterGame(gameId!);
     } on ApiException catch (failure) {
       error = failure.message;
+      rethrow;
+    } on FormatException catch (failure) {
+      error = '服务器返回了无法解析的参与信息：${failure.message}';
       rethrow;
     } finally {
       writeBusy = false;
@@ -416,6 +496,9 @@ class GameStore extends ChangeNotifier {
   Future<void> returnToLobby() async {
     await live?.stop();
     live = null;
+    // 离开对局即清掉本机残留：草稿是明文（Windows 上还在漫游目录），
+    // 角标与已读游标属于这一局，没有跨局保留的价值。
+    await _purgeLocalData();
     gameId = null;
     view = null;
     messages = [];
@@ -667,6 +750,10 @@ class GameStore extends ChangeNotifier {
       error = failure.message;
       await _reconcileAfterWriteFailure();
       rethrow;
+    } on FormatException catch (failure) {
+      error = '服务器返回了无法解析的消息：${failure.message}';
+      await _reconcileAfterWriteFailure();
+      rethrow;
     } finally {
       writeBusy = false;
       notifyListeners();
@@ -701,9 +788,22 @@ class GameStore extends ChangeNotifier {
         payload: payload,
         asSeat: asSeat,
       ));
-      await clearDraft(action, asSeat: asSeat);
+      // 命令已被服务端接受：之后的本地清理失败不能把“已成功”呈现成失败，
+      // 否则用户会重开表单再提交一次，造成重复行动。残留的草稿无害，
+      // 下次打开表单时还能看到并手动清掉。
+      try {
+        await clearDraft(action, asSeat: asSeat);
+      } catch (_) {
+        // 草稿清理是尽力而为。
+      }
     } on ApiException catch (failure) {
       error = failure.message;
+      await _reconcileAfterWriteFailure();
+      rethrow;
+    } on FormatException catch (failure) {
+      // 命令可能已经生效，但返回的形状客户端读不懂：刷新状态并提示，
+      // 不允许异常漏出去把表单卡在提交中。
+      error = '服务器返回了无法解析的状态：${failure.message}';
       await _reconcileAfterWriteFailure();
       rethrow;
     } finally {
@@ -772,17 +872,77 @@ class GameStore extends ChangeNotifier {
     } catch (_) {
       // Local logout still removes the credential when the server is unreachable.
     }
+    await _purgeLocalData();
     await _clearSession();
     notifyListeners();
+  }
+
+  /// 删除本端点上该账号遗留在本机的数据：私密草稿、阶段/行动已读基线与
+  /// 消息游标。草稿只应在“提交成功”时清除是写入侧的规则；登出与对局结束
+  /// 属于会话终结，此时把残留的明文草稿一并清掉，避免在
+  /// shared_preferences（Windows 上是漫游目录）里永久累积私密内容。
+  /// 替换者（不同的 accountId）的键本来就不同，不受影响。
+  ///
+  /// 键形状：draft 键是 `draft:<json [endpoint, gameId, accountId, …]>`；
+  /// 偏好键是 `endpoint:gameId:account:suffix`（gameId/account 不含冒号）。
+  /// 按端点 + 账号匹配、跨对局清理：账号登出时他在任何对局的残留都不该留。
+  Future<void> _purgeLocalData({String? accountId}) async {
+    final account = accountId ?? actor?.accountId;
+    final origin = endpoint?.toString();
+    if (account == null || origin == null) return;
+    final doomed = <String>[];
+    for (final key in preferences.getKeys()) {
+      if (key.startsWith('draft:')) {
+        try {
+          final parts = jsonDecode(key.substring('draft:'.length));
+          if (parts is List &&
+              parts.length >= 3 &&
+              parts[0].toString() == origin &&
+              parts[2]?.toString() == account) {
+            doomed.add(key);
+          }
+        } on FormatException {
+          // 键损坏：一并清掉。
+          doomed.add(key);
+        }
+      } else {
+        // origin 自身含冒号（http://…），gameId/account 不含，因此贪婪的
+        // 第一组能吃下完整 origin，随后两组分别对上 gameId 与 account。
+        final match =
+            RegExp('^(.+):([^:]*):([^:]*):(.+)\$').firstMatch(key);
+        if (match != null &&
+            match.group(1) == origin &&
+            match.group(3) == account) {
+          doomed.add(key);
+        }
+      }
+    }
+    for (final key in doomed) {
+      try {
+        await preferences.remove(key);
+      } catch (_) {
+        // 单个键删除失败不影响其余清理。
+      }
+    }
   }
 
   Future<void> _clearSession() async {
     await live?.stop();
     live = null;
     api?.token = null;
-    await secureStorage.delete(key: _tokenKey);
-    await preferences.remove(_actorKey);
-    await preferences.remove(_gameKey);
+    // 存储层故障（或测试环境的插件桩）不允许中断登出：
+    // 令牌删不掉时宁可让本地状态先恢复一致，下一次启动仍会重试删除。
+    try {
+      await secureStorage.delete(key: _tokenKey);
+    } catch (_) {
+      // 登出仍要继续。
+    }
+    try {
+      await preferences.remove(_actorKey);
+      await preferences.remove(_gameKey);
+    } catch (_) {
+      // 本地偏好删除失败不阻塞登出。
+    }
     actor = null;
     gameId = null;
     lobbyGame = null;
@@ -792,6 +952,16 @@ class GameStore extends ChangeNotifier {
     _actionBaseline = null;
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
+    // 登出后 1.45 秒内重登不该凭空重播旧对局的阶段动画，
+    // 角标计数也不该带着旧对局的残留进入新会话。
+    pendingPhaseKey = null;
+    newActionCount = 0;
+    warningCount = 0;
+    privateStateCount = 0;
+    unreadMessageCount = 0;
+    hasMoreMessages = false;
+    messageScope = 'all';
+    selectedChannelId = 'public';
     connectionStatus = '未连接';
   }
 

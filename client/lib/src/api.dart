@@ -179,6 +179,9 @@ class GameApi {
           await _client.openUrl(method, endpoint.api(path, query)).timeout(
                 const Duration(seconds: 25),
               );
+      // 不自动跟随重定向：ServerEndpoint 只校验用户填写的根地址，
+      // 一条 3xx 就能把带令牌的 GET 降到任意 http:// 明文主机。
+      request.followRedirects = false;
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       final token = this.token;
       if (token != null) {
@@ -221,12 +224,29 @@ class LiveConnection {
   WebSocket? _socket;
   Timer? _watchdog;
   DateTime _lastEvent = DateTime.now();
-  Future<void>? _runner;
 
   void start() {
     if (!_stopped) return;
     _stopped = false;
-    _runner = _loop();
+    // 循环内部已兜住所有异常路径；这里再挂一层兜底，
+    // 保证任何遗漏都不会变成未处理的异步错误。
+    unawaited(_loop().catchError((Object failure) {
+      onStatus('连接任务终止：$failure');
+    }));
+  }
+
+  /// Dart 的 [WebSocket.connect] 把握手被拒折叠成 WebSocketException 文本。
+  /// 实测（Dart 3.13）异常的 [WebSocketException.message] 只写目标地址，
+  /// 状态码只出现在 toString 里（“… was not upgraded to websocket, HTTP
+  /// status code: 403”），因此这里解析 toString 而不是 message。
+  /// 身份类失败（401/403）重试多少次都一样，
+  /// 停止循环把状态交给上层引导用户重新登录；解析不出状态码时维持重连。
+  static int? _handshakeStatus(Object failure) {
+    if (failure is! WebSocketException) return null;
+    final match = RegExp('status code:\\s*(\\d{3})', caseSensitive: false)
+        .firstMatch(failure.toString());
+    if (match == null) return null;
+    return int.tryParse(match.group(1)!);
   }
 
   Future<void> _loop() async {
@@ -245,7 +265,13 @@ class LiveConnection {
         _socket = socket;
         _lastEvent = DateTime.now();
         onStatus('已连接');
-        await onConnected();
+        try {
+          await onConnected();
+        } catch (failure) {
+          // 补齐失败不应杀掉刚建立的连接：实时事件流本身还活着，
+          // 下次重连或用户切筛选时会再补。
+          onStatus('消息补齐失败：$failure');
+        }
         _watchdog = Timer.periodic(const Duration(seconds: 10), (_) {
           if (DateTime.now().difference(_lastEvent) >
               const Duration(seconds: 65)) {
@@ -256,19 +282,33 @@ class LiveConnection {
           _lastEvent = DateTime.now();
           attempt = 0;
           if (value is! String) continue;
-          final decoded = jsonDecode(value);
-          if (decoded is! Map) continue;
-          final event =
-              decoded.map((key, value) => MapEntry(key.toString(), value));
-          if (event['type'] == 'ping') {
-            socket.add(jsonEncode({'type': 'pong'}));
-          } else {
-            onEvent(event);
+          // 单帧损坏只丢这一帧：异常如果漏出到 await for 会直接杀掉连接，
+          // 造成无感知的断连-重连循环。回调同理，逐个隔离。
+          try {
+            final decoded = jsonDecode(value);
+            if (decoded is! Map) continue;
+            final event =
+                decoded.map((key, value) => MapEntry(key.toString(), value));
+            if (event['type'] == 'ping') {
+              socket.add(jsonEncode({'type': 'pong'}));
+            } else {
+              onEvent(event);
+            }
+          } on FormatException {
+            // 服务器不会发坏帧；万一出现说明在测试或代理篡改场景，跳过即可。
+          } catch (failure) {
+            onStatus('事件处理失败：$failure');
           }
         }
       } on HandshakeException {
         onStatus('TLS 证书验证失败');
-      } catch (_) {
+      } catch (failure) {
+        final status = _handshakeStatus(failure);
+        if (status == 401 || status == 403) {
+          // 永久性拒绝：令牌过期或被服务端明确拒绝，重连只会无限空转。
+          onStatus(status == 401 ? '登录已失效，请重新登录' : '连接被服务器拒绝');
+          return;
+        }
         if (!_stopped) onStatus('连接已中断');
       } finally {
         _watchdog?.cancel();
@@ -287,7 +327,9 @@ class LiveConnection {
     _stopped = true;
     _watchdog?.cancel();
     await _socket?.close(1000, 'logout');
-    await _runner;
+    // 不等待 _runner：它可能正卡在 25 秒连接超时或 15 秒退避上，
+    // await 它会让登出界面无反馈地悬挂半分钟。循环每轮都会检查
+    // _stopped，孤儿任务会自行退出，close 之后也没有资源可泄漏。
     onStatus('未连接');
   }
 }

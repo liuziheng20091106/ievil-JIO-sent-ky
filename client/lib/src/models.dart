@@ -88,17 +88,6 @@ class ServerEndpoint {
         path: '/api/live',
       );
 
-  Uri avatarUri(String value) {
-    final parsed = Uri.tryParse(value);
-    final result =
-        parsed != null && parsed.hasScheme ? parsed : httpUri.resolve(value);
-    if ((result.scheme != 'http' && result.scheme != 'https') ||
-        (result.scheme == 'http' && !_isPrivateHost(result.host))) {
-      throw const FormatException('头像地址必须使用安全的 HTTP(S) 地址');
-    }
-    return result;
-  }
-
   @override
   String toString() => httpUri.toString();
 }

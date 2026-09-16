@@ -1017,6 +1017,15 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
           submitting = false;
         });
       }
+    } catch (failure) {
+      // store 已把已知异常归一成 error；这里是最后防线：
+      // 任何漏网异常都不能把表单永远卡在“提交中”。
+      if (mounted) {
+        setState(() {
+          error = '提交失败：$failure';
+          submitting = false;
+        });
+      }
     }
   }
 }
