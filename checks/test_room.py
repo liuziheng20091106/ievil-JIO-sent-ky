@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import auth_storage, storage
+from backend.app import auth, auth_storage, storage
 from backend.app.game import DEFAULT_CODEX, create_game
 from backend.app.main import app
 
@@ -23,11 +23,21 @@ class BackendFlow(unittest.TestCase):
         self.addCleanup(self.data_patch.stop)
         self.env_patch = patch.dict(
             os.environ,
-            {"GAME_GATEWAY_TOKEN": "test-gateway-secret", "GAME_QQ_GROUP_ID": "123456"},
+            {
+                "GAME_GATEWAY_TOKEN": "test-gateway-secret",
+                "GAME_QQ_GROUP_ID": "123456",
+                "GAME_ALLOWED_ORIGINS": "testserver",
+            },
         )
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
-        self.client = TestClient(app)
+        # 写请求要带同源信息：没有 Origin 的 HTTP 写请求会被按跨站拒绝
+        # （WebSocket 无 Origin 才放行，见 SameOrigin 检查）。
+        self.client = TestClient(
+            app,
+            base_url="http://testserver",
+            headers={"Origin": "http://testserver"},
+        )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         native_host = self.client.post("/api/native/host/login", json={"password": "114514"})
@@ -268,6 +278,70 @@ class Migration(unittest.TestCase):
                 self.assertNotIn("sessions", tables)
                 self.assertNotIn("invites", tables)
                 self.assertIn("account_id", {row["name"] for row in db.execute("PRAGMA table_info(participants)")})
+
+
+class SameOrigin(unittest.TestCase):
+    """同源判定：没有 Origin 头时，WebSocket 放行、HTTP 写请求拒绝。
+
+    这条曾经被写反过（`!=` 而不是 `==`），结果是原生客户端的 WebSocket 全部 403，
+    同时无 Origin 的 HTTP 写请求反而被放过。这里把方向钉住。
+    """
+
+    class Fake:
+        def __init__(self, headers, scope_type):
+            self.headers = {key.lower(): value for key, value in headers.items()}
+            self.scope = {"type": scope_type}
+            self.cookies = {}
+            self.url = type("U", (), {"scheme": scope_type})()
+
+    def test_websocket_without_origin_is_allowed(self):
+        socket = self.Fake({}, "websocket")
+        self.assertTrue(
+            auth.same_origin(socket),
+            "原生客户端不发 Origin，必须放行后由令牌校验兜底",
+        )
+
+    def test_http_without_origin_is_rejected(self):
+        request = self.Fake({}, "http")
+        self.assertFalse(
+            auth.same_origin(request),
+            "没有 Origin 的 HTTP 写请求应按跨站拒绝",
+        )
+
+    def test_allowed_origin_wins(self):
+        for scope_type in ("http", "websocket"):
+            connection = self.Fake({"origin": "https://super.tkcloud.online"}, scope_type)
+            self.assertTrue(auth.same_origin(connection))
+
+    def test_cross_site_is_always_rejected(self):
+        for scope_type in ("http", "websocket"):
+            connection = self.Fake(
+                {"origin": "https://evil.invalid", "sec-fetch-site": "cross-site"},
+                scope_type,
+            )
+            self.assertFalse(auth.same_origin(connection))
+
+    def test_rewritten_host_is_recovered_by_forwarded_headers(self):
+        connection = self.Fake(
+            {
+                "origin": "https://game.example.com",
+                "host": "127.0.0.1:8000",
+                "x-forwarded-host": "game.example.com",
+                "x-forwarded-proto": "https",
+            },
+            "websocket",
+        )
+        self.assertTrue(auth.same_origin(connection))
+
+    def test_rewritten_host_without_forwarded_headers_is_rejected(self):
+        connection = self.Fake(
+            {"origin": "https://game.example.com", "host": "127.0.0.1:8000"},
+            "websocket",
+        )
+        self.assertFalse(
+            auth.same_origin(connection),
+            "代理必须透传 Host 或补 X-Forwarded-Host，否则按跨站拒绝",
+        )
 
 
 if __name__ == "__main__":

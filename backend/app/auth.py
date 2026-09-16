@@ -43,7 +43,11 @@ def same_origin(connection):
     if site == "cross-site":
         return False
     if not origin:
-        return connection.scope["type"] != "websocket"
+        # 没有 Origin 头：浏览器发起的 WebSocket 握手不会带 Origin 才是异常，
+        # 而原生客户端（Dart/HttpClient）本来就不发 Origin，它靠 Bearer 令牌认证，
+        # 由调用方继续校验令牌。HTTP 写请求没有 Origin 则按跨站拒绝。
+        # 注意这里必须是 ==：写反会让原生 WebSocket 全部 403、同时放过无 Origin 的写请求。
+        return connection.scope["type"] == "websocket"
     if site == "same-origin":
         return True
     if parsed.scheme not in ("http", "https"):

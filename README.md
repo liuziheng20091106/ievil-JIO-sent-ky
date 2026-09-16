@@ -39,6 +39,17 @@ copy gateway\.env.example gateway\.env
 run-gateway.cmd
 ```
 
+> **启动后端必须带上同一个密钥。** 网关会用 `X-Gateway-Token` 调 `/api/internal/qq/*`，
+> 后端没有 `GAME_GATEWAY_TOKEN` 时会一律返回 401，表现为群成员同步失败、群消息无法登录。
+> 本机已备 `start.cmd.local`（内含密钥与群号，已被 .gitignore 排除）：
+>
+> ```cmd
+> start.cmd.local      rem 代替 start.cmd
+> run-gateway.cmd
+> ```
+>
+> 如果改用 `start.cmd` 启动，需自行设置环境变量 `GAME_GATEWAY_TOKEN` 与 `GAME_QQ_GROUP_ID`。
+
 `gateway/.env` 必填项：
 
 | 变量 | 说明 |
@@ -87,7 +98,9 @@ flutter build windows --debug
 
 代理不在本机时用 `start.cmd --trusted-proxies <代理地址>`（或环境变量 `GAME_TRUSTED_PROXIES`）声明可信代理，代理地址不固定可写 `*`。
 
-自带有效 Bearer 令牌的请求跳过浏览器同源校验；网页 Cookie 写请求和 WebSocket 仍要求同源。`super.tkcloud.online` 属于显式放行的来源，换站点用 `GAME_ALLOWED_ORIGINS` 覆盖（逗号分隔，可写 `host`、`host:port` 或整条 URL），默认值见 `backend/app/auth.py`。
+自带有效 Bearer 令牌的请求跳过浏览器同源校验；网页 Cookie 写请求和 WebSocket 仍要求同源。没有 `Origin` 头时：**WebSocket 放行**（原生客户端不发 `Origin`，由 Bearer 令牌认证），**HTTP 写请求按跨站拒绝**——这两条方向不能写反，`checks/test_room.py` 的 `SameOrigin` 会守住它。
+
+`super.tkcloud.online` 属于显式放行的来源，换站点用 `GAME_ALLOWED_ORIGINS` 覆盖（逗号分隔，可写 `host`、`host:port` 或整条 URL），默认值见 `backend/app/auth.py`。
 
 ## 检查
 
