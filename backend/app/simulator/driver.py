@@ -64,19 +64,26 @@ class HostBrain:
             return self._lobby(host)
         tasks = view.get("host", {}).get("tasks", [])
 
-        # 有阻塞待办时先处理：待裁定事项、宣判、交牌。
+        # 先清掉全部待裁定事项：``host.confirm_winner`` 要求没有未决事项，
+        # 所以「已满足胜利条件」也必须等裁定处理完再宣判，否则会来回被拒。
         pending = [t for t in tasks if t["kind"] == "pending" and t.get("blocking")]
         if pending and self.resolve_defaults:
-            outcome = self._resolve(host, pending[0])
-            # "refresh" 表示裁定与别的席位撞车；刷新后下一轮会重新取待办。
-            return "refresh" if outcome == "refresh" else outcome
+            for task in pending:
+                outcome = self._resolve(host, task)
+                if outcome == "refresh":
+                    # 与别的席位撞车：刷新后下一轮重新取待办。
+                    return "refresh"
+                if outcome is not None:
+                    return outcome
+            # 一条都裁不动：交给上层报卡死，附上待办明细便于定位。
+            self.log.append(f"有{len(pending)}条待裁定事项无法按默认值处理")
+            return None
+
         winner = next((t for t in tasks if t["kind"] == "winner"), None)
         if winner:
             return self._confirm_winner(host)
         if view["day"] > self.max_days:
             return self._abort(host, f"模拟超过{self.max_days}天仍未结束")
-        if pending:
-            return None
 
         # 审阅预结算并发布夜间结果是主持人的职责，系统不会自动完成。
         review = next((t for t in tasks if t["kind"] == "review" and t.get("blocking")), None)
@@ -180,20 +187,29 @@ class HostBrain:
         return self._submit_resolution(host, action_id, payload)
 
     def _fix_suspects(self, payload):
-        """把疑似凶手名单修正为必然合法的三人：真凶 + 汉娜 + 任意第三人。
+        """把疑似凶手名单修正为合法三人：必须包含汉娜与技能处理后的真凶。
 
         ``omit_leia`` 只在蕾雅确实是魔女时可勾选；模拟器无法从视图确认这一点，
-        因此一律不勾，并在名单里保留蕾雅（若她被规则要求出现）。
+        因此一律不勾。名单里原来已有的成员优先保留（它们通常就是服务端算出的
+        真凶与汉娜）；若这份名单没有来处（``source_card`` 缺失）而需要补填
+        ``true_source``，那么被补填的真凶也必须留在名单里，否则服务端会以
+        「名单必须包含技能处理后的真凶」拒绝。
         """
         suspects = payload.get("suspects")
         if not isinstance(suspects, list):
             return
         if payload.get("omit_leia"):
             payload["omit_leia"] = False
-        suspects = list(dict.fromkeys(suspects))
-        if "hanna" not in suspects:
-            suspects = [*suspects, "hanna"]
-        payload["suspects"] = suspects[:3]
+        killer = payload.get("true_source")
+        # 必填成员排在最前面，保证 [:3] 不会把它挤掉。
+        required = [role for role in ("hanna", killer) if role]
+        chosen = list(dict.fromkeys([*required, *suspects]))
+        for candidate in ("leia", "emma", "hiro", "sherry", "meruru", "noah"):
+            if len(chosen) >= 3:
+                break
+            if candidate not in chosen:
+                chosen.append(candidate)
+        payload["suspects"] = chosen[:3]
 
     def _submit_resolution(self, host, action_id, payload):
         try:
@@ -392,10 +408,15 @@ class Simulation:
 
         其它玩家并发提交会让本地的 ``actions`` 列表过期，服务端会以 422
         「此操作不可用」拒绝。真实客户端此时要刷新后让人重新确认；模拟器把
-        「重新确认」实现为重新决策一次，因此这里刷新后重试一轮而不是直接失败。
+        「重新确认」实现为重新决策一次，因此这里刷新后重试而不是直接失败。
+
+        夜间确认这类行动尤其容易撞车：同一阶段多人同时确认，最后一个人确认时
+        阶段会立刻翻到 ``night_coco``，其余人手里的 ``night.confirm`` 就失效了。
+        这属于正常的版本竞争，重试预算要留够。
         """
         client = actor.client
-        for _ in range(3):
+        last = None
+        for _ in range(6):
             client.refresh()
             view = client.view
             if view["status"] == "ended":
@@ -403,6 +424,7 @@ class Simulation:
             decision = actor.policy.decide(client)
             if decision is None:
                 return False
+            last = decision
             self.steps += 1
             self.note(f"{actor.seat_id}号：{decision.action} {decision.payload}")
             try:
@@ -415,7 +437,9 @@ class Simulation:
                     raise
                 self.note(f"{actor.seat_id}号：{decision.action} 被拒（{error.detail}），刷新后重试")
                 continue
-        raise RuntimeError(f"{actor.seat_id}号连续提交被拒：{decision}")
+        raise RuntimeError(
+            f"{actor.seat_id}号连续提交被拒：{last}（停在 {client.view['phase']}）"
+        )
 
     def _await_auto_advance(self):
         """系统自己在 5 秒内推进的阶段，等它一下而不是报卡死。
