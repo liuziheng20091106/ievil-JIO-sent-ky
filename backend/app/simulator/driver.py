@@ -16,6 +16,25 @@ from .policy import Decision, HeuristicPolicy
 MAX_STEPS = 4000
 MAX_SECONDS = 300.0
 
+# 服务端的裁定报错文案用的是角色中文名（例如「名单必须包含汉娜」）；
+# 修正名单时要把文案里点名的角色翻译回角色 id。
+NAMED_ROLES = {
+    "艾玛": "emma",
+    "希罗": "hiro",
+    "汉娜": "hanna",
+    "雪莉": "sherry",
+    "梅露露": "meruru",
+    "诺亚": "noah",
+    "安安": "annan",
+    "米莉亚": "millia",
+    "可可": "coco",
+    "奈乃香": "nanoka",
+    "亚里沙": "arisa",
+    "玛格": "marg",
+    "蕾雅": "leia",
+    "穗乃香": "honoka",
+}
+
 
 @dataclass
 class SeatActor:
@@ -233,23 +252,21 @@ class HostBrain:
         detail = error.detail or ""
         if action_id != "host.resolve":
             return None
-        if payload.get("omit_leia") and "蕾雅" in detail:
+        if "蕾雅" in detail and payload.get("omit_leia"):
+            # 「不列入蕾雅」不成立：取消勾选，并把蕾雅放回名单。
             fixed = {**payload, "omit_leia": False}
             suspects = fixed.get("suspects")
             if isinstance(suspects, list) and "leia" not in suspects:
-                # 取消「不列入蕾雅」后，名单必须把蕾雅补回去。
-                suspects = [*suspects[:2], "leia"] if len(suspects) >= 3 else [*suspects, "leia"]
-                fixed["suspects"] = suspects[:3]
+                fixed["suspects"] = list(dict.fromkeys([*suspects, "leia"]))[:3]
             return self._submit_resolution(host, action_id, fixed)
-        if "名单必须包含" in detail:
-            for required in ("hanna", "leia"):
-                if required in detail and payload.get("suspects"):
-                    suspects = list(payload["suspects"])
-                    if required not in suspects:
-                        suspects = suspects[:2] + [required]
-                        return self._submit_resolution(
-                            host, action_id, {**payload, "suspects": suspects[:3]}
-                        )
+        if "名单必须包含" in detail and isinstance(payload.get("suspects"), list):
+            # 名单缺人：把服务端点名的角色（中文名）翻回 id 插到最前面，
+            # 否则 [:3] 又会把它们截掉。
+            named = [role_id for name, role_id in NAMED_ROLES.items() if name in detail]
+            if named:
+                suspects = [*named, *payload["suspects"]]
+                fixed = {**payload, "suspects": list(dict.fromkeys(suspects))[:3]}
+                return self._submit_resolution(host, action_id, fixed)
         return None
 
 
