@@ -118,11 +118,33 @@ flutter build windows --debug
 
 `super.tkcloud.online` 属于显式放行的来源，换站点用 `GAME_ALLOWED_ORIGINS` 覆盖（逗号分隔，可写 `host`、`host:port` 或整条 URL），默认值见 `backend/app/auth.py`。
 
+## 虚拟玩家模拟器
+
+`backend/app/simulator/` 是一套自动打完整局的虚拟玩家，用于测试游戏：
+
+- 走真实协议（登录、命令、`expected_version`、服务端可见性裁剪），不直接调用规则层；
+- 七名虚拟玩家只依据自己裁剪后的视图决策，主持人由脚本扮演；
+- 系统自己能算完的阶段交给 5 秒自动推进，需要裁定的事项按行动默认值处理。
+
+单局跑批（默认每局一个独立临时目录，不碰 `data/`）：
+
+```cmd
+.venv\Scripts\python.exe run-simulator.py --games 20
+.venv\Scripts\python.exe run-simulator.py --games 5 --seed 100 --verbose
+.venv\Scripts\python.exe run-simulator.py --games 3 --url http://127.0.0.1:8000
+```
+
+对着已启动的服务跑时，进程内不再需要账号：`--gateway-token` 与 `--group-id` 用来核销登录码，
+默认取环境变量 `GAME_GATEWAY_TOKEN`、`GAME_QQ_GROUP_ID`。
+
+`checks/test_simulator.py` 把「一局必须能走到合法收尾」以及「视图列出的行动一定可提交」
+固定成回归检查；模拟器一旦在某阶段卡住或行动被拒，检查就会失败并打印决策日志。
+
 ## 检查
 
 ```cmd
 .venv\Scripts\python.exe -m unittest discover -s checks -v
-.venv\Scripts\python.exe -m ruff check backend checks run.py gateway
+.venv\Scripts\python.exe -m ruff check backend checks run.py gateway run-simulator.py
 cd frontend && npm.cmd run build
 ```
 
@@ -133,6 +155,7 @@ cd frontend && npm.cmd run build
 ```
 backend/app/    FastAPI 服务、SQLite 存储、账号令牌、实时推送
 backend/app/game/  规则、结算与可见性裁剪
+backend/app/simulator/  虚拟玩家模拟器（真实协议驱动整局）
 frontend/src/  React + TypeScript 网页界面
 client/        Flutter Android / Windows 原生客户端
 gateway/       NapCat OneBot QQ 登录网关

@@ -257,10 +257,16 @@ def swap_cards(game, swap):
 def prepare_night_preview(game):
     night = game["night"]
     preview, dead = night_damage(game)
+    # 换牌前置条件：米莉亚这张牌仍然是其持有席位的当前牌。换过一次之后
+    # 米莉亚牌会落到对方席位，此时不能再换；只靠 uses.swap 不够，因为
+    # 本夜可能已经被 millia_swap / 上一次预结算换过，而 reactions 记录的是本夜反应。
+    millia_card = role_card(game, "millia")
+    millia_current = current(game, owner(game, "millia")) is millia_card
     if (
         "millia" in dead
-        and not role_card(game, "millia")["uses"].get("swap")
-        and not poisoned(role_card(game, "millia"))
+        and millia_current
+        and not millia_card["uses"].get("swap")
+        and not poisoned(millia_card)
         and "millia" not in night["reactions"]
     ):
         action = next(
