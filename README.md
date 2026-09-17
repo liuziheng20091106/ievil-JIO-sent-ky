@@ -41,6 +41,12 @@ run-gateway.cmd
 
 > **启动后端必须带上同一个密钥。** 网关会用 `X-Gateway-Token` 调 `/api/internal/qq/*`，
 > 后端没有 `GAME_GATEWAY_TOKEN` 时会一律返回 401，表现为群成员同步失败、群消息无法登录。
+>
+> 若返回 403 且文案是「仅允许从本站提交操作」，那不是密钥问题：网关是独立进程，既不带
+> `Origin` 也不带会话 Bearer，只靠 `X-Gateway-Token` 认证，必须由 `request_boundary`
+> 中间件显式放行（见 `backend/app/main.py`）。密钥错误只会得到 403「QQ群不匹配」或
+> 401「网关认证失败」，可据此区分。
+>
 > 本机已备 `start.cmd.local`（内含密钥与群号，已被 .gitignore 排除）：
 >
 > ```cmd
@@ -88,6 +94,16 @@ flutter build windows --debug
 
 客户端启动后先填写服务根地址：局域网可用 HTTP，公网地址必须 HTTPS。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。
 
+### 应用图标
+
+各端 app 图标统一取自 `img/月代雪.png`（透明背景的圆形胸像）。改动源图后重新生成：
+
+```cmd
+.venv\Scripts\python.exe tools\gen_app_icons.py
+```
+
+脚本会写入 Windows 的 `app_icon.ico`、Android 传统 mipmap 与自适应图标前景/底色、以及网页 `favicon.ico` / `favicon.png` / `apple-touch-icon.png`（需要 Pillow）。图标保留圆形、四周透明；自适应图标前景按 Android 安全区缩放并配主题底色 `#191721`。
+
 ## 反向代理
 
 服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。代理需要：
@@ -121,6 +137,7 @@ frontend/src/  React + TypeScript 网页界面
 client/        Flutter Android / Windows 原生客户端
 gateway/       NapCat OneBot QQ 登录网关
 checks/        后端回归检查
+tools/         应用图标生成脚本
 docs/          游戏规则与设计方案
 img/           角色头像
 ```
