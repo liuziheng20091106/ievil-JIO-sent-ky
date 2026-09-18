@@ -92,7 +92,7 @@ flutter build apk --debug
 flutter build windows --debug
 ```
 
-客户端启动后先填写服务根地址：局域网可用 HTTP，公网地址必须 HTTPS。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。
+客户端启动后先填写服务根地址：局域网可用 HTTP，公网地址必须 HTTPS。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。Windows 主持人端同时只允许一个实例：重复启动会把已有窗口唤到前台并直接退出，不会开出第二个窗口。
 
 ### 应用图标
 

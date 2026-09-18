@@ -7,6 +7,11 @@
 #include <memory>
 #include <string>
 
+// 主窗口的 Win32 窗口类名。窗口类注册与「已有实例在前台」判定必须用同一个名字，
+// 因此这里共享一份定义。
+inline constexpr const wchar_t kWindowClassName[] =
+    L"FLUTTER_RUNNER_WIN32_WINDOW";
+
 // A class abstraction for a high DPI-aware Win32 Window. Intended to be
 // inherited from by classes that wish to specialize with custom
 // rendering and input handling
