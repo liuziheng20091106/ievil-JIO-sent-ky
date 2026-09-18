@@ -16,7 +16,7 @@ Windows 构建需要 Visual Studio 的 C++ 桌面工作负载，以及 `flutter_
 
 ## 使用
 
-首次启动填写服务根地址：loopback、localhost 和私有网段可用 HTTP，其他主机必须 HTTPS。玩家在指定 QQ 群发送“活动登录 123456”完成验证；主持人在同一页面输入固定密码。
+首次启动填写服务根地址：loopback、localhost 和私有网段可用 HTTP，其他主机必须 HTTPS。玩家在指定 QQ 群发送“活动登录 123456”完成验证，登录页的「一键复制」把这一整句（含前缀与空格）直接放进剪切板，粘贴发送即可；主持人在同一页面输入固定密码。
 
 登录令牌保存在 `flutter_secure_storage`，启动时用 `/api/me` 核对，只有 401 才清除。服务地址与其他偏好保存在 `shared_preferences`。
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'src/app_icons.dart';
 import 'src/design.dart';
@@ -194,6 +195,10 @@ class _EndpointPageState extends State<EndpointPage> {
   }
 }
 
+/// QQ 登录请求的完整文字。网关只认整句「活动登录 123456」
+/// （gateway/gateway.py 的 LOGIN_PATTERN），少一个空格或不带前缀都不算登录。
+String loginCommandText(String code) => '活动登录 $code';
+
 /// 登录：QQ 群验证码 / 主持人密码。
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.store});
@@ -216,9 +221,26 @@ class _LoginPageState extends State<LoginPage>
     super.dispose();
   }
 
+  /// 一键把整句登录请求放进剪切板：玩家不必自己补「活动登录」前缀，
+  /// 也不用手抄六位码，去 QQ 群直接粘贴发送即可。
+  Future<void> copyLoginCommand() async {
+    final code = '${widget.store.challengeInfo?['code'] ?? ''}';
+    if (code.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: loginCommandText(code)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('已复制「${loginCommandText(code)}」，去指定 QQ 群粘贴发送'),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final challenge = widget.store.challengeInfo;
+    final code = '${challenge?['code'] ?? ''}';
     return Scaffold(
       appBar: AppBar(
         title: const Text(kAppTitle),
@@ -262,7 +284,7 @@ class _LoginPageState extends State<LoginPage>
                       ),
                     ),
                     const SizedBox(height: AppSpacing.md),
-                    if (challenge != null)
+                    if (challenge != null) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
@@ -283,7 +305,7 @@ class _LoginPageState extends State<LoginPage>
                             ),
                             const SizedBox(height: AppSpacing.xs),
                             SelectableText(
-                              '${challenge['code']}',
+                              code,
                               style: const TextStyle(
                                 fontSize: 34,
                                 fontWeight: FontWeight.w700,
@@ -294,6 +316,13 @@ class _LoginPageState extends State<LoginPage>
                           ],
                         ),
                       ),
+                      const SizedBox(height: AppSpacing.md),
+                      OutlinedButton.icon(
+                        onPressed: copyLoginCommand,
+                        icon: const Icon(Icons.content_copy_rounded, size: 18),
+                        label: Text('一键复制「${loginCommandText(code)}」'),
+                      ),
+                    ],
                     const SizedBox(height: AppSpacing.xl),
                     FilledButton.icon(
                       onPressed: challenge == null

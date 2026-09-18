@@ -94,7 +94,7 @@ run-gateway.cmd           启动QQ网关（读取 gateway/.env）
 1. 登录入口
 
 网页首页提供“QQ 登录”和“主持人登录”两个入口；原生客户端在玩家页提供 QQ 登录，在主持人页输入同一固定密码。
-QQ 登录沿用已运行的 NapCat OneBot 流程：客户端或网页调用 POST /api/auth/challenges（原生为 /api/native/auth/challenges）取得六位挑战码，用户在指定 QQ 群发送“活动登录 123456”，网关用 X-Gateway-Token 调用 POST /api/internal/qq/login 绑定 QQ 号、群昵称与头像。挑战码一次性消费，过期或重放一律拒绝；网关共享密钥用 secrets.compare_digest 校验，真实密钥只从环境变量读取，不写入客户端资源或仓库。
+QQ 登录沿用已运行的 NapCat OneBot 流程：客户端或网页调用 POST /api/auth/challenges（原生为 /api/native/auth/challenges）取得六位挑战码，用户在指定 QQ 群发送“活动登录 123456”，网关用 X-Gateway-Token 调用 POST /api/internal/qq/login 绑定 QQ 号、群昵称与头像。挑战码一次性消费，过期或重放一律拒绝；网关共享密钥用 secrets.compare_digest 校验，真实密钥只从环境变量读取，不写入客户端资源或仓库。登录页始终给出整句“活动登录 123456”：原生客户端提供一键复制到剪切板，网页把同一整句放在可全选的只读输入框里，玩家不必自己补上“活动登录”前缀或手抄六位码。
 挑战完成后，网页换成 HttpOnly、SameSite=Lax Cookie（HTTPS 部署时启用 Secure），原生客户端取得 Bearer 长令牌并由 flutter_secure_storage 持久保存；两者查同一张 login_tokens 表，共用账号、过期与撤销语义。客户端启动时调用 /api/me 核对，只有 401 才清除本地令牌。玩家退出只撤销当前令牌，不删除账号。
 
 2. 账号、参与身份与开放参局
