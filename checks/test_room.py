@@ -1,15 +1,19 @@
 """Stable auth, open participation, spectator, and private-channel boundaries."""
 
+import ast
+import inspect
 import os
 import sqlite3
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
-from backend.app import auth, auth_storage, storage
+from backend.app import auth_storage, realtime, storage
 from backend.app.game import DEFAULT_CODEX, create_game
 from backend.app.main import app
 
@@ -26,13 +30,10 @@ class BackendFlow(unittest.TestCase):
             {
                 "GAME_GATEWAY_TOKEN": "test-gateway-secret",
                 "GAME_QQ_GROUP_ID": "123456",
-                "GAME_ALLOWED_ORIGINS": "testserver",
             },
         )
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
-        # 写请求要带同源信息：没有 Origin 的 HTTP 写请求会被按跨站拒绝
-        # （WebSocket 无 Origin 才放行，见 SameOrigin 检查）。
         self.client = TestClient(
             app,
             base_url="http://testserver",
@@ -280,67 +281,106 @@ class Migration(unittest.TestCase):
                 self.assertIn("account_id", {row["name"] for row in db.execute("PRAGMA table_info(participants)")})
 
 
-class SameOrigin(unittest.TestCase):
-    """同源判定：没有 Origin 头时，WebSocket 放行、HTTP 写请求拒绝。
+class NoOriginGate(unittest.TestCase):
+    """不再按来源拦截：没有 Origin 的原生客户端与网关必须能到达路由。
 
-    这条曾经被写反过（`!=` 而不是 `==`），结果是原生客户端的 WebSocket 全部 403，
-    同时无 Origin 的 HTTP 写请求反而被放过。这里把方向钉住。
+    曾按 Origin/Host 拦截，结果是原生 App 的 WebSocket 被 4403、网关的
+    /api/internal/qq/* 被 403。鉴权改由各路由的会话令牌或网关密钥负责。
     """
 
-    class Fake:
-        def __init__(self, headers, scope_type):
-            self.headers = {key.lower(): value for key, value in headers.items()}
-            self.scope = {"type": scope_type}
-            self.cookies = {}
-            self.url = type("U", (), {"scheme": scope_type})()
-
-    def test_websocket_without_origin_is_allowed(self):
-        socket = self.Fake({}, "websocket")
-        self.assertTrue(
-            auth.same_origin(socket),
-            "原生客户端不发 Origin，必须放行后由令牌校验兜底",
-        )
-
-    def test_http_without_origin_is_rejected(self):
-        request = self.Fake({}, "http")
-        self.assertFalse(
-            auth.same_origin(request),
-            "没有 Origin 的 HTTP 写请求应按跨站拒绝",
-        )
-
-    def test_allowed_origin_wins(self):
-        for scope_type in ("http", "websocket"):
-            connection = self.Fake({"origin": "https://super.tkcloud.online"}, scope_type)
-            self.assertTrue(auth.same_origin(connection))
-
-    def test_cross_site_is_always_rejected(self):
-        for scope_type in ("http", "websocket"):
-            connection = self.Fake(
-                {"origin": "https://evil.invalid", "sec-fetch-site": "cross-site"},
-                scope_type,
-            )
-            self.assertFalse(auth.same_origin(connection))
-
-    def test_rewritten_host_is_recovered_by_forwarded_headers(self):
-        connection = self.Fake(
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.env = patch.dict(
+            os.environ,
             {
-                "origin": "https://game.example.com",
-                "host": "127.0.0.1:8000",
-                "x-forwarded-host": "game.example.com",
-                "x-forwarded-proto": "https",
+                "GAME_DATA_DIR": self.temp.name,
+                "GAME_GATEWAY_TOKEN": "test-gateway-secret",
+                "GAME_QQ_GROUP_ID": "1105925736",
             },
-            "websocket",
         )
-        self.assertTrue(auth.same_origin(connection))
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        storage.initialize()
+        auth_storage.initialize()
+        self.client = TestClient(app)
 
-    def test_rewritten_host_without_forwarded_headers_is_rejected(self):
-        connection = self.Fake(
-            {"origin": "https://game.example.com", "host": "127.0.0.1:8000"},
-            "websocket",
+    def test_write_without_origin_or_token_reaches_route(self):
+        response = self.client.post("/api/host/login", json={"password": "wrong"})
+        self.assertEqual(
+            response.status_code,
+            401,
+            "无 Origin 的写请求应到达路由并由该路由鉴权，而不是被来源校验拦成 403",
         )
-        self.assertFalse(
-            auth.same_origin(connection),
-            "代理必须透传 Host 或补 X-Forwarded-Host，否则按跨站拒绝",
+
+    def test_gateway_write_is_accepted(self):
+        response = self.client.post(
+            "/api/internal/qq/members/sync",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
+            json={
+                "group_id": 1105925736,
+                "members": [{"qq_id": "10001", "nickname": "测试甲"}],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+
+    def test_gateway_write_without_token_is_rejected(self):
+        response = self.client.post(
+            "/api/internal/qq/members/sync",
+            json={"group_id": 1105925736, "members": []},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_websocket_without_token_is_closed_with_4401(self):
+        with self.assertRaises(WebSocketDisconnect) as caught:
+            with self.client.websocket_connect("/api/live") as socket:
+                socket.receive_json()
+        self.assertEqual(caught.exception.code, 4401)
+
+    def test_websocket_accepts_before_any_close(self):
+        """握手必须先 accept。
+
+        在 accept 之前调用 close 会拒绝整个握手，uvicorn 直接回 HTTP 403，
+        客户端只看得到「连不上」，既没有 4401 也没有原因。TestClient 的
+        WebSocket 传输不经过 uvicorn 的握手实现，复现不出那个 403，
+        所以这里直接钉住 live() 里 accept/close 的执行顺序。
+        """
+        source = textwrap.dedent(inspect.getsource(realtime.live))
+        tree = ast.parse(source)
+        calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in ("accept", "close") and isinstance(
+                    node.func.value, ast.Name
+                ):
+                    calls.append((node.lineno, node.func.attr))
+        self.assertTrue(calls, "live() 里没有对 socket 调用 accept")
+        calls.sort()
+        self.assertEqual(
+            calls[0][1],
+            "accept",
+            f"live() 第一次对 socket 的操作必须是 accept，实际是 {calls[0][1]}",
+        )
+
+    def test_websocket_with_valid_token_connects(self):
+        login = self.client.post("/api/native/host/login", json={"password": "114514"})
+        token = login.json()["session_token"]
+        catalog = self.client.get(
+            "/api/catalog", headers={"Authorization": "Bearer " + token}
+        ).json()
+        created = self.client.post(
+            "/api/games",
+            headers={"Authorization": "Bearer " + token},
+            json={"codex": catalog["default_codex"]},
+        )
+        self.assertEqual(created.status_code, 200)
+        with self.client.websocket_connect(
+            "/api/live", headers={"Authorization": "Bearer " + token}
+        ) as socket:
+            message = socket.receive_json()
+        self.assertEqual(
+            message["type"], "sync", "有效会话必须能建立实时连接并收到首帧状态"
         )
 
 

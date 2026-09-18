@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from . import api, auth, auth_storage, realtime, storage
+from . import api, auth_storage, realtime, storage
 from .game import GameError
 
 logger = logging.getLogger(__name__)
@@ -38,9 +38,10 @@ app.include_router(api.router)
 
 @app.middleware("http")
 async def request_boundary(request: Request, call_next):
+    # 这里不再校验请求来源。网关是后端之外的进程，不带 Origin 也不带会话 Bearer；
+    # 原生客户端（Dart HttpClient）同样不发 Origin，Flutter Web 的 Origin 又随端口变化。
+    # 按来源拦截会把这些合法调用一并 403。写接口各自校验会话令牌或网关密钥。
     if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
-        if not auth.valid_bearer(request) and not auth.same_origin(request):
-            return JSONResponse({"detail": "仅允许从本站提交操作"}, status_code=403)
         body = bytearray()
         async for chunk in request.stream():
             if len(body) + len(chunk) > 3_000_000:

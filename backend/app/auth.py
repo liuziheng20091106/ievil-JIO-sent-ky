@@ -4,60 +4,16 @@ import hashlib
 import json
 import os
 import secrets
-from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
 from . import auth_storage, storage
 
 COOKIE = "seven_double_session"
-DEFAULT_ALLOWED_ORIGINS = "super.tkcloud.online"
 
 
 def secret_hash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def allowed_origins():
-    raw = os.environ.get("GAME_ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
-    return [
-        urlsplit(item.strip().lower()).netloc or item.strip().lower()
-        for item in raw.split(",")
-        if item.strip()
-    ]
-
-
-def forwarded(connection, header):
-    value = connection.headers.get(header)
-    return value.split(",")[0].strip() if value else ""
-
-
-def same_origin(connection):
-    origin = connection.headers.get("origin")
-    parsed = urlsplit(origin) if origin else None
-    if parsed and parsed.hostname:
-        allowed = allowed_origins()
-        if parsed.netloc.lower() in allowed or parsed.hostname in allowed:
-            return True
-    site = connection.headers.get("sec-fetch-site")
-    if site == "cross-site":
-        return False
-    if not origin:
-        # 没有 Origin 头：浏览器发起的 WebSocket 握手不会带 Origin 才是异常，
-        # 而原生客户端（Dart/HttpClient）本来就不发 Origin，它靠 Bearer 令牌认证，
-        # 由调用方继续校验令牌。HTTP 写请求没有 Origin 则按跨站拒绝。
-        # 注意这里必须是 ==：写反会让原生 WebSocket 全部 403、同时放过无 Origin 的写请求。
-        return connection.scope["type"] == "websocket"
-    if site == "same-origin":
-        return True
-    if parsed.scheme not in ("http", "https"):
-        return False
-    scheme = forwarded(connection, "x-forwarded-proto") or {
-        "ws": "http",
-        "wss": "https",
-    }.get(connection.url.scheme, connection.url.scheme)
-    host = forwarded(connection, "x-forwarded-host") or connection.headers.get("host", "")
-    return parsed.scheme == scheme and parsed.netloc.lower() == host.lower()
 
 
 def raw_token(connection):
@@ -72,21 +28,9 @@ def raw_token(connection):
     return connection.cookies.get(COOKIE)
 
 
-def bearer_hash(connection):
-    authorization = connection.headers.get("authorization")
-    if authorization is None:
-        return None
-    token = raw_token(connection)
-    return secret_hash(token) if token else None
-
-
 def token_hash(connection):
     token = raw_token(connection)
     return secret_hash(token) if token else None
-
-
-def valid_bearer(connection):
-    return bool(auth_storage.token_row(bearer_hash(connection)))
 
 
 def gateway_authorized(connection):

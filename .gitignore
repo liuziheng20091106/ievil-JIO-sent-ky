@@ -12,3 +12,4 @@ gateway/*.log
 *.cmd.local
 *.env.local
 client/test/failures/
+start.cmd.local.cmd

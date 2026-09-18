@@ -118,12 +118,15 @@ async def receiver(peer):
 
 
 async def live(socket):
-    if not auth.valid_bearer(socket) and not auth.same_origin(socket):
-        await socket.close(code=4403)
-        return
+    # 不再校验握手来源：原生客户端不发 Origin，Flutter Web 的 Origin 随端口变化。
+    # 鉴权在下面用会话令牌完成。
+    #
+    # 必须先 accept 再关闭：Starlette 里 accept 之前调用 close 会拒绝整个握手，
+    # uvicorn 直接回 HTTP 403（不是 4401），客户端只看到「连不上」而拿不到原因。
     peer = None
     tasks = []
     try:
+        await socket.accept()
         async with lock:
             with storage.connect() as db:
                 actor = auth.actor_for_token(db, auth.token_hash(socket))
@@ -134,7 +137,6 @@ async def live(socket):
                 if not game:
                     await socket.close(code=4401)
                     return
-            await socket.accept()
             peer = Connection(
                 socket,
                 auth.token_hash(socket),
