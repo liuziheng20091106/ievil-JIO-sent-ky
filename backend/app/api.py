@@ -127,7 +127,9 @@ async def web_challenge_status(challenge_id: str, request: Request, response: Re
         return result
     token = result.pop("token")
     auth.set_cookie(response, request, token)
-    return session_for_token(token)
+    # 必须带上 status：客户端靠它判断登录完成。缺了它客户端会继续轮询，
+    # 而挑战已经消费，下一次轮询就是 410，用户看到登录失败但账号其实已登录。
+    return {"status": "completed", **session_for_token(token)}
 
 
 @router.post("/native/auth/challenges")
@@ -141,7 +143,8 @@ async def native_challenge_status(challenge_id: str):
     if result["status"] != "completed":
         return result
     token = result.pop("token")
-    return {"session_token": token, "session": session_for_token(token)}
+    # 同 web：status 必须随完成一起返回，否则客户端轮询到已消费的挑战会拿到 410。
+    return {"status": "completed", "session_token": token, "session": session_for_token(token)}
 
 
 @router.post("/internal/qq/login")

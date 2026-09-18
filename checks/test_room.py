@@ -67,6 +67,8 @@ class BackendFlow(unittest.TestCase):
             "/api/native/auth/challenges/" + challenge["id"]
         )
         completed.raise_for_status()
+        # 原生客户端同样按 status 判断登录完成，缺了它会继续轮询已消费的挑战。
+        self.assertEqual(completed.json().get("status"), "completed")
         return {
             "Authorization": "Bearer " + completed.json()["session_token"]
         }, completed.json()["session"]["actor"]
@@ -124,7 +126,10 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(replay.status_code, 409, replay.text)
         completed = self.client.get("/api/auth/challenges/" + challenge["id"])
         self.assertEqual(completed.status_code, 200, completed.text)
-        self.assertEqual(set(completed.json()), {"actor", "game_id"})
+        # 完成后必须回 status=completed：前端靠它停止轮询。缺了它前端会继续轮询，
+        # 挑战已消费于是下一次拿到 410，表现为「登录失败」但账号其实已经登录。
+        self.assertEqual(completed.json().get("status"), "completed")
+        self.assertEqual(set(completed.json()), {"status", "actor", "game_id"})
         self.assertNotIn("token", completed.text.lower())
         self.assertIn("seven_double_session", completed.cookies)
         self.assertEqual(
