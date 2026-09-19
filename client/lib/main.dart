@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'src/app_icons.dart';
 import 'src/design.dart';
 import 'src/picks.dart';
+import 'src/release.dart';
 import 'src/role_visuals.dart';
 import 'src/shell.dart';
 import 'src/store.dart';
@@ -11,13 +12,24 @@ import 'src/store.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await GameStore.create();
-  runApp(SevenDoubleApp(store: store));
+  final release = ReleaseMonitor();
+  // 版本标签与保活白名单是只读探测，失败不阻塞启动；每个服务地址只查一次。
+  Object? checked;
+  store.addListener(() {
+    final endpoint = store.endpoint;
+    if (endpoint != null && !identical(endpoint, checked)) {
+      checked = endpoint;
+      release.check(endpoint);
+    }
+  });
+  runApp(SevenDoubleApp(store: store, release: release));
 }
 
 class SevenDoubleApp extends StatelessWidget {
-  const SevenDoubleApp({super.key, required this.store});
+  const SevenDoubleApp({super.key, required this.store, required this.release});
 
   final GameStore store;
+  final ReleaseMonitor release;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -26,18 +38,73 @@ class SevenDoubleApp extends StatelessWidget {
         theme: buildAppTheme(),
         home: AnimatedBuilder(
           animation: store,
-          builder: (context, _) => AppGate(store: store),
+          builder: (context, _) => AppGate(store: store, release: release),
         ),
       );
 }
 
 class AppGate extends StatelessWidget {
-  const AppGate({super.key, required this.store});
+  const AppGate({super.key, required this.store, this.release});
 
   final GameStore store;
+  // 测试与预览不传：没有发布监控时直接渲染页面本身。
+  final ReleaseMonitor? release;
 
   @override
   Widget build(BuildContext context) {
+    final page = _page();
+    final release = this.release;
+    if (release == null) return page;
+    return AnimatedBuilder(
+      animation: release,
+      builder: (context, _) {
+        final banners = <Widget>[
+          if (release.updateRequired)
+            MaterialBanner(
+              backgroundColor: AppColors.danger,
+              content: const Text(
+                '当前版本过旧，必须更新后才能继续使用，请向主持人获取最新安装包。',
+                style: TextStyle(color: Colors.white),
+              ),
+              actions: const [SizedBox.shrink()],
+            )
+          else if (release.updateAvailable)
+            MaterialBanner(
+              content: const Text('有新版本可用，建议向主持人获取最新安装包。'),
+              actions: [
+                TextButton(
+                  onPressed: ScaffoldMessenger.of(context).hideCurrentMaterialBanner,
+                  child: const Text('知道了'),
+                ),
+              ],
+            ),
+          if (!release.batteryOptimizationIgnored)
+            MaterialBanner(
+              content: const Text('为避免后台断连，建议允许应用忽略电池优化。'),
+              actions: [
+                TextButton(
+                  onPressed: release.requestBatteryWhitelist,
+                  child: const Text('去设置'),
+                ),
+                TextButton(
+                  onPressed: ScaffoldMessenger.of(context).hideCurrentMaterialBanner,
+                  child: const Text('忽略'),
+                ),
+              ],
+            ),
+        ];
+        if (banners.isEmpty) return page;
+        return Column(
+          children: [
+            SafeArea(bottom: false, child: Column(children: banners)),
+            Expanded(child: page),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _page() {
     if (store.restoring) {
       return const Scaffold(
         body: Center(

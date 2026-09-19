@@ -27,6 +27,9 @@ class GameApi {
             body: {'password': password}),
       );
 
+  Future<Map<String, dynamic>> health() async =>
+      jsonObject(await _request('GET', '/api/health'));
+
   Future<Map<String, dynamic>> me() async =>
       jsonObject(await _request('GET', '/api/me'));
 

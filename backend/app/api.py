@@ -107,7 +107,12 @@ def poll_login(challenge_id, client_kind):
 
 @router.get("/health")
 async def health():
-    return {"ok": True}
+    # 客户端版本标签：低于 latest 提示可更新，低于 minimum 必须更新；未配置则不下发。
+    return {
+        "ok": True,
+        "client_latest": os.environ.get("GAME_CLIENT_LATEST") or None,
+        "client_minimum": os.environ.get("GAME_CLIENT_MINIMUM") or None,
+    }
 
 
 @router.get("/catalog")

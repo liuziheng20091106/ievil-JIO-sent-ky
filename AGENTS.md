@@ -25,6 +25,9 @@
 - 后端检查：`.venv/Scripts/python.exe -m unittest discover -s checks -v`。
 - 静态检查：`.venv/Scripts/python.exe -m ruff check backend checks run.py`。
 - 前端检查/构建：在 `frontend/` 执行 `npm.cmd run build`。
+- 客户端编译发行：在 `client/` 执行 `flutter build apk --release --target-platform android-arm64` 与 `flutter build windows --release`。
+- 每次编译后运行 `package-release.cmd`：把 `client/build/windows/x64/runner/Release` 重新打成 `魔法裁判Windows.zip`，并与 `app-release.apk` 一起覆盖复制到 `\\192.168.0.114\烟台一中\云控\信息技术`。
+- 客户端版本标签：后端 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`（`x.y.z` 三段），低于 latest 提示可更新、低于 minimum 强制更新；客户端内置版本号写在 `client/lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `client/pubspec.yaml` 的版本名同步手改，不动安卓 versionCode/versionName。
 - 有意义的行为修改必须实际启动并验证相关服务或浏览器路径；新增回归检查只保护真实规则、权限或数据丢失边界。
 - 更新现有 TXT 运行说明；保持改动最小，不为假设需求搭框架。并发代理修改不同文件，统一在集成结束后格式化、构建和运行检查。
 

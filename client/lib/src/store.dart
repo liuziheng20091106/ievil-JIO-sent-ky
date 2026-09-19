@@ -755,12 +755,48 @@ class GameStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 同一参与者新的在场消息到达后，此人更早的「已掉线 / 重新连接」提醒全部隐藏：
+  /// 断连刷屏只留下最新一条状态，历史不再占屏（服务端记录不动）。
+  static final _presenceActor = RegExp(r'【(.+)】(已连接 / 重新连接|已掉线)$');
+
+  static String? _presenceKey(GameMessage message) {
+    if (message.kind != 'presence') return null;
+    final match = _presenceActor.firstMatch(message.text);
+    if (match != null) return 'named:${match.group(1)}';
+    if (message.text.startsWith('主持人')) return 'host';
+    return null;
+  }
+
+  static List<GameMessage> _hideStalePresence(List<GameMessage> merged) {
+    final latestPresence = <String, int>{};
+    for (final item in merged) {
+      final key = _presenceKey(item);
+      if (key == null) continue;
+      final current = latestPresence[key];
+      if (current == null || item.id > current) latestPresence[key] = item.id;
+    }
+    if (latestPresence.isEmpty) return merged;
+    return merged
+        .where((item) =>
+            _presenceKey(item) == null ||
+            item.id == latestPresence[_presenceKey(item)])
+        .toList();
+  }
+
+  /// 回归检查入口：与实时事件/历史补齐完全同一条合并路径。
+  void mergeMessagesForTest(Iterable<GameMessage> incoming) =>
+      _mergeMessages(incoming);
+
+  static String? presenceKeyForTest(GameMessage message) =>
+      _presenceKey(message);
+
   void _mergeMessages(Iterable<GameMessage> incoming) {
     final indexed = {for (final item in messages) item.id: item};
     for (final item in incoming) {
       if (_matchesScope(item, messageScope)) indexed[item.id] = item;
     }
-    messages = indexed.values.toList()..sort((a, b) => a.id.compareTo(b.id));
+    messages = _hideStalePresence(indexed.values.toList())
+      ..sort((a, b) => a.id.compareTo(b.id));
   }
 
   bool _matchesScope(GameMessage message, String scope) => switch (scope) {

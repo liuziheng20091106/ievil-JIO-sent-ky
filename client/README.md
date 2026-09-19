@@ -12,6 +12,12 @@ flutter build apk --debug
 flutter build windows --debug
 ```
 
+发行构建：`flutter build apk --release --target-platform android-arm64` 与 `flutter build windows --release`，随后运行仓库根目录的 `package-release.cmd` 打包 `魔法裁判Windows.zip` 并把 zip 与 `app-release.apk` 覆盖发布到局域网分发目录。
+
+安卓后台保活：应用启动后拉起前台服务（`KeepAliveService`，常驻低优先级通知 + PARTIAL 唤醒锁）维持 WebSocket 心跳；首次连接服务器后若未加入「忽略电池优化」白名单，界面顶部横幅可一键跳转授权。
+
+版本检查：连接服务器后读取 `/api/health` 下发的 `client_latest` / `client_minimum` 标签；低于 latest 横幅提示可更新，低于 minimum 横幅要求必须更新。比较用的内置版本号在 `lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `pubspec.yaml` 版本名同步手改，安卓 versionCode/versionName 不动。
+
 Windows 构建需要 Visual Studio 的 C++ 桌面工作负载，以及 `flutter_secure_storage` 依赖的 ATL 组件（`Microsoft.VisualStudio.Component.VC.ATL`）。
 
 ## 使用
