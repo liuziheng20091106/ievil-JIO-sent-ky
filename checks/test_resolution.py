@@ -765,6 +765,77 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["speech_passed"], [])
 
 
+class MimicSpeech(unittest.TestCase):
+    """玛格常驻「模仿」：按目标身份公开发言，不推进对方顺序。"""
+
+    def mimic_of(self, game, sid):
+        return next(
+            item for item in actions_for(game, player(game, sid)) if item["id"] == "marg.mimic"
+        )
+
+    def test_only_the_current_speaker_can_be_mimicked_in_speech_order(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        mimic = self.mimic_of(game, "4")
+        self.assertEqual([option["value"] for option in mimic["fields"][0]["options"]], ["1"])
+        events = command(game, player(game, "4"), "marg.mimic", {"target": "1", "text": "我不是玛格"})
+        self.assertEqual(
+            [
+                (item["kind"], item["sender_id"], item["sender_name"], item["mimic_seat_id"], item["text"])
+                for item in events
+            ],
+            [("chat", "p1", game["seats"][0]["name"], "4", "我不是玛格")],
+        )
+        self.assertEqual(game["public"]["speaker"], "1")
+        self.assertNotIn("4", game.get("speech_passed", []))
+
+    def test_day_discussion_offers_every_living_seat_except_marg(self):
+        game = arranged_game("discussion")
+        self.assertEqual(
+            [option["value"] for option in self.mimic_of(game, "4")["fields"][0]["options"]],
+            ["1", "2", "3", "5", "6", "7"],
+        )
+
+    def test_the_skill_is_gone_at_night_or_once_marg_is_out(self):
+        night = arranged_game("night", "night")
+        self.assertNotIn(
+            "marg.mimic", [item["id"] for item in actions_for(night, player(night, "4"))]
+        )
+        dead = arranged_game("discussion")
+        dead["cards"]["marg"]["alive"] = False
+        self.assertNotIn(
+            "marg.mimic", [item["id"] for item in actions_for(dead, player(dead, "4"))]
+        )
+        other = arranged_game("discussion")
+        self.assertNotIn(
+            "marg.mimic", [item["id"] for item in actions_for(other, player(other, "1"))]
+        )
+
+    def test_the_target_must_be_a_living_other_seat(self):
+        game = arranged_game("discussion")
+        with self.assertRaises(GameError):
+            command(game, player(game, "4"), "marg.mimic", {"target": "4", "text": "自己"})
+        game["cards"]["leia"]["alive"] = False
+        game["cards"]["arisa"]["alive"] = False
+        with self.assertRaises(GameError):
+            command(game, player(game, "4"), "marg.mimic", {"target": "5", "text": "无人"})
+        with self.assertRaises(GameError):
+            command(game, player(game, "4"), "marg.mimic", {"target": "1", "text": "   "})
+
+    def test_host_proxy_does_not_announce_that_it_was_the_host(self):
+        game = arranged_game("discussion")
+        changed = deepcopy(game)
+        events = apply_command(
+            changed,
+            player(changed, "4"),
+            "marg.mimic",
+            {"target": "1", "text": "代操作"},
+            by_host=True,
+        )
+        self.assertTrue(any(item["kind"] == "chat" for item in events))
+        self.assertFalse(any("主持人为" in item.get("text", "") for item in events))
+
+
 class BalloonFlow(unittest.TestCase):
     def test_arisa_starts_the_balloon_without_any_host_step(self):
         game = arranged_game()

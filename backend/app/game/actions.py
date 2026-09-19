@@ -45,6 +45,7 @@ SHORT_LABELS = {
     "night.confirm": "确认",
     "day.skill": "技能",
     "day.challenge": "质疑",
+    "marg.mimic": "模仿",
     "honoka.disguise": "示人",
     "honoka.witness": "目击",
     "hiro.exit": "出局",
@@ -100,6 +101,25 @@ def seat_options(game, alive=True):
 
 def role_options():
     return [(r, d["name"]) for r, d in ROLES.items()]
+
+
+def mimic_targets(game, sid):
+    """玛格可模仿的席位：顺序发言阶段只有当前发言人，其余白天阶段为全体在场玩家。
+
+    与 game_view 的 can_chat 保持一致：顺序发言阶段只看是否轮到你，其余白天阶段
+    要求席位仍有存活角色牌。
+    """
+    if game["half"] != "day":
+        return []
+    if game["phase"] == "speech":
+        allowed = {game["public"]["speaker"]}
+    else:
+        allowed = {s["id"] for s in game["seats"] if current(game, s)}
+    return [
+        (s["id"], f"{s['id']}号 · {s['name']}")
+        for s in game["seats"]
+        if s["id"] != sid and s["occupant_id"] and s["id"] in allowed
+    ]
 
 
 def speech_start(game):
@@ -852,6 +872,20 @@ def actions_for(game, actor):
                             "私密伪装选择",
                         )
                     )
+    if card and card["role_id"] == "marg":
+        targets = mimic_targets(game, sid)
+        if targets:
+            result.append(
+                action(
+                    "marg.mimic",
+                    "模仿他人发言",
+                    [
+                        field("target", "以谁的席位发言", "select", targets),
+                        field("text", "发言内容", "textarea"),
+                    ],
+                    group="玛格技能",
+                )
+            )
     honoka = game["cards"]["honoka"]
     if card and card["id"] == "honoka" and not honoka["states"].get("disguise_locked"):
         result.append(

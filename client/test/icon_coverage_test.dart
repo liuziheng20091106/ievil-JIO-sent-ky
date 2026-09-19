@@ -42,6 +42,7 @@ const backendActionIds = <String>[
   'host.water',
   'lobby.order',
   'lobby.ready',
+  'marg.mimic',
   'meruru.revive',
   'night.clear',
   'night.confirm',

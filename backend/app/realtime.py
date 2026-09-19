@@ -94,7 +94,7 @@ def publish(game_id, new_messages=(), state=True):
                 continue
             for row in notices:
                 if storage.visible_message(row, actor):
-                    enqueue(peer, {"type": "message", "message": storage.message_view(row)})
+                    enqueue(peer, {"type": "message", "message": storage.message_view(row, actor)})
             if state:
                 enqueue(
                     peer, {"type": "state", "state": views.view(db, game, actor, online(game_id))}

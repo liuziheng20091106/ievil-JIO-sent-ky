@@ -1238,16 +1238,25 @@ class MessageBubble extends StatelessWidget {
                 if (message.senderName != null && !mine)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 3, left: 2),
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: onAvatar == null
-                          ? null
-                          : () => onAvatar!(message.senderId),
-                      child: Text(
-                        message.senderName!,
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textTertiary),
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: onAvatar == null
+                              ? null
+                              : () => onAvatar!(message.senderId),
+                          child: Text(
+                            message.senderName!,
+                            style: const TextStyle(
+                                fontSize: 12, color: AppColors.textTertiary),
+                          ),
+                        ),
+                        if (message.mimicSeatId != null) ...[
+                          const SizedBox(width: AppSpacing.sm),
+                          Tag('模仿 · 实为${message.mimicSeatId}号'),
+                        ],
+                      ],
                     ),
                   ),
                 Container(

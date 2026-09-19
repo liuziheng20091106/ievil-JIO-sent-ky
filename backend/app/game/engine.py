@@ -1238,6 +1238,10 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             game.setdefault("speech_queued", {})[sid] = text
             game.setdefault("speech_passed", []).append(sid)
             notify(game, events, f"{sid}号已写好发言，轮到时自动公开。")
+    elif action == "marg.mimic":
+        text = data["text"].strip()
+        require(text, "请先写下发言内容")
+        chat_event(game, events, data["target"], text, mimic_seat_id=sid)
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
@@ -1403,7 +1407,7 @@ def apply_command(game, actor, action, payload, *, by_host=False):
         host_command(game, events, action, payload)
     else:
         player_command(game, actor, events, action, payload, by_host=by_host)
-    if by_host and actor["kind"] == "player":
+    if by_host and actor["kind"] == "player" and action != "marg.mimic":
         notify(
             game,
             events,

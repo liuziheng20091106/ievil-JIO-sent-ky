@@ -42,7 +42,7 @@ def initialize():
             game_id TEXT NOT NULL REFERENCES games(id), kind TEXT NOT NULL,
             sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, avatar_role_id TEXT,
             channel_id TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
-            audience TEXT, image_id TEXT
+            audience TEXT, image_id TEXT, mimic_seat_id TEXT
         );
         CREATE INDEX IF NOT EXISTS message_game_id ON messages(game_id, id);
         CREATE TABLE IF NOT EXISTS evidence (
@@ -72,6 +72,9 @@ def initialize():
         for column, declaration in additions.items():
             if column not in channel_columns:
                 db.execute(f"ALTER TABLE channels ADD COLUMN {column} {declaration}")
+        message_columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
+        if "mimic_seat_id" not in message_columns:
+            db.execute("ALTER TABLE messages ADD COLUMN mimic_seat_id TEXT")
         if legacy_channels:
             for row in db.execute("SELECT id,participant_ids,created_at FROM channels").fetchall():
                 db.execute(
@@ -161,11 +164,12 @@ def add_message(
     text="",
     audience=None,
     image_id=None,
+    mimic_seat_id=None,
 ):
     created_at = now_text()
     cursor = db.execute(
         """INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,
-           channel_id,text,created_at,audience,image_id) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+           channel_id,text,created_at,audience,image_id,mimic_seat_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
         (
             game_id,
             kind,
@@ -177,6 +181,7 @@ def add_message(
             created_at,
             None if audience is None else dumps(audience),
             image_id,
+            mimic_seat_id,
         ),
     )
     return dict(db.execute("SELECT * FROM messages WHERE id=?", (cursor.lastrowid,)).fetchone())
@@ -198,6 +203,7 @@ def add_events(db, game_id, events):
                 sender_id=event.get("sender_id", "host"),
                 sender_name=event.get("sender_name", "主持人"),
                 avatar_role_id=event.get("avatar_role_id", "host"),
+                mimic_seat_id=event.get("mimic_seat_id"),
             )
         )
     return rows
@@ -211,7 +217,7 @@ def visible_message(row, actor):
     )
 
 
-def message_view(row):
+def message_view(row, actor):
     result = {
         key: row[key]
         for key in (
@@ -227,6 +233,8 @@ def message_view(row):
     }
     if row["image_id"]:
         result["image_id"] = row["image_id"]
+    if actor["kind"] == "host" and row["mimic_seat_id"]:
+        result["mimic_seat_id"] = row["mimic_seat_id"]
     return result
 
 
@@ -304,4 +312,4 @@ def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, sc
     rows = rows[:100]
     if order == "DESC":
         rows.reverse()
-    return {"messages": [message_view(row) for row in rows], "has_more": more}
+    return {"messages": [message_view(row, actor) for row in rows], "has_more": more}

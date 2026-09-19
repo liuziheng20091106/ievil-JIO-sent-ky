@@ -248,6 +248,36 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(after["kind"], "account")
         self.assertEqual(after["account_id"], before["account_id"])
 
+    def test_the_mimic_marker_is_only_exposed_to_the_host(self):
+        with storage.transaction() as db:
+            row = storage.add_message(
+                db,
+                self.game_id,
+                kind="chat",
+                sender_id="p1",
+                sender_name="1号玩家",
+                avatar_role_id="emma",
+                channel_id="public",
+                text="我是1号",
+                mimic_seat_id="4",
+            )
+        player = {"id": "p1", "kind": "player", "seat_id": "1", "access_ids": ["p1"]}
+        spectator = {"id": "w1", "kind": "spectator", "seat_id": None, "access_ids": ["w1"]}
+        host = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
+        self.assertNotIn("mimic_seat_id", storage.message_view(row, player))
+        self.assertNotIn("mimic_seat_id", storage.message_view(row, spectator))
+        self.assertEqual(storage.message_view(row, host)["mimic_seat_id"], "4")
+
+    def test_a_muted_player_cannot_submit_a_mimic(self):
+        self.open_join()
+        headers, actor, _ = self.join("13001")
+        self.command(self.host, "room.mute", {"participant_id": actor["id"], "muted": True})
+        response = self.command(headers, "marg.mimic", {"target": "1", "text": "x"}, status=403)
+        self.assertEqual(response.json()["detail"], "主持人已将你禁言")
+        self.command(self.host, "room.mute", {"participant_id": actor["id"], "muted": False})
+        # 解除禁言后仍然不可用（候场阶段没有玛格技能），说明之前拦截的确实是禁言。
+        self.command(headers, "marg.mimic", {"target": "1", "text": "x"}, status=422)
+
 
 class Migration(unittest.TestCase):
     def test_initialization_preserves_existing_game_while_dropping_legacy_auth_tables(self):
@@ -273,6 +303,22 @@ class Migration(unittest.TestCase):
                     "INSERT INTO games VALUES(?,?,?,?,?)",
                     (game["id"], storage.dumps(game), game["version"], game["status"], storage.now_text()),
                 )
+                db.execute(
+                    "INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,"
+                    "channel_id,text,created_at,audience,image_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        game["id"],
+                        "chat",
+                        "legacy",
+                        "旧玩家",
+                        None,
+                        "public",
+                        "旧消息",
+                        storage.now_text(),
+                        None,
+                        None,
+                    ),
+                )
                 db.commit()
             finally:
                 db.close()
@@ -284,6 +330,11 @@ class Migration(unittest.TestCase):
                 self.assertNotIn("sessions", tables)
                 self.assertNotIn("invites", tables)
                 self.assertIn("account_id", {row["name"] for row in db.execute("PRAGMA table_info(participants)")})
+                columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
+                self.assertIn("mimic_seat_id", columns)
+                legacy = db.execute("SELECT * FROM messages WHERE sender_id='legacy'").fetchone()
+                self.assertEqual(legacy["text"], "旧消息")
+                self.assertIsNone(legacy["mimic_seat_id"])
 
 
 class NoOriginGate(unittest.TestCase):

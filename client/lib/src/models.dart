@@ -272,6 +272,7 @@ class GameMessage {
     senderId = raw['sender_id']?.toString();
     senderName = raw['sender_name']?.toString();
     avatarRoleId = raw['avatar_role_id']?.toString();
+    mimicSeatId = raw['mimic_seat_id']?.toString();
     createdAt = raw['created_at']?.toString() ?? '';
   }
 
@@ -283,6 +284,7 @@ class GameMessage {
   late final String? senderId;
   late final String? senderName;
   late final String? avatarRoleId;
+  late final String? mimicSeatId;
   late final String createdAt;
 }
 

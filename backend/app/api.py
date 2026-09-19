@@ -580,6 +580,10 @@ async def command(game_id: str, body: schemas.Command, request: Request):
                 and storage.active_private_channel(db, game_id, actor["id"])
             ):
                 raise HTTPException(403, "私信期间不能执行游戏行动")
+            if body.action == "marg.mimic":
+                reason = storage.channel_send_reason(db, game, actor, "public")
+                if reason:
+                    raise HTTPException(403, reason)
             require_listed_action(db, game, actor, body.action, payload)
             if body.action.startswith("channel."):
                 rows = channel_command(db, game, actor, body.action, payload)
@@ -673,7 +677,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 audience=audience,
             )
         realtime.publish(game_id, [row], state=False)
-        return storage.message_view(row)
+        return storage.message_view(row, actor)
 
 
 @router.post("/games/{game_id}/evidence")

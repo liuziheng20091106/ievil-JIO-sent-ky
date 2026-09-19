@@ -253,6 +253,7 @@ export interface Message {
   text: string;
   created_at: string;
   image_id?: string;
+  mimic_seat_id?: string;
 }
 export interface MessagePage {
   messages: Message[];

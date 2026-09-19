@@ -73,7 +73,7 @@ def notify(game, events, text, seats=None, title="游戏信息", image_id=None, 
         game["information"].append({"id": uid(), **deepcopy(event)})
 
 
-def chat_event(game, events, seat_id, text, channel_id="public"):
+def chat_event(game, events, seat_id, text, channel_id="public", mimic_seat_id=None):
     """公开发言以玩家消息发布，两端展示与玩家自己发送的普通发言完全一致。"""
     s = seat(game, seat_id)
     events.append(
@@ -85,6 +85,7 @@ def chat_event(game, events, seat_id, text, channel_id="public"):
             "sender_id": s["occupant_id"],
             "sender_name": s["name"],
             "avatar_role_id": s["avatar_role_id"],
+            "mimic_seat_id": mimic_seat_id,
         }
     )
 

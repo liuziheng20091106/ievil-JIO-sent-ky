@@ -37,6 +37,7 @@ class ActionIcons {
     'night.clear': Icons.backspace_outlined,
     'day.skill': Icons.auto_awesome_outlined,
     'day.challenge': Icons.help_outline,
+    'marg.mimic': Icons.masks_outlined,
     'honoka.disguise': Icons.theater_comedy_outlined,
     'honoka.witness': Icons.visibility_outlined,
     'photo.permission': Icons.photo_camera_outlined,
