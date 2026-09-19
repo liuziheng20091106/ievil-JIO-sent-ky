@@ -239,6 +239,24 @@ class BackendFlow(unittest.TestCase):
         self.assertTrue(any("正在与" in message["text"] for message in system["messages"]))
         self.assertTrue(any("已结束私信" in message["text"] for message in system["messages"]))
 
+    def test_host_player_pair_channel_skips_system_notice(self):
+        self.open_join()
+        player, player_actor, _ = self.join("12501")
+        stranger, _, _ = self.join("12502", "spectator")
+        baseline = self.client.get(self.root + "/messages?scope=system", headers=stranger).json()[
+            "messages"
+        ]
+        created = self.command(
+            self.host, "channel.create", {"name": "密谈", "participant_ids": [player_actor["id"]]}
+        ).json()
+        channel = next(item for item in created["channels"] if item["label"].endswith("密谈"))
+        self.assertEqual(channel["status"], "active")
+        self.command(player, "channel.end", {"channel_id": channel["id"]})
+        system = self.client.get(self.root + "/messages?scope=system", headers=stranger).json()[
+            "messages"
+        ]
+        self.assertEqual([message["id"] for message in system], [message["id"] for message in baseline])
+
     def test_reset_preserves_accounts_and_tokens(self):
         self.open_join()
         player, _, _ = self.join("13001")

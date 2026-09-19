@@ -437,6 +437,8 @@ def channel_names(db, member_ids):
 
 def channel_notice(db, game_id, row, ending=False):
     members = json.loads(row["participant_ids"])
+    if len(members) == 2 and "host" in members:
+        return None  # 主持人与玩家的双人私信不公告
     names = channel_names(db, [member for member in members if member != "host"])
     creator = names.get(row["creator_id"], "参与者")
     others = "、".join(names.get(member, "参与者") for member in members if member != row["creator_id"])
@@ -495,7 +497,9 @@ def channel_command(db, game, actor, action_id, payload):
         )
         if immediate:
             row = db.execute("SELECT * FROM channels WHERE id=?", (channel_id,)).fetchone()
-            rows.append(channel_notice(db, game["id"], row))
+            notice = channel_notice(db, game["id"], row)
+            if notice:
+                rows.append(notice)
     else:
         body = schemas.ChannelRef.model_validate(payload)
         row = db.execute(
@@ -522,7 +526,9 @@ def channel_command(db, game, actor, action_id, payload):
             )
             if active:
                 row = db.execute("SELECT * FROM channels WHERE id=?", (row["id"],)).fetchone()
-                rows.append(channel_notice(db, game["id"], row))
+                notice = channel_notice(db, game["id"], row)
+                if notice:
+                    rows.append(notice)
         elif action_id == "channel.reject":
             if row["status"] != "pending" or actor["id"] not in invited or actor["id"] in accepted:
                 raise HTTPException(409, "该邀请不再等待你的回应")
@@ -540,7 +546,9 @@ def channel_command(db, game, actor, action_id, payload):
                 (storage.now_text(), row["id"]),
             )
             db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
-            rows.append(channel_notice(db, game["id"], row, ending=True))
+            notice = channel_notice(db, game["id"], row, ending=True)
+            if notice:
+                rows.append(notice)
         else:
             raise HTTPException(422, "未知私信操作")
     game["version"] += 1
