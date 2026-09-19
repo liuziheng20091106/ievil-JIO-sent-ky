@@ -1821,6 +1821,41 @@ class ProfilePage extends StatelessWidget {
                   isCurrent: raw['id']?.toString() == currentId,
                 ),
               ),
+        if (self['honoka_upper'] is List) ...[
+          const SectionTitle(
+            '已准备玩家的上层角色',
+            subtitle: '穗乃香开局前获知，仅你看得到。',
+          ),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                children: [
+                  for (final raw in self['honoka_upper'] as List)
+                    if (raw is Map)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          '${raw['seat_id']}号 ${raw['name']}',
+                          style: const TextStyle(
+                              fontSize: 14, color: AppColors.text),
+                        ),
+                        trailing: Text(
+                          roleVisual(raw['role_id']?.toString())?.name ??
+                              raw['role_id']?.toString() ??
+                              '未知',
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.accent),
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          ),
+        ],
         if (self['warning_deadline'] != null) ...[
           const SizedBox(height: AppSpacing.md),
           Card(
