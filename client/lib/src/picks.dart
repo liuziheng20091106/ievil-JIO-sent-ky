@@ -45,8 +45,14 @@ List<PickedPlayer> playersFromOptions(
         final id = option['value'].toString();
         final seat = byParticipant[id];
         // 头像与服务端 avatar_role_id 对齐：上层牌出局后 cards.first 是死人，
-        // 穗乃香示人时也不等于展示角色。
-        final roleId = seat?['avatar_role_id']?.toString();
+        // 穗乃香示人时也不等于展示角色；avatar_role_id 未给出时回退到上层牌。
+        var roleId = seat?['avatar_role_id']?.toString();
+        if (roleId == null) {
+          final cards = seat?['cards'];
+          if (cards is List && cards.isNotEmpty) {
+            roleId = cards.first['role_id']?.toString();
+          }
+        }
         return PickedPlayer(
           id: id,
           name: option['label'].toString(),

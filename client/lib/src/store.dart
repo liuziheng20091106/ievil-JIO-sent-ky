@@ -62,6 +62,11 @@ class GameStore extends ChangeNotifier {
   GameView? view;
   LiveConnection? live;
 
+  /// 返回大厅期间置位：服务器仍把已终止的对局当作当前局返回（被移出者
+  /// 的 me() 也可能带旧绑定），此时本地已明确离开，_consumeSession 与
+  /// refreshLobby 都不得用服务器的当前局 gameId 把用户拉回对局。
+  bool _stayingInLobby = false;
+
   /// 角色目录（id → 名称、好人技能、魔女化技能）；公开信息，用于角色详情与魔典说明。
   List<RoleInfo> roles = const <RoleInfo>[];
   List<String> defaultCodex = const <String>[];
@@ -387,7 +392,8 @@ class GameStore extends ChangeNotifier {
       {required String token}) async {
     final value = result['actor'];
     actor = value == null ? null : Actor.fromJson(value);
-    gameId = result['game_id']?.toString();
+    // 返回大厅期间不采纳服务器的当前局绑定，否则会被拉回已离开的对局。
+    gameId = _stayingInLobby ? null : result['game_id']?.toString();
     await secureStorage.write(key: _tokenKey, value: token);
     if (actor != null) {
       await preferences.setString(_actorKey, jsonEncode(actor!.raw));
@@ -412,9 +418,15 @@ class GameStore extends ChangeNotifier {
       final participation = result['participation'];
       if (participation != null) {
         actor = Actor.fromJson(participation);
-        gameId = lobbyGame?.id;
+        // 返回大厅期间不重新绑定对局：被移出/已离开的用户应留在大厅，
+        // 不被服务器的当前局参与身份拉回。
+        gameId = _stayingInLobby ? null : lobbyGame?.id;
         await preferences.setString(_actorKey, jsonEncode(actor!.raw));
-        if (gameId != null) await preferences.setString(_gameKey, gameId!);
+        if (gameId != null) {
+          await preferences.setString(_gameKey, gameId!);
+        } else {
+          await preferences.remove(_gameKey);
+        }
       }
       error = null;
     } on ApiException catch (failure) {
@@ -522,27 +534,40 @@ class GameStore extends ChangeNotifier {
     _loadedPhaseKey = null;
     error = null;
     await preferences.remove(_gameKey);
+    // 本地已明确离开：接下来的会话/大厅刷新都不得用服务器的当前局
+    // 绑定把用户拉回对局。
+    _stayingInLobby = true;
     notifyListeners();
-    // 回大厅前身份已失效（被移出/换了新局）：刷新只会再撞 401，
-    // 直接清会话回登录页，由登录页展示身份失效提示。
-    final token = await secureStorage.read(key: _tokenKey);
-    if (token == null) {
-      await _clearSession();
-      error = '登录状态已失效，请重新登录';
-      notifyListeners();
-      return;
-    }
-    api!.token = token;
     try {
-      await _consumeSession(await api!.me(), token: token);
-    } on ApiException {
-      await _clearSession();
-      error = '登录状态已失效，请重新登录';
+      // 回大厅前身份已失效（被移出/换了新局）：刷新只会再撞 401，
+      // 直接清会话回登录页，由登录页展示身份失效提示。
+      // 令牌读取失败（如预览/测试环境无安全存储插件）按无令牌处理。
+      String? token;
+      try {
+        token = await secureStorage.read(key: _tokenKey);
+      } catch (_) {
+        token = null;
+      }
+      if (token == null || api == null) {
+        if (api != null) {
+          await _clearSession();
+          error = '登录状态已失效，请重新登录';
+        }
+        return;
+      }
+      api!.token = token;
+      try {
+        await _consumeSession(await api!.me(), token: token);
+      } on ApiException {
+        await _clearSession();
+        error = '登录状态已失效，请重新登录';
+        return;
+      }
+      await refreshLobby();
+    } finally {
+      _stayingInLobby = false;
       notifyListeners();
-      return;
     }
-    await refreshLobby();
-    notifyListeners();
   }
 
   Future<void> _startLive() async {
