@@ -29,6 +29,7 @@ from .resolution import (
 from .state import (
     GameError,
     audience,
+    chat_event,
     check_winner,
     clear_seat_actions,
     current,
@@ -296,7 +297,7 @@ def next_speaker(game, current_speaker, events):
     while index < len(order) and order[index] in passed:
         sid = order[index]
         if sid in queued:
-            notify(game, events, f"{sid}号的发言：{queued.pop(sid)}")
+            chat_event(game, events, sid, f"{queued.pop(sid)}")
         index += 1
     return order[index] if index < len(order) else None
 
@@ -1230,7 +1231,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         text = data["text"].strip()
         require(text, "请先写下发言内容")
         if sid == game["public"]["speaker"]:
-            notify(game, events, f"{sid}号的发言：{text}")
+            chat_event(game, events, sid, text)
             game.setdefault("speech_passed", []).append(sid)
             speech_done(game, events)
         else:

@@ -712,16 +712,31 @@ class SpeechOrder(unittest.TestCase):
             command(game, player(game, sid), "speech.done", {})
         events = command(game, player(game, "3"), "speech.done", {})
         self.assertEqual(
-            [item["text"] for item in events if "4号的发言" in item["text"]],
-            ["4号的发言：我提前说完了"],
+            [item["text"] for item in events if item["kind"] == "chat"],
+            ["我提前说完了"],
         )
         self.assertEqual(game["speech_queued"], {})
         self.assertEqual(game["public"]["speaker"], "5")
 
+    def test_pre_submitted_speech_is_published_as_a_player_message(self):
+        """预发言公开时必须是玩家消息（chat），不能显示成系统通知。"""
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        command(game, player(game, "4"), "speech.speak", {"text": "我提前说完了"})
+        for sid in ("1", "2"):
+            command(game, player(game, sid), "speech.done", {})
+        events = command(game, player(game, "3"), "speech.done", {})
+        published = next(item for item in events if item["kind"] == "chat")
+        self.assertEqual(published["text"], "我提前说完了")
+        self.assertEqual(published["channel_id"], "public")
+        self.assertIsNone(published["audience"])
+
     def test_the_current_speaker_can_publish_its_speech_text_and_move_on(self):
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
-        command(game, player(game, "1"), "speech.speak", {"text": "我先讲"})
+        events = command(game, player(game, "1"), "speech.speak", {"text": "我先讲"})
+        chat = next(item for item in events if item["kind"] == "chat")
+        self.assertEqual(chat["text"], "我先讲")
         self.assertEqual(game["public"]["speaker"], "2")
 
     def test_a_fully_pre_submitted_speech_phase_counts_as_finished(self):

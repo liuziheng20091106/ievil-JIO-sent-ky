@@ -194,7 +194,10 @@ def add_events(db, game_id, events):
                 text=event.get("text", ""),
                 audience=audience,
                 image_id=event.get("image_id"),
-                channel_id="public" if audience is None else "information",
+                channel_id=event.get("channel_id", "public" if audience is None else "information"),
+                sender_id=event.get("sender_id", "host"),
+                sender_name=event.get("sender_name", "主持人"),
+                avatar_role_id=event.get("avatar_role_id", "host"),
             )
         )
     return rows
