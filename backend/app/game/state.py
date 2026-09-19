@@ -142,13 +142,19 @@ def can_use_card(game, card):
     )
 
 
+# 不允许发到同一席位的角色对：每对的两个角色牌序索引 //2 必须不同。
+DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"))
+
+
 def deal_cards(game):
     require(game["phase"] == "lobby" and not game["cards"], "本局已经发牌")
     order = list(ROLES)
     rng = SystemRandom()
     while True:
         rng.shuffle(order)
-        if order.index("millia") // 2 != order.index("arisa") // 2:
+        if all(
+            order.index(a) // 2 != order.index(b) // 2 for a, b in DEAL_EXCLUDED_PAIRS
+        ):
             break
     game["cards"] = {
         r: {
