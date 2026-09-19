@@ -106,15 +106,20 @@ class QQGateway:
             members = []
             for member in result.get("data", []):
                 qq_id = str(member.get("user_id", "")).strip()
+                # 服务端只接受 5-20 位纯数字 QQ 号；匿名/系统/异常账号跳过，不拖垮整批同步。
+                if not (qq_id.isdigit() and 5 <= len(qq_id) <= 20):
+                    continue
                 nickname = str(member.get("card") or member.get("nickname") or qq_id).strip()
-                if qq_id:
-                    members.append(
-                        {
-                            "qq_id": qq_id,
-                            "nickname": nickname,
-                            "avatar_url": self.avatar_url(qq_id),
-                        }
-                    )
+                # 昵称兜底 QQ 号并截断到服务端上限，避免单条脏数据让整批 422。
+                if not nickname:
+                    nickname = qq_id
+                members.append(
+                    {
+                        "qq_id": qq_id,
+                        "nickname": nickname[:64],
+                        "avatar_url": self.avatar_url(qq_id),
+                    }
+                )
             if members:
                 async with httpx.AsyncClient(timeout=15) as client:
                     response = await client.post(

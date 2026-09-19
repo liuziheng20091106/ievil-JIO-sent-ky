@@ -164,7 +164,14 @@ async def qq_login(body: schemas.QQLogin, request: Request):
 async def qq_members(body: schemas.QQMemberSync, request: Request):
     require_gateway(request)
     require_gateway_group(body.group_id)
-    return {"ok": True, "count": auth_storage.sync_accounts(body.members)}
+    valid = []
+    for member in body.members:
+        # 单条脏数据跳过即可，不该让整批同步 422：非法 QQ 号丢弃，空/超长昵称清洗后保留。
+        if not (member.qq_id.isdigit() and 5 <= len(member.qq_id) <= 20):
+            continue
+        member.nickname = (member.nickname.strip() or member.qq_id)[:64]
+        valid.append(member)
+    return {"ok": True, "count": auth_storage.sync_accounts(valid), "skipped": len(body.members) - len(valid)}
 
 
 @router.get("/me")

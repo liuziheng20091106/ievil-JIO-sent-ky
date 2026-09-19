@@ -29,8 +29,9 @@ class QQLogin(Input):
 
 
 class QQMember(Input):
-    qq_id: str = Field(pattern=r"^\d{5,20}$")
-    nickname: str = Field(min_length=1, max_length=64)
+    # 不在 schema 层卡格式：同步端点逐条跳过非法 QQ 号与空/超长昵称，避免单条脏数据整批 422。
+    qq_id: str = Field(max_length=64)
+    nickname: str = Field(default="", max_length=256)
     avatar_url: str = Field(default="", max_length=500)
 
 
