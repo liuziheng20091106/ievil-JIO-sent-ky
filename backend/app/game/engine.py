@@ -893,9 +893,17 @@ def host_command(game, events, action, data):
                 "已警告下列席位："
                 + "、".join(f"{sid}号" for sid in targets)
                 + "，请在30秒内完成操作。",
+                targets,
+                "主持人警告",
             )
         else:
-            notify(game, events, f"已警告{targets[0]}号玩家：请在30秒内完成操作。")
+            notify(
+                game,
+                events,
+                f"已警告{targets[0]}号玩家：请在30秒内完成操作。",
+                targets,
+                "主持人警告",
+            )
     elif action == "host.water":
         require(not game["water"]["used"], "本局唯一13水已使用")
         require(not any(p["kind"] == "water" for p in game["pending"]), "13水正在裁定使用")
