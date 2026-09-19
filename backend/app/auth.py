@@ -122,12 +122,15 @@ def issue_session(db, kind, account_id=None):
 
 
 def set_cookie(response, request, token):
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     response.set_cookie(
         COOKIE,
         token,
         httponly=True,
         samesite="lax",
-        secure=request.url.scheme == "https",
+        # 代理终结 TLS 时 request.url.scheme 仍是 http，优先信转发协议头；
+        # 代理没透传该头时只能按直连 scheme 下发，部署说明已要求透传。
+        secure=forwarded_proto == "https" or request.url.scheme == "https",
         path="/",
         max_age=60 * 60 * 24 * auth_storage.TOKEN_DAYS,
     )

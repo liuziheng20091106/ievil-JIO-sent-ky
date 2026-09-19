@@ -8,7 +8,7 @@ import {
 import { api, errorText } from "./api";
 import { ActionPanel } from "./Actions";
 import { Avatar, Evidence } from "./components";
-import { draftKey, useDraft } from "./drafts";
+import { clearDraftKey, draftKey, useDraft } from "./drafts";
 import { useGame } from "./state";
 import type { Message, MessagePage } from "./types";
 
@@ -44,6 +44,19 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     sendable[0] ??
     channels[0];
   const activeId = channel?.id ?? "public";
+  // 所选私密频道失效时静默回落会把私密草稿带进公屏：失效即清掉该频道草稿并提示。
+  const invalidated = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const item of channels) {
+      if (item.id === "public" || item.can_send || invalidated.current.has(item.id))
+        continue;
+      invalidated.current.add(item.id);
+      clearDraftKey(
+        draftKey(state?.id ?? null, session.actor?.id ?? null, "chat", item.id),
+      );
+      setError(`频道「${item.label}」已不可发言，其中的私密草稿已清除。`);
+    }
+  }, [channels, state?.id, session.actor?.id]);
   const feed = useRef<string | null>(null);
   feed.current = state?.id ?? null;
   const draftScope = draftKey(
@@ -163,6 +176,16 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
   const send = async (event: FormEvent) => {
     event.preventDefault();
     if (!state || sending || !draft.trim()) return;
+    // 发送前按最新频道列表复核，绝不把私密内容发进已回落的公屏。
+    const current = channels.find((item) => item.id === activeId);
+    if (!current?.can_send) {
+      setError(
+        current?.reason ||
+          state.chat_reason ||
+          "所选频道当前不可发言；内容未发送，请重新选择频道。",
+      );
+      return;
+    }
     if (!channel?.can_send) {
       setError(
         channel?.reason ||

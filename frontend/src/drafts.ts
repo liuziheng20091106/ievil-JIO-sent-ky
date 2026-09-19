@@ -132,6 +132,25 @@ export function useDraft<T>(
   return [snapshot.value as T, setValue, clear, snapshot.error] as const;
 }
 
+export function clearDraftKey(key: string) {
+  const draft = drafts.get(key);
+  if (draft) {
+    draft.active = false;
+    draft.snapshot = {
+      value: draft.initial,
+      error: "",
+      revision: draft.snapshot.revision + 1,
+    };
+    notify(draft);
+    drafts.delete(key);
+  }
+  try {
+    if (!tabError) localStorage.removeItem(namespace + key);
+  } catch {
+    // 删除失败无碍：新键会重建草稿。
+  }
+}
+
 export function clearActorDrafts(actorId: string): string {
   const belongsToActor = (key: string) => {
     try {

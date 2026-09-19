@@ -299,6 +299,9 @@ async def participate(game_id: str, body: schemas.Participation, request: Reques
                 if previous["active"]:
                     return auth.me(auth.actor_for_token(db, auth.token_hash(request), game_id))
                 if previous["kind"] == "player":
+                    if game["status"] != "lobby":
+                        # 开局后回席会继承角色牌与示人身份，必须由主持人走替换流程。
+                        raise HTTPException(409, "对局已开始，回席需主持人安排观战者替补接管")
                     seat = seat_for(game, previous["seat_id"])
                     if seat["occupant_id"] not in (None, previous["id"]):
                         raise HTTPException(409, "原席位已由替补接管")
@@ -527,6 +530,8 @@ def channel_command(db, game, actor, action_id, payload):
                 "UPDATE channels SET status='ended',ended_at=? WHERE id=?",
                 (storage.now_text(), row["id"]),
             )
+            # 拒绝者此后不得再读频道里发过的图片：解除该频道消息的图片授权。
+            db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
         elif action_id == "channel.end":
             if row["status"] != "active":
                 raise HTTPException(409, "该私信尚未开始或已经结束")
@@ -534,6 +539,7 @@ def channel_command(db, game, actor, action_id, payload):
                 "UPDATE channels SET status='ended',ended_at=? WHERE id=?",
                 (storage.now_text(), row["id"]),
             )
+            db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
             rows.append(channel_notice(db, game["id"], row, ending=True))
         else:
             raise HTTPException(422, "未知私信操作")

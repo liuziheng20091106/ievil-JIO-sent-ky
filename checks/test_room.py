@@ -166,8 +166,9 @@ class BackendFlow(unittest.TestCase):
         for headers, _, _ in players:
             self.command(headers, "lobby.ready")
         watched = self.client.get(self.root + "/state", headers=eighth).json()
-        self.assertTrue(all(len(seat["cards"]) == 2 for seat in watched["seats"]))
-        self.assertTrue(all("current_card_id" in seat for seat in watched["seats"]))
+        # 候场/调序阶段对观战者收起双牌明细，替补入场前不得提前知情。
+        self.assertTrue(all(not seat.get("cards") for seat in watched["seats"]))
+        self.assertTrue(all("current_card_id" not in seat for seat in watched["seats"]))
         self.assertNotIn("host", watched)
         denied = self.command(eighth, "lobby.ready", status=403)
         self.assertIn("观战者", denied.text)

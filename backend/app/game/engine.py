@@ -131,6 +131,11 @@ def set_witch(game, events, cid):
 
 
 def convert_daily(game, events):
+    if game.get("witch_checked_day") == game["day"]:
+        # 本日已检测过：主持人纠错改动状态后不再次自动转化，直接开夜。
+        begin_night(game, events)
+        return
+    game["witch_checked_day"] = game["day"]
     for cid in game["codex"]:
         c = game["cards"][cid]
         s = owner(game, cid)
@@ -158,8 +163,15 @@ def millia_swap(game, events, preview, swap):
 
 def apply_damage(game, events, preview, allow_reaction=True):
     millia = role_card(game, "millia")
-    swap = next(
-        (a for a in game["night"]["actions"] if a["ability"] == "swap" and a.get("effective")), None
+    # 换牌只从本夜行动里挑：夜间换牌未触发时行动整体保留，白天伤害不得
+    # 捡起昨夜残留行动重复结算（希罗回溯规则允许白天触发，不在此限）。
+    swap = (
+        next(
+            (a for a in game["night"]["actions"] if a["ability"] == "swap" and a.get("effective")),
+            None,
+        )
+        if game["half"] == "night"
+        else None
     )
     if (
         allow_reaction
@@ -221,9 +233,9 @@ def open_balloon(game, events, organizer, participants):
 
 def settle_balloon(game, events):
     balloon = game["public"]["balloon"]
-    require(
-        set(balloon["participants"]).issubset(game["balloon_choices"]),
-        "热气球仍有人未确认，可先警告",
+    # 未提交者一律按不制作兜底：主持人手动推进不再被收集中的未提交者卡住。
+    game["balloon_choices"].update(
+        {sid: "skip" for sid in balloon["participants"] if sid not in game["balloon_choices"]}
     )
     choices = {sid: game["balloon_choices"].get(sid, "skip") for sid in balloon["participants"]}
     makers = sum(value == "make" for value in choices.values())
@@ -283,7 +295,12 @@ def resolve_balloon_proposal(game, events):
 def speech_done(game, events):
     public = game["public"]
     if public.get("interrupted_speaker"):
-        public["speaker"] = public.pop("interrupted_speaker")
+        resumed = public.pop("interrupted_speaker")
+        queued = game.get("speech_queued", {})
+        if resumed in queued:
+            # 被打断者若已提前写好发言，恢复发言权时先公开，内容不随打断丢失。
+            chat_event(game, events, resumed, f"{queued.pop(resumed)}")
+        public["speaker"] = resumed
         return
     public["speaker"] = next_speaker(game, public["speaker"], events)
 
@@ -481,7 +498,10 @@ def advance(game, events):
     elif phase == "discussion":
         game["phase"] = "balloon"
     elif phase == "balloon":
-        game["balloon_proposal"] = None
+        # 先结算名单表决（通过即组织，不可能过半即作废），再清空，不静默丢弃。
+        if game["balloon_proposal"]:
+            resolve_balloon_proposal(game, events)
+            game["balloon_proposal"] = None
         if game["public"]["balloon"]["status"] == "collecting":
             settle_balloon(game, events)
         if game["status"] != "ended":
@@ -508,7 +528,7 @@ def advance(game, events):
         preview = damage_preview(game, attacks)
         apply_damage(game, events, preview)
         executed = [d["target_card"] for d in preview["deaths"] if d["cause"] == "execution"]
-        if present(game, "nanoka"):
+        if executed and present(game, "nanoka"):
             information(
                 game,
                 events,
@@ -842,6 +862,8 @@ def host_command(game, events, action, data):
         game["codex"] = list(data["roles"])
         notify(game, events, data["reason"], [], "魔典裁定")
     elif action == "host.speech":
+        # 仅发言阶段可调整：提前预设会整体旁路死者优先、魔女化更早的自动排序。
+        require(game["phase"] == "speech", "进入顺序发言阶段后才能调整发言顺序")
         ids = [s["id"] for s in game["seats"]]
         index = ids.index(data["start"])
         order = ids[index:] + ids[:index]
@@ -1264,7 +1286,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             ),
             "雪莉不能同意处决绑定的汉娜",
         )
-        game["votes"][sid] = "abstain" if sid in brainwash_targets(game) else data["choice"]
+        cast = "abstain" if sid in brainwash_targets(game) else data["choice"]
+        game["votes"][sid] = cast
+        if cast != data["choice"]:
+            labels = {"yes": "同意", "no": "不同意", "abstain": "弃票"}
+            notify(
+                game,
+                events,
+                f"受洗脑影响，你选择的「{labels[data['choice']]}」已按弃票记录。",
+                [sid],
+                "洗脑投票",
+            )
     elif action == "execution.shoot":
         card["uses"]["bullets"] -= 1
         denominator = 3 if card["witch"] else 6
@@ -1493,6 +1525,9 @@ def expire_warnings(game, now=None):
             game["balloon_choices"][sid] = "skip"
         game["warnings"].pop(sid, None)
         notify(game, events, f"{sid}号警告时间已到，当前未完成操作按放弃处理。", alert=True)
+        if game["status"] != "playing":
+            # 过期结算（含热气球）可能已结束对局：不再写状态或处理其余席位。
+            break
     balloon = game["public"]["balloon"]
     if balloon["status"] == "collecting" and set(balloon["participants"]).issubset(
         game["balloon_choices"]

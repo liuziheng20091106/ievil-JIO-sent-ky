@@ -84,10 +84,8 @@ String? _roleIdOf(GameStore store, String? seatId) {
   if (seatId == null) return null;
   for (final seat in store.view?.seats ?? const <Map<String, dynamic>>[]) {
     if (seat['id']?.toString() != seatId) continue;
-    final cards = seat['cards'];
-    if (cards is List && cards.isNotEmpty && cards.first is Map) {
-      return (cards.first as Map)['role_id']?.toString();
-    }
+    // 头像必须与服务端的 avatar_role_id 一致（上层牌已死/穗乃香示人时
+    // 它与 cards.first 的 role_id 不同）；玩家视角没有 cards 也靠它。
     return seat['avatar_role_id']?.toString();
   }
   return null;

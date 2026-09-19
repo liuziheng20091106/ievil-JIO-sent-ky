@@ -95,6 +95,8 @@ export function ActionPanel({
         state.half,
         state.phase,
         actionIdentity(action),
+        // 主持人代操作按席位分草稿，避免跨席位串改预填内容。
+        asSeat ?? null,
       ),
       actorId: session.actor?.id,
       gameId: state.id,
@@ -243,10 +245,21 @@ function ActionForm({
         ]),
     ),
   );
+  // 外部明确预填的值（如主持人30秒警告的目标席位）优先于本键旧草稿的恢复值。
+  const mergedValues =
+    initial == null
+      ? savedValues
+      : (() => {
+          const next = { ...savedValues };
+          for (const field of action.fields)
+            if (initial[field.name] !== undefined)
+              next[field.name] = initial[field.name];
+          return next;
+        })();
   const [confirmed, setConfirmed] = useState(false);
   const values = action.fields.some((field) => field.name === "confirm")
-    ? { ...savedValues, confirm: confirmed }
-    : savedValues;
+    ? { ...mergedValues, confirm: confirmed }
+    : mergedValues;
   const [error, setError] = useState("");
   const update = (name: string, value: unknown) => {
     if (name === "confirm") setConfirmed(Boolean(value));

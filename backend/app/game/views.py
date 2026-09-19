@@ -215,7 +215,8 @@ def game_view(game, actor):
             "ready": s["ready"] if host or s["id"] == own_id else None,
             "alive": lobby or (pub["alive"] if pub else current(game, s) is not None),
         }
-        if host or spectator:
+        if host or (spectator and not lobby):
+            # 候场/调序阶段不公开任何角色信息；开局后观战者才看只读棋盘。
             entry["cards"] = [card_view(game, game["cards"][cid], True) for cid in s["cards"]]
             entry["current_card_id"] = current(game, s)["id"] if current(game, s) else None
         seats.append(entry)

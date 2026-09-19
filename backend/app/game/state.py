@@ -246,6 +246,7 @@ def create_game(codex):
         "result": None,
         "winner_candidate": None,
         "day_binding": None,
+        "witch_checked_day": None,
     }
 
 

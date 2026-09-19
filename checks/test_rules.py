@@ -65,8 +65,23 @@ class SetupRules(unittest.TestCase):
         )
         self.assertFalse(observer["self"]["cards"])
         self.assertFalse(observer.get("host"))
-        self.assertTrue(all(len(seat["cards"]) == 2 for seat in observer["seats"]))
-        self.assertTrue(all(seat["current_card_id"] for seat in observer["seats"]))
+        # 候场/调序阶段不公开任何角色信息，观战替补入场前不得提前知情。
+        self.assertTrue(all(not seat.get("cards") for seat in observer["seats"]))
+        self.assertTrue(all("current_card_id" not in seat for seat in observer["seats"]))
+        # 开局后观战者恢复只读棋盘。
+        game["status"] = "playing"
+        board = game_view(
+            game,
+            {
+                "id": "observer",
+                "kind": "spectator",
+                "game_id": game["id"],
+                "seat_id": None,
+                "access_ids": ["observer"],
+            },
+        )
+        self.assertTrue(all(len(seat["cards"]) == 2 for seat in board["seats"]))
+        self.assertTrue(all(seat["current_card_id"] for seat in board["seats"]))
 
     def test_ready_progress_is_a_count_and_never_a_roster(self):
         game = create_game(DEFAULT_CODEX)

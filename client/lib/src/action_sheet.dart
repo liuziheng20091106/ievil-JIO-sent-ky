@@ -120,7 +120,8 @@ class ActionFormSheet extends StatefulWidget {
   final ActionDescriptor action;
   final String? asSeat;
 
-  /// 快捷操作预填值；已有草稿优先，不会被覆盖。
+  /// 快捷操作预填值：并入草稿键（同一动作按目标隔离草稿），
+  /// 且优先于该键下的旧草稿内容，保证快捷入口不会操作错对象。
   final Map<String, dynamic>? initial;
 
   @override
@@ -132,17 +133,21 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
   final values = <String, dynamic>{};
   final controllers = <String, TextEditingController>{};
   final drawingKeys = <String, GlobalKey<_DrawingPadState>>{};
+
+  /// 手绘笔迹提升到表单层：字段在惰性 ListView 里滚出视口后 State 会被销毁，
+  /// 留在 DrawingPad 内部会丢笔迹（提交时报「请完成绘制」或静默丢图）。
+  final strokes = <String, List<Offset?>>{};
   String? error;
   bool submitting = false;
 
   @override
   void initState() {
     super.initState();
-    values.addAll(widget.store.draftFor(widget.action, asSeat: widget.asSeat));
-    // 预填值只在没有草稿也没有字段默认值时生效。
-    widget.initial?.forEach((key, value) {
-      values.putIfAbsent(key, () => value);
-    });
+    // 草稿按目标隔离（草稿键已含 initial），恢复后由显式预填值覆盖：
+    // 快捷入口带出的目标（席位/待办 id）必须优先于旧草稿残留。
+    values.addAll(widget.store
+        .draftFor(widget.action, asSeat: widget.asSeat, initial: widget.initial));
+    values.addAll(widget.initial ?? const <String, dynamic>{});
     for (final field in widget.action.fields) {
       if (!values.containsKey(field.name) && field.raw.containsKey('default')) {
         values[field.name] = field.raw['default'];
@@ -156,12 +161,24 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
           );
         case 'checkbox':
           values.putIfAbsent(field.name, () => false);
+        case 'select':
+          // 草稿/预填里过期的选项值不允许保留：否则必填校验靠旧值通过，
+          // 提交的是当前选项里根本不存在的取值。
+          final selected = values[field.name];
+          if (selected != null &&
+              field.options.every(
+                  (option) => option['value'].toString() != selected.toString())) {
+            values.remove(field.name);
+          }
         case 'multiselect':
+          final allowed =
+              field.options.map((option) => option['value'].toString()).toSet();
           values[field.name] = List<String>.from(
             values[field.name] as List? ?? const [],
-          );
+          )..retainWhere(allowed.contains);
         case 'drawing':
           drawingKeys[field.name] = GlobalKey<_DrawingPadState>();
+          strokes[field.name] = <Offset?>[];
       }
     }
   }
@@ -483,7 +500,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               final retained =
                   values[field.name]?.toString().isNotEmpty == true;
               final drawn =
-                  drawingKeys[field.name]!.currentState?.hasDrawing == true;
+                  strokes[field.name]?.any((point) => point != null) == true;
               return field.required && !retained && !drawn ? '请完成绘制' : null;
             },
             builder: (state) => Column(
@@ -515,12 +532,15 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                   ],
                 ),
                 const SizedBox(height: AppSpacing.sm),
-                DrawingPad(key: drawingKeys[field.name]),
+                DrawingPad(
+                  key: drawingKeys[field.name],
+                  points: strokes[field.name]!,
+                ),
                 Row(
                   children: [
                     TextButton.icon(
                       onPressed: () {
-                        drawingKeys[field.name]!.currentState?.clear();
+                        setState(() => strokes[field.name]!.clear());
                         values.remove(field.name);
                         state.didChange(null);
                         _saveDraft();
@@ -966,7 +986,8 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
   }
 
   void _saveDraft() {
-    widget.store.saveDraft(widget.action, values, asSeat: widget.asSeat);
+    widget.store.saveDraft(widget.action, values,
+        asSeat: widget.asSeat, initial: widget.initial);
   }
 
   /// 单次确认：校验通过后直接提交，不再弹二次确认框。
@@ -980,9 +1001,17 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     for (final field in widget.action.fields.where(
       (item) => item.type == 'drawing',
     )) {
-      final pad = drawingKeys[field.name]!.currentState;
-      if (pad?.hasDrawing == true) {
-        values[field.name] = await pad!.toDataUri();
+      final hasDrawing =
+          strokes[field.name]?.any((point) => point != null) == true;
+      if (hasDrawing) {
+        // 画板滚出视口后没有可截图的渲染对象；笔迹已在 strokes 里保留，
+        // 让用户滚回去再提交，绝不静默丢图。
+        final pad = drawingKeys[field.name]?.currentState;
+        if (pad == null) {
+          setState(() => error = '请回到「${field.label}」处再提交，已画的笔迹不会丢失');
+          return;
+        }
+        values[field.name] = await pad.toDataUri();
       }
     }
     for (final field in widget.action.fields) {
@@ -1004,7 +1033,8 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     }
     setState(() => submitting = true);
     try {
-      await widget.store.execute(widget.action, values, asSeat: widget.asSeat);
+      await widget.store.execute(widget.action, values,
+          asSeat: widget.asSeat, initial: widget.initial);
       if (mounted) {
         Navigator.pop(context);
       }
@@ -1229,8 +1259,11 @@ class _OptionSheetState extends State<_OptionSheet> {
   }
 }
 
+/// 手绘板：笔迹由调用方持有（表单层 State），滚出惰性列表重建后不丢。
 class DrawingPad extends StatefulWidget {
-  const DrawingPad({super.key});
+  const DrawingPad({super.key, required this.points});
+
+  final List<Offset?> points;
 
   @override
   State<DrawingPad> createState() => _DrawingPadState();
@@ -1238,11 +1271,8 @@ class DrawingPad extends StatefulWidget {
 
 class _DrawingPadState extends State<DrawingPad> {
   final boundaryKey = GlobalKey();
-  final points = <Offset?>[];
 
-  bool get hasDrawing => points.any((point) => point != null);
-
-  void clear() => setState(points.clear);
+  bool get hasDrawing => widget.points.any((point) => point != null);
 
   Future<String> toDataUri() async {
     final boundary = boundaryKey.currentContext!.findRenderObject()!
@@ -1259,7 +1289,7 @@ class _DrawingPadState extends State<DrawingPad> {
         child: GestureDetector(
           onPanStart: (event) => _add(event.localPosition),
           onPanUpdate: (event) => _add(event.localPosition),
-          onPanEnd: (_) => setState(() => points.add(null)),
+          onPanEnd: (_) => setState(() => widget.points.add(null)),
           child: Container(
             height: 200,
             decoration: BoxDecoration(
@@ -1268,7 +1298,7 @@ class _DrawingPadState extends State<DrawingPad> {
               borderRadius: BorderRadius.circular(AppRadius.field),
             ),
             child: CustomPaint(
-              painter: _StrokePainter(points, AppColors.text),
+              painter: _StrokePainter(widget.points, AppColors.text),
               child: hasDrawing
                   ? null
                   : const Center(
@@ -1285,7 +1315,7 @@ class _DrawingPadState extends State<DrawingPad> {
         ),
       );
 
-  void _add(Offset point) => setState(() => points.add(point));
+  void _add(Offset point) => setState(() => widget.points.add(point));
 }
 
 class _StrokePainter extends CustomPainter {

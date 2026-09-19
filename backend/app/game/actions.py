@@ -7,6 +7,7 @@ from .state import (
     current,
     eligible_voters,
     hiro_dilemma,
+    living,
     lost_by_challenge,
     pending_nominators,
     owner,
@@ -157,9 +158,18 @@ def outstanding_seats(game):
             and role_card(game, cid)["uses"].get("bullets", 0) > 0
             and owner(game, cid)["id"] not in game["execution_ready"]
         ]
+    proposal = game.get("balloon_proposal")
+    if proposal:
+        # 名单表决期所有未表态的存活玩家都卡住流程，警告与自动推进都要等他们。
+        result += [s["id"] for s in living(game) if s["id"] not in proposal["votes"]]
     balloon = game["public"]["balloon"]
     if balloon["status"] == "collecting":
-        result += [sid for sid in balloon["participants"] if sid not in game["balloon_choices"]]
+        # 收集横跨白天多个阶段，期间出局者无法再提交，按默认跳过处理、不算待办。
+        result += [
+            sid
+            for sid in balloon["participants"]
+            if sid not in game["balloon_choices"] and current(game, sid)
+        ]
     return list(dict.fromkeys(result))
 
 
@@ -504,7 +514,7 @@ def host_actions(game):
                     blocking=True,
                 )
             )
-        result.extend(
+        speech_controls = (
             [
                 action(
                     "host.speech",
@@ -526,7 +536,14 @@ def host_actions(game):
                         ),
                     ],
                     group="流程",
-                ),
+                )
+            ]
+            if game["phase"] == "speech"
+            else []
+        )
+        result.extend(
+            speech_controls
+            + [
                 action(
                     "host.damage",
                     "裁定伤害 / 出局",
@@ -1017,7 +1034,7 @@ def actions_for(game, actor):
             )
         )
     proposal = game["balloon_proposal"]
-    if proposal and card and sid not in proposal["votes"]:
+    if proposal and card and current(game, s) and sid not in proposal["votes"]:
         result.append(
             action(
                 "balloon.agree",
@@ -1032,7 +1049,6 @@ def actions_for(game, actor):
         and not present(game, "arisa")
         and balloon["day"] != game["day"]
         and not proposal
-        and phase in {"discussion", "balloon"}
     ):
         result.append(
             action(

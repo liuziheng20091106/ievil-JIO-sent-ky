@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -484,7 +485,13 @@ class GameStore extends ChangeNotifier {
       await _startLive();
       error = null;
     } on ApiException catch (failure) {
-      error = failure.message;
+      if (failure.statusCode == 401) {
+        // 身份失效/被移出对局：清会话回登录页，保留提示说明原因。
+        await _clearSession();
+        error = failure.message;
+      } else {
+        error = failure.message;
+      }
     } on FormatException catch (failure) {
       error = failure.message;
     }
@@ -516,6 +523,24 @@ class GameStore extends ChangeNotifier {
     error = null;
     await preferences.remove(_gameKey);
     notifyListeners();
+    // 回大厅前身份已失效（被移出/换了新局）：刷新只会再撞 401，
+    // 直接清会话回登录页，由登录页展示身份失效提示。
+    final token = await secureStorage.read(key: _tokenKey);
+    if (token == null) {
+      await _clearSession();
+      error = '登录状态已失效，请重新登录';
+      notifyListeners();
+      return;
+    }
+    api!.token = token;
+    try {
+      await _consumeSession(await api!.me(), token: token);
+    } on ApiException {
+      await _clearSession();
+      error = '登录状态已失效，请重新登录';
+      notifyListeners();
+      return;
+    }
     await refreshLobby();
     notifyListeners();
   }
@@ -532,6 +557,13 @@ class GameStore extends ChangeNotifier {
       onConnected: catchUpMessages,
       onStatus: (status) {
         connectionStatus = status;
+        // 服务端用 4401 终结身份（被移出对局/该局已换成新局/令牌作废），
+        // 或握手期就 401/403：留在局里只会反复失败，清会话回登录页。
+        // 大厅视图由 returnToLobby 的会话校验兜底。
+        if (status.startsWith('登录状态已失效') || status == '登录已失效，请重新登录') {
+          error = '身份已失效（可能被移出对局或该局已结束），请重新登录';
+          unawaited(_clearSession());
+        }
         notifyListeners();
       },
     )..start();
@@ -541,16 +573,25 @@ class GameStore extends ChangeNotifier {
     try {
       switch (event['type']) {
         case 'sync':
-          _applyView(GameView.fromJson(event['state']));
-          final incoming = jsonArray(event['messages'], 'sync.messages')
+          final incoming = GameView.fromJson(event['state']);
+          // 换局窗口期旧连接的事件可能晚于新局的首次同步到达：
+          // 不属于当前对局的状态与消息一律丢弃，避免旧局覆盖新局状态。
+          if (incoming.id != gameId) return;
+          _applyView(incoming);
+          final messages = jsonArray(event['messages'], 'sync.messages')
               .map(GameMessage.fromJson);
-          _mergeMessages(incoming);
+          _mergeMessages(messages);
         case 'state':
-          _applyView(GameView.fromJson(event['state']));
+          final incoming = GameView.fromJson(event['state']);
+          if (incoming.id != gameId) return;
+          _applyView(incoming);
         case 'message':
           final message = GameMessage.fromJson(event['message']);
           if (_matchesScope(message, messageScope)) _mergeMessages([message]);
-          if (message.id > _readCursor) unreadMessageCount++;
+          // 自己的发言本地已合并且已读，不该再加未读角标。
+          if (message.id > _readCursor && message.senderId != actor?.id) {
+            unreadMessageCount++;
+          }
       }
     } on FormatException catch (failure) {
       error = failure.message;
@@ -575,12 +616,15 @@ class GameStore extends ChangeNotifier {
       newActionCount = actionKeys.difference(_actionBaseline!).length;
     }
 
-    final warning = next.self['warning_deadline'] != null
+    // 红标只数阻塞项：主持人待办里还有非阻塞的阶段推进提醒，
+    // 按全长统计会让红点常亮，失去提醒意义。
+    final tasks = next.host['tasks'];
+    warningCount = next.self['warning_deadline'] != null
         ? 1
-        : (next.host['tasks'] is List
-            ? (next.host['tasks'] as List).length
+        : (tasks is List
+            ? tasks.where((task) => task is Map && task['blocking'] == true)
+                .length
             : 0);
-    warningCount = warning;
 
     final privateKey = jsonEncode({
       'cards': next.self['cards'],
@@ -770,10 +814,18 @@ class GameStore extends ChangeNotifier {
     ActionDescriptor action,
     Map<String, dynamic> values, {
     String? asSeat,
+    Map<String, dynamic>? initial,
   }) async {
     final id = gameId;
     final current = view;
-    if (api == null || id == null || current == null || writeBusy) return;
+    // 静默 return 会让表单把“没提交”当成“已提交”直接关闭，
+    // 用户以为行动已生效。不可用必须显式报错，由表单提示并保留草稿。
+    if (api == null || id == null || current == null) {
+      throw const ApiException('对局状态尚未就绪，请刷新后重试');
+    }
+    if (writeBusy) {
+      throw const ApiException('有操作正在提交，请稍候再试');
+    }
     final unsupported = action.unsupportedReason;
     if (unsupported != null) throw ApiException(unsupported);
     writeBusy = true;
@@ -792,13 +844,18 @@ class GameStore extends ChangeNotifier {
       // 否则用户会重开表单再提交一次，造成重复行动。残留的草稿无害，
       // 下次打开表单时还能看到并手动清掉。
       try {
-        await clearDraft(action, asSeat: asSeat);
+        await clearDraft(action, asSeat: asSeat, initial: initial);
       } catch (_) {
         // 草稿清理是尽力而为。
       }
     } on ApiException catch (failure) {
-      error = failure.message;
-      await _reconcileAfterWriteFailure();
+      if (failure.statusCode == 401) {
+        // 令牌已失效：继续留在对局里只会反复 401，清会话回登录页。
+        await _clearSession();
+      } else {
+        error = failure.message;
+        await _reconcileAfterWriteFailure();
+      }
       rethrow;
     } on FormatException catch (failure) {
       // 命令可能已经生效，但返回的形状客户端读不懂：刷新状态并提示，
@@ -822,7 +879,13 @@ class GameStore extends ChangeNotifier {
     }
   }
 
-  String draftKey(ActionDescriptor action, {String? asSeat}) {
+  /// 草稿按对局、参与身份、频道/表单与动作目标隔离：同一动作针对不同
+  /// 席位/待办的预填草稿互不覆盖（快捷入口的目标 id 体现在 action.payload 里）。
+  String draftKey(
+    ActionDescriptor action, {
+    String? asSeat,
+    Map<String, dynamic>? initial,
+  }) {
     final current = view;
     return jsonEncode([
       endpoint.toString(),
@@ -835,12 +898,18 @@ class GameStore extends ChangeNotifier {
       current?.phase,
       action.id,
       action.payload,
+      initial ?? const <String, dynamic>{},
     ]);
   }
 
-  Map<String, dynamic> draftFor(ActionDescriptor action, {String? asSeat}) {
-    final encoded =
-        preferences.getString('draft:${draftKey(action, asSeat: asSeat)}');
+  Map<String, dynamic> draftFor(
+    ActionDescriptor action, {
+    String? asSeat,
+    Map<String, dynamic>? initial,
+  }) {
+    // 显式预填值（快捷入口按目标带出）使用独立草稿键，与徒手打开表单的草稿隔离。
+    final encoded = preferences.getString(
+        'draft:${draftKey(action, asSeat: asSeat, initial: initial)}');
     if (encoded == null) return {};
     try {
       return jsonObject(jsonDecode(encoded), 'draft');
@@ -853,13 +922,21 @@ class GameStore extends ChangeNotifier {
     ActionDescriptor action,
     Map<String, dynamic> values, {
     String? asSeat,
+    Map<String, dynamic>? initial,
   }) async {
     await preferences.setString(
-        'draft:${draftKey(action, asSeat: asSeat)}', jsonEncode(values));
+      'draft:${draftKey(action, asSeat: asSeat, initial: initial)}',
+      jsonEncode(values),
+    );
   }
 
-  Future<void> clearDraft(ActionDescriptor action, {String? asSeat}) async {
-    await preferences.remove('draft:${draftKey(action, asSeat: asSeat)}');
+  Future<void> clearDraft(
+    ActionDescriptor action, {
+    String? asSeat,
+    Map<String, dynamic>? initial,
+  }) async {
+    await preferences.remove(
+        'draft:${draftKey(action, asSeat: asSeat, initial: initial)}');
   }
 
   String _preferenceKey(String suffix) =>

@@ -225,8 +225,14 @@ function Entry() {
         );
         if (!active) return;
         setChallenge(next);
-        if (next.status === "completed") await refresh();
-        else timer = setTimeout(() => void poll(), 1500);
+        if (next.status === "completed") {
+          try {
+            await refresh();
+          } catch (failure) {
+            if (active)
+              setError(`已进入成功，但状态加载失败：${errorText(failure)} 请刷新页面重试。`);
+          }
+        } else timer = setTimeout(() => void poll(), 1500);
       } catch (failure) {
         if (active) setError(errorText(failure));
       }
@@ -624,7 +630,7 @@ const phaseHints: Record<string, string> = {
   night_review: "主持人审阅预结算、处理待裁定事项，然后公布夜间结果。",
   night_results: "主持人公布死亡与证物；本夜出局者可在此阶段提交遗留证物。",
   speech:
-    "按发言顺序依次出声；轮到你时说完点「结束本次发言」交给下一位。未轮到的席位可以「提前发言」（写下内容立即公开）或「本轮不发言（跳过我的顺序）」。",
+    "按发言顺序依次出声；轮到你时说完点「结束本次发言」交给下一位。未轮到的席位可以「提前发言」（提前写下内容，轮到你时自动公开）或「本轮不发言（跳过我的顺序）」。",
   discussion: "自由讨论；主持人认为讨论充分后推进到热气球。",
   balloon: "热气球参与者私下提交「制作」或「破坏」；其他人等待。",
   nomination:
@@ -1494,7 +1500,7 @@ function NightLedger({ onWarn }: { onWarn: (seatId: string) => void }) {
   const outstanding = new Set(
     (host.tasks ?? [])
       .filter((task) => task.kind === "night")
-      .map((task) => task.seats[0]),
+      .flatMap((task) => task.seats),
   );
   const rows = state.seats.filter(
     (seat) =>

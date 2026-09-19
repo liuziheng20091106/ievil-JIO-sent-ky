@@ -88,20 +88,6 @@ def initialize():
                 )
         db.execute("DROP TABLE IF EXISTS sessions")
         db.execute("DROP TABLE IF EXISTS invites")
-        for row in db.execute("SELECT state FROM games WHERE status='lobby'").fetchall():
-            game = json.loads(row["state"])
-            if game["phase"] == "lobby" and game["cards"]:
-                game["phase"] = "ordering"
-                game["version"] += 1
-                game["snapshots"] = []
-                for seat in game["seats"]:
-                    seat["ready"] = False
-                save_game(db, game)
-                db.execute(
-                    "UPDATE messages SET avatar_role_id=NULL "
-                    "WHERE game_id=? AND kind='chat' AND sender_id!='host'",
-                    (game["id"],),
-                )
 
 
 @contextmanager

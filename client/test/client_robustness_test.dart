@@ -221,6 +221,66 @@ void main() {
       expect(store.restoring, isFalse);
     });
   });
+
+  group('动作描述匹配与草稿隔离', () {
+    ActionDescriptor descriptor(Map<String, dynamic> payload) =>
+        ActionDescriptor.fromJson({
+          'id': 'host.resolve',
+          'ui_version': 1,
+          'short_label': '裁定',
+          'label': '裁定',
+          'payload': payload,
+          'fields': <dynamic>[],
+        });
+
+    test('多条同 id 待办按 payload 匹配各自的描述与草稿', () async {
+      final store = await previewStore();
+      final first = descriptor({'pending_id': 'p-1'});
+      final second = descriptor({'pending_id': 'p-2'});
+      final initial = {'pending_id': 'p-2', 'note': '目标B'};
+      await store.saveDraft(second, {'note': '旧草稿'}, initial: initial);
+
+      // 点 B 待办只能拿到 B 的草稿；A 待办与徒手打开（无预填）互不可见。
+      expect(store.draftFor(second, initial: initial), {'note': '旧草稿'});
+      expect(store.draftFor(first, initial: {'pending_id': 'p-1'}), isEmpty);
+      expect(store.draftFor(first), isEmpty);
+
+      // payload 不同的描述不允许共用草稿键，否则点 A 会提交成 B 的内容。
+      expect(store.draftKey(first), isNot(store.draftKey(second)));
+      expect(
+        store.draftKey(second, initial: initial),
+        isNot(store.draftKey(second)),
+        reason: '显式预填值必须参与草稿键，目标 id 不同的草稿互相隔离',
+      );
+    });
+  });
+
+  group('实时连接终态', () {
+    test('服务端以 4401 关闭（身份失效/被移出/换新局）时停止重连', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var attempts = 0;
+      final statuses = <String>[];
+      final subscription = server.listen((request) async {
+        attempts++;
+        final socket = await WebSocketTransformer.upgrade(request);
+        await socket.close(4401, '身份失效');
+      });
+      final connection = LiveConnection(
+        endpoint: ServerEndpoint.parse('http://127.0.0.1:${server.port}'),
+        token: 'token-abc',
+        onEvent: (_) {},
+        onConnected: () async {},
+        onStatus: statuses.add,
+      )..start();
+      // 足够跑完两轮退避（1s + 2s）：如果还在重连，attempts 会超过 1。
+      await Future<void>.delayed(const Duration(milliseconds: 4200));
+      await connection.stop();
+      await subscription.cancel();
+      await server.close(force: true);
+      expect(attempts, 1, reason: '4401 是身份终态，不允许无限重连');
+      expect(statuses, contains('登录状态已失效，请重新进入'));
+    });
+  });
 }
 
 /// read 抛出存储层异常（PlatformException 一类），恢复路径必须整体兜住。

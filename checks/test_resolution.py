@@ -106,8 +106,9 @@ class ResolutionEdges(unittest.TestCase):
         self.assertTrue(game_view(game, player(game, "1"))["information"])
         self.assertFalse(game_view(game, player(game, "2"))["information"])
 
-    def test_millia_swap_is_immediate_and_has_no_host_step(self):
-        game = arranged_game()
+    def test_millia_leftover_swap_action_is_not_replayed_by_day_damage(self):
+        # 夜间未死的米莉亚换牌行动残留到白天后，白天伤害不得捡起它重复结算。
+        game = arranged_game("night_review", "night")
         game["night"]["actions"] = [
             {
                 "ability": "swap",
@@ -117,19 +118,18 @@ class ResolutionEdges(unittest.TestCase):
                 "effective": True,
             }
         ]
+        game.update(phase="discussion", half="day")
         command(
             game,
             HOST,
             "host.damage",
-            {"targets": ["millia"], "effect": "death", "source": "coco", "reason": "测试临死结算"},
+            {"targets": ["millia"], "effect": "death", "source": "coco", "reason": "测试白天残留"},
         )
-        self.assertFalse(any(item["kind"] == "millia" for item in game["pending"]))
-        self.assertTrue(game["cards"]["millia"]["uses"].get("swap"))
-        # 默认跟随原角色牌：上层牌按换牌后的归属结算，原席位改玩换来的牌。
-        self.assertEqual(game_view(game, player(game, "1"))["self"]["current_card_id"], "meruru")
-        self.assertEqual(game_view(game, player(game, "3"))["self"]["current_card_id"], "hanna")
+        # 换牌未触发：技能不消耗、上层牌不动、米莉亚死后下层艾玛登场。
+        self.assertFalse(game["cards"]["millia"]["uses"].get("swap"))
+        self.assertEqual(game["seats"][0]["cards"], ["millia", "emma"])
+        self.assertEqual(game_view(game, player(game, "1"))["self"]["current_card_id"], "emma")
         self.assertFalse(game["cards"]["millia"]["alive"])
-        self.assertTrue(game["cards"]["meruru"]["alive"])
 
     def test_night_preview_swaps_immediately_without_a_host_step(self):
         game = arranged_game("night_review", "night")
@@ -372,6 +372,9 @@ class PlaytestFixes(unittest.TestCase):
         self.assertTrue(
             any(event["kind"] == "alert" and "质疑失败" in event["text"] for event in events)
         )
+        game["phase"] = "speech"
+        game["public"]["speech_order"] = [s["id"] for s in game["seats"]]
+        game["public"]["speaker"] = "1"
         events = command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         self.assertEqual(
             [event["kind"] for event in events if "发言顺序" in event["text"]],

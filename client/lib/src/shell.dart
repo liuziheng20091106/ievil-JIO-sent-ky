@@ -1729,6 +1729,17 @@ class _LayeredAvatar extends StatelessWidget {
       );
 }
 
+/// 警告截止时间：服务端给的是 Unix 秒浮点，直接渲染会变成
+/// 「请在 1771234567.89 前完成操作」。统一换算成本机时间显示。
+String _warningDeadlineText(Object? value) {
+  final epoch = value is num ? value.toDouble() : double.tryParse('$value');
+  if (epoch == null) return '规定时间';
+  return formatMessageTime(
+    DateTime.fromMillisecondsSinceEpoch((epoch * 1000).round(), isUtc: true)
+        .toIso8601String(),
+  );
+}
+
 /// 我的页：账号、双牌、退出。
 class ProfilePage extends StatelessWidget {
   const ProfilePage({
@@ -1822,7 +1833,7 @@ class ProfilePage extends StatelessWidget {
                   const SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
-                      '主持人已警告，请在 ${self['warning_deadline']} 前完成操作。',
+                      '主持人已警告，请在 ${_warningDeadlineText(self['warning_deadline'])} 前完成操作。',
                       style:
                           const TextStyle(fontSize: 13, color: AppColors.text),
                     ),
@@ -2182,13 +2193,32 @@ class _HostManagementPageState extends State<HostManagementPage> {
     );
   }
 
+  /// 主持人待办可能同时存在多条同动作条目（多份 host.resolve 裁定并存）。
+  /// 必须按待办自带的 payload 匹配动作描述：只按 id 兜底到第一个会把
+  /// A 待办的表单提交成 B 待办的裁定；找不到匹配说明视图已过期，禁止兜底。
   Future<void> _runTask(String actionId, Map<String, dynamic> payload) async {
-    final action = widget.store.view!.allActions.firstWhere(
-      (item) => item.id == actionId,
-      orElse: () => widget.store.view!.allActions.first,
-    );
+    final candidates = (widget.store.view?.allActions ??
+            const <ActionDescriptor>[])
+        .where((item) => item.id == actionId)
+        .toList();
+    ActionDescriptor? matched;
+    for (final action in candidates) {
+      final matches = payload.entries.every(
+        (entry) => action.payload[entry.key] == entry.value,
+      );
+      if (matches) {
+        matched = action;
+        break;
+      }
+    }
     if (!mounted) return;
-    await showActionForm(context, widget.store, action);
+    if (matched == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('该待办已变化，请刷新状态后重试')),
+      );
+      return;
+    }
+    await showActionForm(context, widget.store, matched, initial: payload);
   }
 
   Future<void> _seatActions(String seatId) async {

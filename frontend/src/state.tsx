@@ -60,7 +60,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [connection, setConnection] = useState<Connection>("connecting");
   const latest = useRef(0);
   const actor = useRef<Session["actor"]>(null);
-  const scope = JSON.stringify([session.game_id, session.actor?.id ?? null]);
+  // 身份域含 kind+seat_id：观战接管席位后 actor.id 不变，但视角与私密草稿都不得带入新席位。
+  const actorScope = (actor: Session["actor"]) =>
+    actor ? [actor.id, actor.kind, actor.seat_id ?? null] : null;
+  const scope = JSON.stringify([
+    session.game_id,
+    actorScope(session.actor),
+  ]);
   const identity = useRef(scope);
   const mutation = useRef(false);
   const mergeMessages = useCallback(
@@ -88,10 +94,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, []);
   const adoptSession = useCallback(
     async (next: Session) => {
-      const owner = JSON.stringify([next.game_id, next.actor?.id ?? null]);
+      const owner = JSON.stringify([next.game_id, actorScope(next.actor)]);
       if (identity.current !== owner) {
-        if (actor.current && actor.current.id !== next.actor?.id)
-          setDraftError(clearActorDrafts(actor.current.id));
+        // 身份域切换（换号、登出、观战接管席位等）：私密草稿不留给新身份。
+        if (actor.current) setDraftError(clearActorDrafts(actor.current.id));
         identity.current = owner;
         actor.current = next.actor;
         latest.current = 0;
@@ -152,7 +158,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
             cursor,
             ...page.messages.map((message) => message.id),
           );
-          if (!page.has_more || nextCursor === cursor) return;
+          // has_more 但本页没有新消息：相同参数重拉只会原地空转，直接停下。
+          if (!page.has_more || nextCursor === cursor || !page.messages.length)
+            return;
           cursor = nextCursor;
         }
       } catch (failure) {
@@ -189,7 +197,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       active = false;
       disconnect();
     };
-  }, [session.actor?.id, session.game_id, acceptState, mergeMessages]);
+  }, [
+    session.actor?.id,
+    session.actor?.kind,
+    session.actor?.seat_id,
+    session.game_id,
+    acceptState,
+    mergeMessages,
+  ]);
   const authenticate = async (path: string, body: unknown) => {
     await adoptSession(await api<Session>(path, body));
     setError("");
@@ -212,7 +227,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const owner = identity.current;
     const next = await api<GameView>("/games", { codex });
     if (identity.current !== owner) return;
-    identity.current = JSON.stringify([next.id, actor.current?.id ?? null]);
+    identity.current = JSON.stringify([next.id, actorScope(actor.current)]);
     latest.current = 0;
     setMessages([]);
     setState(next);

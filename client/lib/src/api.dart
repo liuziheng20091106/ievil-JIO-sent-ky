@@ -149,7 +149,13 @@ class GameApi {
     Map<String, dynamic>? body,
   }) async {
     final response = await _open(method, path, query: query, body: body);
-    final text = await response.transform(utf8.decoder).join();
+    // 头到了不代表体会来：慢速或挂起的响应体也要受超时约束。
+    final text = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(const Duration(seconds: 25), onTimeout: () {
+      throw const ApiException('服务器响应超时');
+    });
     Object? decoded;
     if (text.isNotEmpty) {
       try {
@@ -299,6 +305,12 @@ class LiveConnection {
           } catch (failure) {
             onStatus('事件处理失败：$failure');
           }
+        }
+        // 4401 是服务端主动终结身份：未登录/被移出对局/该局已被新局替换。
+        // 与握手期的 401/403 同为终态，重连只会无限空转。
+        if (socket.closeCode == 4401) {
+          onStatus('登录状态已失效，请重新进入');
+          return;
         }
       } on HandshakeException {
         onStatus('TLS 证书验证失败');
