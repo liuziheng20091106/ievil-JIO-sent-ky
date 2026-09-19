@@ -93,8 +93,16 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.cbClsExtra = 0;
     window_class.cbWndExtra = 0;
     window_class.hInstance = GetModuleHandle(nullptr);
-    window_class.hIcon =
-        LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+    // 显式按大图标尺寸加载：LoadIcon 只可靠地取到资源里最小的一帧，任务栏和
+    // Alt+Tab 会因此拿到 16x16 放大后的糊图。LR_DEFAULTSIZE 取系统大图标尺寸。
+    window_class.hIcon = static_cast<HICON>(LoadImage(
+        window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, 0, 0,
+        LR_DEFAULTSIZE | LR_SHARED));
+    if (window_class.hIcon == nullptr) {
+      // 退化路径：资源缺失时至少不要留下无图标的窗口类。
+      window_class.hIcon =
+          LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+    }
     window_class.hbrBackground = 0;
     window_class.lpszMenuName = nullptr;
     window_class.lpfnWndProc = Win32Window::WndProc;
@@ -142,9 +150,38 @@ bool Win32Window::Create(const std::wstring& title,
     return false;
   }
 
+  ApplyWindowIcons(window);
   UpdateTheme(window);
 
   return OnCreate();
+}
+
+// static
+void Win32Window::ApplyWindowIcons(HWND window) noexcept {
+  HINSTANCE instance = GetModuleHandle(nullptr);
+  // 大图标用于 Alt+Tab 与应用切换，小图标用于标题栏和任务栏；两者都显式设置，
+  // 避免只设大图标时系统把小图标缩放成模糊图像。
+  // 变量名避开 windows.h 的 large / small 宏。
+  const int big_width = GetSystemMetrics(SM_CXICON);
+  const int big_height = GetSystemMetrics(SM_CYICON);
+  const int small_width = GetSystemMetrics(SM_CXSMICON);
+  const int small_height = GetSystemMetrics(SM_CYSMICON);
+
+  HICON big_icon = static_cast<HICON>(
+      LoadImage(instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON, big_width,
+                big_height, LR_SHARED));
+  HICON small_icon = static_cast<HICON>(
+      LoadImage(instance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
+                small_width, small_height, LR_SHARED));
+
+  if (big_icon != nullptr) {
+    SendMessage(window, WM_SETICON, ICON_BIG,
+                reinterpret_cast<LPARAM>(big_icon));
+  }
+  if (small_icon != nullptr) {
+    SendMessage(window, WM_SETICON, ICON_SMALL,
+                reinterpret_cast<LPARAM>(small_icon));
+  }
 }
 
 bool Win32Window::Show() {

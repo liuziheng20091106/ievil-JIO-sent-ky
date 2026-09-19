@@ -92,6 +92,9 @@ class Win32Window {
   // Retrieves a class instance pointer for |window|
   static Win32Window* GetThisFromHandle(HWND const window) noexcept;
 
+  // 按系统大/小图标尺寸从可执行文件资源设置窗口图标。
+  static void ApplyWindowIcons(HWND const window) noexcept;
+
   // Update the window frame's theme to match the system theme.
   static void UpdateTheme(HWND const window);
 
