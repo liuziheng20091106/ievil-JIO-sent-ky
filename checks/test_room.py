@@ -185,7 +185,12 @@ class BackendFlow(unittest.TestCase):
             "channel.create",
             {"name": "作战", "participant_ids": [second_actor["id"], "host"]},
         ).json()
-        channel = next(item for item in created["channels"] if item["label"].endswith("作战"))
+        channel = next(
+            item
+            for item in created["channels"]
+            if {member["id"] for member in item["members"]}
+            == {first_actor["id"], second_actor["id"], "host"}
+        )
         self.assertEqual(channel["status"], "pending")
         invited = self.client.get(self.root + "/state", headers=second).json()
         pending = next(item for item in invited["channels"] if item["id"] == channel["id"])
@@ -249,7 +254,11 @@ class BackendFlow(unittest.TestCase):
         created = self.command(
             self.host, "channel.create", {"name": "密谈", "participant_ids": [player_actor["id"]]}
         ).json()
-        channel = next(item for item in created["channels"] if item["label"].endswith("密谈"))
+        channel = next(
+            item
+            for item in created["channels"]
+            if {member["id"] for member in item["members"]} == {player_actor["id"], "host"}
+        )
         self.assertEqual(channel["status"], "active")
         self.command(player, "channel.end", {"channel_id": channel["id"]})
         system = self.client.get(self.root + "/messages?scope=system", headers=stranger).json()[

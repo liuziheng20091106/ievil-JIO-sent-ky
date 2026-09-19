@@ -104,11 +104,20 @@ def channels_for(db, game, actor, domain_view):
                 summaries.append({"id": "host", "name": "主持人", "kind": "host", "seat_id": None})
             elif member_id in by_id:
                 summaries.append(participant_summary(by_id[member_id]))
+        # 频道名统一按成员生成：玩家用号位，主持人用「主持人」；观战者与未知身份回退名字。
+        title = "、".join(
+            "主持人"
+            if member["kind"] == "host"
+            else f"{member['seat_id']}号"
+            if member["kind"] == "player" and member["seat_id"]
+            else member["name"]
+            for member in summaries
+        )
         actions = channel_actions(row, actor, invitation, current) if not ended else []
         result.append(
             {
                 "id": row["id"],
-                "label": "私密 · " + row["name"],
+                "label": "私密 · " + title,
                 "status": row["status"],
                 "creator_id": row["creator_id"],
                 "members": summaries,
@@ -158,7 +167,6 @@ def channel_create_descriptor(db, game, actor, participants):
         "channel.create",
         "创建一对一或多人私信",
         [
-            field("name", "频道名称"),
             field("participant_ids", "邀请成员", "multiselect", options, min=1, max=20),
         ],
         group="私信",

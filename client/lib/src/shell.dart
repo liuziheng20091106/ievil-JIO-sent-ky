@@ -1526,6 +1526,19 @@ class SeatCard extends StatelessWidget {
     final occupied = seat['occupied'] == true;
     final alive = seat['alive'] != false;
     final name = seat['name']?.toString() ?? '';
+    // 仅主持人/观战视角下发 cards；其中 witch 标记用于红框提示魔女化角色。
+    final cards = seat['cards'];
+    final witches = cards is List
+        ? cards
+            .whereType<Map>()
+            .where((card) => card['witch'] == true)
+            .map((card) =>
+                roleVisual(card['role_id']?.toString())?.name ??
+                card['role_id']?.toString() ??
+                '')
+            .where((label) => label.isNotEmpty)
+            .toList()
+        : const <String>[];
     return Card(
       child: InkWell(
         onTap: onTap,
@@ -1578,6 +1591,10 @@ class SeatCard extends StatelessWidget {
                           const Tag('在线', icon: Icons.wifi_tethering),
                         if (seat['ready'] == true)
                           const Tag('已准备', icon: Icons.check),
+                        for (final label in witches)
+                          Tag('$label · 魔女',
+                              color: AppColors.danger,
+                              background: AppColors.dangerSoft),
                       ],
                     ),
                   ],
@@ -1754,7 +1771,8 @@ class ProfilePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final self = store.view!.self;
+    final view = store.view!;
+    final self = view.self;
     final cards = self['cards'] is List ? self['cards'] as List : const [];
     final currentId = self['current_card_id']?.toString();
     final actor = store.actor!;
@@ -1821,6 +1839,47 @@ class ProfilePage extends StatelessWidget {
                   isCurrent: raw['id']?.toString() == currentId,
                 ),
               ),
+        // 可可魔典、玛格破译、雪莉绑定、13水、证物等私密情报都在 view.information 里；
+        // 服务端已按权限裁剪，这里按收到顺序逐条留档，玩家不必翻聊天记录。
+        if (view.raw['information'] is List &&
+            (view.raw['information'] as List).isNotEmpty) ...[
+          const SectionTitle(
+            '私密情报记录',
+            subtitle: '仅你能看到；按收到顺序保留。',
+          ),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                children: [
+                  for (final raw in view.raw['information'] as List)
+                    if (raw is Map)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              raw['title']?.toString() ?? '游戏信息',
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textSecondary),
+                            ),
+                            if (raw['text']?.toString().isNotEmpty == true)
+                              Text(
+                                raw['text'].toString(),
+                                style: const TextStyle(
+                                    fontSize: 14, color: AppColors.text),
+                              ),
+                          ],
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          ),
+        ],
         if (self['honoka_upper'] is List) ...[
           const SectionTitle(
             '已准备玩家的上层角色',

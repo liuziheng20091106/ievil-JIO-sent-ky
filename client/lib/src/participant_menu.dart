@@ -447,7 +447,6 @@ Future<void> _quickPrivate(
     create.first,
     initial: {
       'participant_ids': [ref.participantId],
-      'name': '与${ref.name}的私信',
     },
   );
 }

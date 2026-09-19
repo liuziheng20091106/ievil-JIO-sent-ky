@@ -478,6 +478,13 @@ def channel_command(db, game, actor, action_id, payload):
             accepted = list(members)
         if immediate:
             ensure_channel_available(db, game["id"], members)
+        # 忽略自定义频道名，统一按成员生成：玩家用号位，主持人用「主持人」。
+        seats = {row["participant_id"]: row["seat_id"] for row in db.execute(
+            "SELECT id AS participant_id, seat_id FROM participants WHERE game_id=?", (game["id"],)
+        )}
+        title = "、".join(
+            "主持人" if member == "host" else f"{seats.get(member) or '?'}号" for member in members
+        )
         channel_id = "private:" + secrets.token_urlsafe(12)
         db.execute(
             """INSERT INTO channels
@@ -486,7 +493,7 @@ def channel_command(db, game, actor, action_id, payload):
             (
                 channel_id,
                 game["id"],
-                body.name,
+                title,
                 actor["id"],
                 "active" if immediate else "pending",
                 storage.dumps(members),
@@ -567,6 +574,9 @@ def require_listed_action(db, game, actor, action_id, payload):
         raise HTTPException(422, "此操作不可用，请刷新当前状态")
     descriptor = candidates[0]
     allowed = set(descriptor["payload"]) | {item["name"] for item in descriptor["fields"]}
+    # channel.create 的自定义频道名已被忽略（服务端统一按成员命名），但旧客户端仍会带上。
+    if action_id == "channel.create":
+        allowed.add("name")
     if set(payload) - allowed:
         raise HTTPException(422, "操作包含未允许的字段")
 
