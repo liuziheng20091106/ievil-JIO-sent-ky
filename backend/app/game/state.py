@@ -96,6 +96,30 @@ def pending(game, kind, title, **data):
     return item
 
 
+# 主持人对局日志：与玩家可见消息分离的服务端留档，只给主持人看。
+# 追加统一的 {day, half, phase, kind, text} 条目，客户端按 kind 着色。
+LOG_LIMIT = 400
+
+
+def log_event(game, kind, text):
+    entry = {
+        "day": game["day"],
+        "half": game["half"],
+        "phase": game["phase"],
+        "kind": kind,
+        "text": text,
+    }
+    game.setdefault("log", []).append(entry)
+    # 环形上限：长对局不会无限膨胀，最近 400 条足够复盘。
+    if len(game["log"]) > LOG_LIMIT:
+        del game["log"][: len(game["log"]) - LOG_LIMIT]
+
+
+def log_index(game):
+    """快照记录当时日志长度；回溯时把之后的条目裁掉，时间线与对局状态一致。"""
+    return len(game.get("log", []))
+
+
 def half_key(game):
     return f"{game['day']}:{game['half']}"
 
@@ -251,6 +275,7 @@ def create_game(codex):
         "gaze": None,
         "declarations": [],
         "witness": None,
+        "log": [],
         "surrenders": [],
         "result": None,
         "winner_candidate": None,
@@ -323,6 +348,7 @@ def save_snapshot(game):
         "half": game["half"],
         "phase": game["phase"],
         "label": label,
+        "log_index": log_index(game),
         "state": state,
     }
     game["snapshots"].append(snap)
@@ -359,6 +385,10 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
     game["warnings"] = {}
     game["deadline"] = None
     game["public"]["rewinds"] += 1
+    # 日志是时间线的一部分：裁掉回溯点之后的条目，再记下这次回溯本身。
+    if "log" in game and snap.get("log_index") is not None:
+        del game["log"][snap["log_index"] :]
+    log_event(game, "system", f"时间回溯到「{snap['label']}」，之后的时间线作废。")
     notify(game, events, "游戏时间已回溯；已经获得的信息与聊天记忆保留。")
 
 
@@ -420,6 +450,11 @@ def finish(game, events, winner, reason, balloon=False):
     game["deadline"] = None
     game["warnings"] = {}
     game["queued_reveals"] = []
+    log_event(
+        game,
+        "system",
+        f"对局结束：{'好人胜利' if winner == 'good' else '魔女胜利' if winner == 'witch' else '主持人结束'}（{reason}）",
+    )
     notify(
         game,
         events,

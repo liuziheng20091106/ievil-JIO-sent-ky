@@ -10,6 +10,7 @@ from .state import (
     current,
     half_key,
     hiro_pending,
+    log_event,
     move_hanna,
     notify,
     owner,
@@ -370,6 +371,11 @@ def death_batch(game, events, preview):
             "，死于13水" if death.get("cause") == "water" and not death.get("hide_cause") else ""
         )
         notice = f"{s['id']}号玩家一张角色牌出局{suffix}。"
+        cause_label = NIGHT_ABILITIES.get(death.get("cause"), (None, death.get("cause") or ""))[1]
+        src = death.get("source_card")
+        src_label = ROLES.get(src, {}).get("name", src) if src else ""
+        detail = f"（{cause_label}" + (f"·{src_label}" if src_label else "") + ")" if cause_label else ""
+        log_event(game, "death", f"{s['id']}号的{ROLES[cid]['name']}出局{detail}")
         if game["half"] == "night":
             # 夜间出局连同头像一起压到第二天白天再公示，夜间阶段不泄露
             game["queued_notices"].append(notice)

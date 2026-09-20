@@ -12,7 +12,7 @@ from .actions import (
     night_abilities,
     outstanding_seats,
 )
-from .catalog import AUTO_ADVANCE_DELAY, AUTO_PHASES, DAY_ABILITIES, PHASES, ROLES
+from .catalog import AUTO_ADVANCE_DELAY, AUTO_PHASES, DAY_ABILITIES, NIGHT_ABILITIES, PHASES, ROLES
 from .resolution import (
     begin_night,
     damage_preview,
@@ -39,6 +39,7 @@ from .state import (
     hiro_dilemma,
     hiro_pending,
     living,
+    log_event,
     lost_by_challenge,
     pending_nominators,
     notify,
@@ -438,6 +439,11 @@ def close_vote(game, events):
     game["vote_rounds"].append(record)
     if passed and nominee["card_id"] not in game["execution"]:
         game["execution"].append(nominee["card_id"])
+    log_event(
+        game,
+        "vote",
+        f"投票处决{nominee['seat_id']}号：同意{yes}/{n}，{'通过' if passed else '未通过'}",
+    )
     notify(
         game,
         events,
@@ -567,6 +573,7 @@ def advance(game, events):
     game["deadline"] = None
     save_snapshot(game)
     if game["status"] != "ended":
+        log_event(game, "phase", f"对局进入第{game['day']}天 · {PHASES[game['phase']]}")
         notify(game, events, f"第{game['day']}天 · {PHASES[game['phase']]}。")
 
 
@@ -1442,6 +1449,133 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         game["deadline"] = min(game["warnings"].values(), default=None)
 
 
+# 容易刷屏的操作不进日志：准备/发言/投票逐项提交、私信与常规聊天。
+_LOG_SKIP = {
+    "lobby.ready",
+    "lobby.order",
+    "night.clear",
+    "speech.done",
+    "speech.speak",
+    "marg.mimic",
+    "vote.cast",
+    "vote.pass",
+    "balloon.choose",
+    "photo.permission",
+    "player.profile",
+    "host.warn",
+    "host.auto",
+    "host.codex",
+    "host.codex_order",
+    "host.speech",
+}
+
+
+def _ability_label(ability):
+    if ability in DAY_ABILITIES:
+        return DAY_ABILITIES[ability][1]
+    if ability in NIGHT_ABILITIES:
+        return NIGHT_ABILITIES[ability][1]
+    return ability
+
+
+def _target_text(game, data):
+    target = data.get("target") or data.get("target_seat") or data.get("seat_id")
+    if not target:
+        return ""
+    target = str(target)
+    try:
+        seat(game, target)
+        return f" → {target}号"
+    except GameError:
+        return f" → {ROLES.get(target, {}).get('name', target)}"
+
+
+def _role_name(game, card_id):
+    return ROLES.get(card_id, {}).get("name", card_id)
+
+
+def command_log_text(game, actor, action, data, *, by_host=False):
+    """把一次操作格式化成一行主持人日志；返回 None 表示此操作不记录。"""
+    if action in _LOG_SKIP or action.startswith(("channel.", "room.")):
+        return None
+    who = "主持人" if actor["kind"] == "host" else f"{actor.get('seat_id', '?')}号"
+    if by_host:
+        who += "（代操作）"
+    seat_id = actor.get("seat_id")
+    name = None
+    if seat_id and actor["kind"] == "player":
+        raw = game["seats"][int(seat_id) - 1]["name"]
+        # 默认称呼就是「N号玩家」时不再重复拼接，只有改过名的才带名字。
+        if raw and raw != f"{seat_id}号玩家":
+            name = raw
+    prefix = f"{who}玩家【{name}】" if name else who
+
+    if action == "night.submit":
+        ability = data.get("ability", "")
+        return f"{prefix}使用{_ability_label(ability)}{_target_text(game, data)}"
+    if action == "day.skill":
+        ability = data.get("ability", "")
+        return f"{prefix}声明白天技能「{_ability_label(ability)}」{_target_text(game, data)}"
+    if action == "day.challenge":
+        return f"{prefix}发起质疑"
+    if action == "vote.nominate":
+        return f"{prefix}提名{_target_text(game, data).lstrip(' →')}号"
+    if action == "execution.shoot":
+        return f"{prefix}临刑开枪"
+    if action == "night.confirm":
+        return f"{prefix}确认夜间行动"
+    if action == "execution.confirm":
+        return f"{prefix}处决前响应已确认"
+    if action == "honoka.disguise":
+        return f"{prefix}示人为{_role_name(game, data.get('role', ''))}"
+    if action == "honoka.witness":
+        return f"{prefix}设定目击显示身份为{_role_name(game, data.get('role', ''))}"
+    if action == "hiro.exit":
+        return f"{prefix}主动出局"
+    if action == "hiro.rewind":
+        return f"{prefix}选择回溯时间"
+    if action == "hiro.decline":
+        return f"{prefix}放弃回溯，按预结算继续"
+    if action == "water.use":
+        return f"{prefix}使用13水{_target_text(game, data)}"
+    if action == "meruru.revive":
+        return f"{prefix}使用复活"
+    if action == "evidence.submit":
+        return f"{prefix}提交证物"
+    if action == "player.surrender":
+        return f"{prefix}申请交牌"
+    if action == "balloon.propose":
+        return f"{prefix}提议热气球名单"
+    if action in ("balloon.agree", "balloon.decline"):
+        return f"{prefix}{'同意' if action == 'balloon.agree' else '拒绝'}热气球名单"
+    if action == "host.start":
+        return "主持人开局，上下牌锁定"
+    if action == "host.advance":
+        return None  # 阶段推进由 advance() 自己记录，避免重复行
+    if action == "host.resolve":
+        return None  # 裁定内容由各 resolve 分支单独记录
+    if action == "host.water":
+        return f"主持人调整13水持有者为{data.get('seat_id', '?')}号"
+    if action == "host.damage":
+        return "主持人裁定伤害预结算"
+    if action == "host.state":
+        cid = data.get("card_id", "")
+        return f"主持人修改{_role_name(game, cid)}状态 {data.get('state', '')}={data.get('value', False)}"
+    if action == "host.information":
+        return f"主持人发布信息「{data.get('title', '')}」"
+    if action == "host.madness":
+        return f"主持人裁定疯狂：{data.get('reason', '')}"
+    if action == "host.rewind":
+        return "主持人手动回溯时间"
+    if action == "host.confirm_winner":
+        return "主持人确认宣判胜负"
+    if action == "host.surrender":
+        return f"主持人处理交牌：{data.get('side', '')}方"
+    if action == "host.end":
+        return "主持人终止对局"
+    return f"{prefix}执行 {action}"
+
+
 def apply_command(game, actor, action, payload, *, by_host=False):
     require(game["status"] != "ended", "对局已结束，不能再操作")
     validate_command(game, actor, action, payload)
@@ -1450,6 +1584,10 @@ def apply_command(game, actor, action, payload, *, by_host=False):
         host_command(game, events, action, payload)
     else:
         player_command(game, actor, events, action, payload, by_host=by_host)
+    line = command_log_text(game, actor, action, payload, by_host=by_host)
+    if line is not None:
+        kind = "host" if actor["kind"] == "host" else "action"
+        log_event(game, kind, line)
     if by_host and actor["kind"] == "player" and action != "marg.mimic":
         notify(
             game,

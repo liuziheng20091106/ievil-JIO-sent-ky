@@ -363,6 +363,7 @@ def game_view(game, actor):
             "vote_rounds": deepcopy(game["vote_rounds"]),
             "photos": deepcopy(game["photos"]),
             "gaze": deepcopy(game.get("gaze")),
+            "log": deepcopy(game.get("log", [])),
             "tasks": host_tasks(game),
         }
     can_chat, reason = False, "当前为只读状态"

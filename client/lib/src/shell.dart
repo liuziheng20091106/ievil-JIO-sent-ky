@@ -2290,6 +2290,54 @@ class _HostManagementPageState extends State<HostManagementPage> {
                       TextStyle(color: AppColors.textTertiary, fontSize: 13)),
             ),
         ],
+        SectionTitle('对局日志', subtitle: '仅主持人可见；按时间记录全部关键操作。'),
+        if (view.host['log'] is List &&
+            (view.host['log'] as List).isNotEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                children: [
+                  for (final raw in view.host['log'] as List)
+                    if (raw is Map)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '第${raw['day']}天',
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textTertiary),
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Expanded(
+                              child: Text(
+                                raw['text']?.toString() ?? '',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  height: 1.45,
+                                  color: _logColor(
+                                      raw['kind']?.toString()),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          )
+        else
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(AppSpacing.lg),
+              child: Text('还没有日志记录。',
+                  style: TextStyle(color: AppColors.textTertiary)),
+            ),
+          ),
         SectionTitle('席位代操作', subtitle: '先读取该席位当前视角，再提交它实际可用的行动。'),
         Card(
           child: Padding(
@@ -2317,6 +2365,15 @@ class _HostManagementPageState extends State<HostManagementPage> {
       ],
     );
   }
+
+  static Color _logColor(String? kind) => switch (kind) {
+        'death' => AppColors.danger,
+        'vote' => AppColors.host,
+        'phase' => AppColors.accent,
+        'system' => AppColors.info,
+        'host' => AppColors.textTertiary,
+        _ => AppColors.textSecondary,
+      };
 
   /// 主持人待办可能同时存在多条同动作条目（多份 host.resolve 裁定并存）。
   /// 必须按待办自带的 payload 匹配动作描述：只按 id 兜底到第一个会把
