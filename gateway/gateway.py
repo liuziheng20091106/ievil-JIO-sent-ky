@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -15,6 +16,44 @@ from websockets.exceptions import ConnectionClosed
 
 LOG = logging.getLogger("seven-double-gateway")
 LOGIN_PATTERN = re.compile(r"^\s*活动登录\s+(\d{6})\s*$")
+# 服务端 QQMemberSync.members 上限 5000；多群合并后可能超过，分批发。
+SYNC_BATCH = 4000
+
+
+def avatar_url(qq_id: str) -> str:
+    return f"https://q1.qlogo.cn/g?b=qq&nk={qq_id}&s=100"
+
+
+def clean_members(raw_members) -> list[dict]:
+    """合并多个群的原始成员并按 QQ 号去重，先出现的群优先。"""
+    merged: dict[str, dict] = {}
+    for member in raw_members:
+        qq_id = str(member.get("user_id", "")).strip()
+        # 服务端只接受 5-20 位纯数字 QQ 号；匿名/系统/异常账号跳过，不拖垮整批同步。
+        if not (qq_id.isdigit() and 5 <= len(qq_id) <= 20) or qq_id in merged:
+            continue
+        nickname = str(member.get("card") or member.get("nickname") or qq_id).strip()
+        # 昵称兜底 QQ 号并截断到服务端上限，避免单条脏数据让整批 422。
+        if not nickname:
+            nickname = qq_id
+        merged[qq_id] = {
+            "qq_id": qq_id,
+            "nickname": nickname[:64],
+            "avatar_url": avatar_url(qq_id),
+        }
+    return list(merged.values())
+
+
+def parse_group_ids(value: str) -> tuple[int, ...]:
+    """`GAME_QQ_GROUP_ID` 支持英文逗号分隔的多个群号。"""
+    group_ids = []
+    for item in value.split(","):
+        item = item.strip()
+        if item:
+            group_ids.append(int(item))
+    if not group_ids:
+        raise RuntimeError("missing required environment variable: GAME_QQ_GROUP_ID")
+    return tuple(group_ids)
 
 
 class OneBotConnection:
@@ -85,54 +124,52 @@ class OneBotConnection:
 
 
 class QQGateway:
-    def __init__(self, *, ws_url: str, token: str, backend_url: str, gateway_token: str, group_id: int):
+    def __init__(self, *, ws_url: str, token: str, backend_url: str, gateway_token: str, group_ids: tuple[int, ...]):
         self.ws_url = ws_url
         self.token = token
         self.backend_url = backend_url.rstrip("/")
         self.gateway_token = gateway_token
-        self.group_id = group_id
+        self.group_ids = group_ids
 
     @property
     def headers(self) -> dict[str, str]:
         return {"X-Gateway-Token": self.gateway_token}
 
-    @staticmethod
-    def avatar_url(qq_id: str) -> str:
-        return f"https://q1.qlogo.cn/g?b=qq&nk={qq_id}&s=100"
+    async def fetch_members(self, connection: OneBotConnection, group_id: int) -> list[dict]:
+        try:
+            result = await connection.action("get_group_member_list", {"group_id": group_id})
+        except Exception as exc:
+            # 单群拉取失败不该拖垮其余群：记日志后当这个群没有成员。
+            LOG.warning("member fetch failed for group %s: %s", group_id, exc)
+            return []
+        return result.get("data", [])
 
     async def sync_members(self, connection: OneBotConnection) -> None:
+        raw: list[dict] = []
+        for group_id in self.group_ids:
+            raw.extend(await self.fetch_members(connection, group_id))
+        members = clean_members(raw)
+        if not members:
+            return
+        # 服务端只用 group_id 校验网关来源，所以合并后的名单只提交一次（超限则分批）。
         try:
-            result = await connection.action("get_group_member_list", {"group_id": self.group_id})
-            members = []
-            for member in result.get("data", []):
-                qq_id = str(member.get("user_id", "")).strip()
-                # 服务端只接受 5-20 位纯数字 QQ 号；匿名/系统/异常账号跳过，不拖垮整批同步。
-                if not (qq_id.isdigit() and 5 <= len(qq_id) <= 20):
-                    continue
-                nickname = str(member.get("card") or member.get("nickname") or qq_id).strip()
-                # 昵称兜底 QQ 号并截断到服务端上限，避免单条脏数据让整批 422。
-                if not nickname:
-                    nickname = qq_id
-                members.append(
-                    {
-                        "qq_id": qq_id,
-                        "nickname": nickname[:64],
-                        "avatar_url": self.avatar_url(qq_id),
-                    }
-                )
-            if members:
-                async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=15) as client:
+                for batch in itertools.batched(members, SYNC_BATCH):
                     response = await client.post(
                         f"{self.backend_url}/api/internal/qq/members/sync",
                         headers=self.headers,
-                        json={"group_id": self.group_id, "members": members},
+                        json={"group_id": self.group_ids[0], "members": list(batch)},
                     )
                     response.raise_for_status()
-                LOG.info("synced %d group members", len(members))
+            LOG.info(
+                "synced %d group members from groups %s",
+                len(members),
+                ",".join(str(item) for item in self.group_ids),
+            )
         except Exception as exc:
             LOG.warning("member sync skipped: %s", exc)
 
-    async def bind_login(self, *, code: str, qq_id: str, nickname: str) -> bool:
+    async def bind_login(self, *, code: str, qq_id: str, nickname: str, group_id: int) -> bool:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
                 f"{self.backend_url}/api/internal/qq/login",
@@ -141,19 +178,19 @@ class QQGateway:
                     "code": code,
                     "qq_id": qq_id,
                     "nickname": nickname,
-                    "avatar_url": self.avatar_url(qq_id),
-                    "group_id": self.group_id,
+                    "avatar_url": avatar_url(qq_id),
+                    "group_id": group_id,
                 },
             )
         if response.status_code == 200:
             return True
-        LOG.info("login code %s rejected (%s)", code, response.text[:180])
+        LOG.info("login code %s from group %s rejected (%s)", code, group_id, response.text[:180])
         return False
 
-    async def acknowledge(self, connection: OneBotConnection, message: str) -> None:
+    async def acknowledge(self, connection: OneBotConnection, group_id: int, message: str) -> None:
         try:
             await connection.action(
-                "send_group_msg", {"group_id": self.group_id, "message": message}, timeout=10
+                "send_group_msg", {"group_id": group_id, "message": message}, timeout=10
             )
         except Exception as exc:
             LOG.debug("could not send acknowledgement: %s", exc)
@@ -161,7 +198,8 @@ class QQGateway:
     async def handle_event(self, connection: OneBotConnection, event: dict) -> None:
         if event.get("post_type") != "message" or event.get("message_type") != "group":
             return
-        if int(event.get("group_id", 0)) != self.group_id:
+        group_id = int(event.get("group_id", 0))
+        if group_id not in self.group_ids:
             return
         match = LOGIN_PATTERN.match(str(event.get("raw_message") or ""))
         if not match:
@@ -169,8 +207,11 @@ class QQGateway:
         sender = event.get("sender") or {}
         qq_id = str(event.get("user_id") or sender.get("user_id") or "").strip()
         nickname = str(sender.get("card") or sender.get("nickname") or qq_id).strip()
-        if qq_id and await self.bind_login(code=match.group(1), qq_id=qq_id, nickname=nickname):
-            await self.acknowledge(connection, f"{nickname}，登录成功~")
+        if qq_id and await self.bind_login(
+            code=match.group(1), qq_id=qq_id, nickname=nickname, group_id=group_id
+        ):
+            # 回执必须发回玩家实际发言的群，否则多群时提示会落在别的群。
+            await self.acknowledge(connection, group_id, f"{nickname}，登录成功~")
 
     async def run(self) -> None:
         delay = 2.0
@@ -209,7 +250,7 @@ def build_gateway() -> QQGateway:
         token=os.getenv("NAPCAT_TOKEN", ""),
         backend_url=os.getenv("GAME_BACKEND_URL", "http://127.0.0.1:13888"),
         gateway_token=required_env("GAME_GATEWAY_TOKEN"),
-        group_id=int(required_env("GAME_QQ_GROUP_ID")),
+        group_ids=parse_group_ids(required_env("GAME_QQ_GROUP_ID")),
     )
 
 
@@ -222,7 +263,11 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     gateway = build_gateway()
-    LOG.info("watching group %s; backend=%s", gateway.group_id, gateway.backend_url)
+    LOG.info(
+        "watching groups %s; backend=%s",
+        ",".join(str(item) for item in gateway.group_ids),
+        gateway.backend_url,
+    )
     asyncio.run(gateway.run())
 
 

@@ -54,7 +54,8 @@ run-gateway.cmd
 > run-gateway.cmd
 > ```
 >
-> 如果改用 `start.cmd` 启动，需自行设置环境变量 `GAME_GATEWAY_TOKEN` 与 `GAME_QQ_GROUP_ID`。
+> 如果改用 `start.cmd` 启动，需自行设置环境变量 `GAME_GATEWAY_TOKEN` 与 `GAME_QQ_GROUP_ID`；
+> 后端的 `GAME_QQ_GROUP_ID` 须是网关群号列表的超集（英文逗号分隔），网关提交名单时用列表首个群号做来源校验。
 
 `gateway/.env` 必填项：
 
@@ -64,7 +65,7 @@ run-gateway.cmd
 | `NAPCAT_TOKEN` | NapCat 访问令牌，无则留空 |
 | `GAME_BACKEND_URL` | 后端地址，默认 `http://127.0.0.1:8000` |
 | `GAME_GATEWAY_TOKEN` | 网关与后端共享的密钥，须与后端环境变量一致 |
-| `GAME_QQ_GROUP_ID` | 允许登录的 QQ 群号 |
+| `GAME_QQ_GROUP_ID` | 允许登录的 QQ 群号；多个群用英文逗号分隔，网关会同时监听并合并群成员 |
 
 `gateway/.env`、`gateway/napcat/`、`gateway/*.log` 已在 `.gitignore` 中：NapCat 登录态、设备文件、访问令牌和网关共享密钥不得入库，也不得写入 Flutter 资源或网页构建产物。
 
