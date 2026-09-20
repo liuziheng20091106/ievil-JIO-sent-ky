@@ -684,13 +684,16 @@ def resolve_pending(game, events, data):
             else cid
             for cid in suspects
         ]
+        text = "三名疑似凶手：" + "、".join(ROLES[cid]["name"] for cid in shown)
         notify(
             game,
             events,
-            "三名疑似凶手：" + "、".join(ROLES[cid]["name"] for cid in shown),
+            text,
             [item["seat_id"]],
             "夜间目击名单",
         )
+        # 白天阶段（到投票结束前）客户端常驻显示这份名单；下一份名单覆盖旧的。
+        game["witness"] = {"day": game["day"], "seat_id": item["seat_id"], "text": text}
         victim_seat = seat(game, item["seat_id"])
         if not current(game, victim_seat):
             game["cards"][item["victim"]]["states"]["evidence_allowed"] = True

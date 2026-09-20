@@ -143,7 +143,9 @@ def can_use_card(game, card):
 
 
 # 不允许发到同一席位的角色对：每对的两个角色牌序索引 //2 必须不同。
-DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"))
+# 米莉亚与希罗同席时，米莉亚夜间临死换牌可能把希罗牌换走、希罗的回溯时点跟着错乱，
+# 规则上不允许两人同一天挤在同一席位。
+DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"), ("millia", "hiro"))
 
 
 def deal_cards(game):
@@ -248,6 +250,7 @@ def create_game(codex):
         "photos": [],
         "gaze": None,
         "declarations": [],
+        "witness": None,
         "surrenders": [],
         "result": None,
         "winner_candidate": None,

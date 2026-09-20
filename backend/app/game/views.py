@@ -229,6 +229,18 @@ def game_view(game, actor):
     public = deepcopy(game["public"])
     # 制作过程只给主持人看：对外不带制作/破坏/未提交的人头与席位明细
     public["balloon"].pop("last", None)
+    # 当日目击名单：白天到投票结束前，死者和主持人常驻可见；进入处决或隔天自动消失。
+    witness = game.get("witness")
+    if (
+        witness
+        and witness["day"] == game["day"]
+        and game["half"] == "day"
+        and game["phase"] in ("speech", "balloon", "nomination", "voting")
+        and (host or own_id == witness["seat_id"])
+    ):
+        view_witness = {"day": witness["day"], "text": witness["text"]}
+    else:
+        view_witness = None
     phase = game["phase"]
     if phase == "speech":
         public["current_actor"] = {
@@ -288,6 +300,7 @@ def game_view(game, actor):
         "actions": actions_for(game, actor),
         "information": information,
         "public": public,
+        "witness": view_witness,
         "result": deepcopy(game["result"]),
     }
     if own:

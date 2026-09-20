@@ -1819,6 +1819,37 @@ class ProfilePage extends StatelessWidget {
             ),
           ),
         ),
+        // 当日目击名单：服务端只在白天到投票结束前后发给死者与主持人，常驻卡片显示。
+        if (view.raw['witness'] is Map) ...[
+          const SectionTitle(
+            '当日目击名单',
+            subtitle: '昨夜出局者的目击结果，投票结束前常驻。',
+          ),
+          Card(
+            color: AppColors.accentSoft,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              child: Row(
+                children: [
+                  const Icon(Icons.visibility_outlined,
+                      size: 20, color: AppColors.accent),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Text(
+                      view.raw['witness']['text']?.toString() ?? '',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+        ],
         SectionTitle(
           '我的双牌',
           subtitle: actor.isSpectator ? '观战身份没有个人角色牌' : '当前使用的牌在上层。',
