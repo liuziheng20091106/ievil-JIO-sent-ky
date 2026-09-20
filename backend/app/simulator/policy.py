@@ -8,11 +8,6 @@
 import random
 from dataclasses import dataclass, field
 
-# 最小的合法 PNG data URL：用于满足必填的 drawing 字段（夜间画作、照片画面、证物图像）。
-MINIMAL_DRAWING = (
-    "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-)
 
 
 @dataclass
@@ -138,100 +133,22 @@ class HeuristicPolicy:
             # ``payload['ability']`` 是服务端用来区分同一 id 多条行动的关键字段，
             # 必须原样带上，否则 require_listed_action 匹配不到任何行动。
             payload = {**descriptor["payload"], **payload}
-            if not self._madness_satisfied(client, payload):
-                # 疯狂目标未被打到时服务端会拒绝确认；继续找下一个可行动作。
-                continue
             return Decision("night.submit", payload, f"夜行 {ability}")
         confirm = client.action("night.confirm")
         if confirm is not None:
-            if not self._madness_ready(client):
-                # 还有强制目标没打：先补一次攻击，否则确认一定会被拒。
-                retarget = self._aim_at_madness(client)
-                if retarget is not None:
-                    return retarget
             return Decision("night.confirm", {}, "确认夜间")
         return None
 
-    def _madness_ready(self, client):
-        """当前已提交的夜间行动是否已满足疯狂强制目标。"""
-        target_seat = self._madness_target_seat(client)
-        if target_seat is None:
-            return True
-        attacks = {"knife", "shoot", "spear", "extra_kill", "massacre"}
-        for item in client.view["self"].get("night_actions", []):
-            ability = item.get("ability")
-            if ability not in attacks:
-                continue
-            if ability == "massacre" or item.get("target_seat") == target_seat:
-                return True
-        return False
-
-    def _aim_at_madness(self, client):
-        """把可用的攻击能力转向疯狂目标席位。"""
-        target_seat = self._madness_target_seat(client)
-        if target_seat is None:
-            return None
-        attacks = {"knife", "shoot", "spear", "extra_kill"}
-        for descriptor in client.available("night.submit"):
-            ability = descriptor["payload"]["ability"]
-            if ability not in attacks:
-                continue
-            options = option_values(descriptor, "target")
-            if target_seat not in options:
-                continue
-            return Decision(
-                "night.submit",
-                {**descriptor["payload"], "target": target_seat},
-                f"夜行 {ability}（疯狂目标）",
-            )
-        return None
-
-    def _madness_satisfied(self, client, payload):
-        """疯狂目标必须在可选范围内被打到，否则服务端拒绝确认夜间行动。
-
-        蕾雅「注视」或玛格「爱上/移情」会给某张牌挂上 ``madness_target``；拥有攻击
-        能力的人当夜必须攻击它（注视范围优先）。视图把这个席位暴露在
-        ``self.cards[*].states.madness_target_seat``，据此判断本次选择是否满足。
-        """
-        ability = payload.get("ability")
-        attack_abilities = {"knife", "shoot", "spear", "extra_kill", "massacre"}
-        if ability not in attack_abilities:
-            return True
-        target_seat = self._madness_target_seat(client)
-        if target_seat is None:
-            return True
-        if ability == "massacre":
-            return True
-        return payload.get("target") == target_seat
-
-    def _madness_target_seat(self, client):
-        for card in client.view["self"].get("cards", []):
-            seat = (card.get("states") or {}).get("madness_target_seat")
-            if seat:
-                return seat
-        return None
-
     def _night_payload(self, client, descriptor, ability):
-        if ability == "paint":
-            # 作画的 ``image`` 是必填的 drawing 字段：真实客户端提交的是画布数据，
-            # 这里给一段最小的合法图形，保证服务端能把它存成证物。
-            return {"image": MINIMAL_DRAWING, "text": f"第{client.view['day']}天速写"}
-        if ability == "decode":
-            # 破解魔典要求恰好 11 个不重复角色：候选有 14 个，按字段的 min/max 取 11 个。
-            roles = option_values(descriptor, "guess")
-            spec = field_spec(descriptor, "guess") or {}
-            want = spec.get("min", 11)
-            if len(roles) < want:
+        for name in ("target", "target_card"):
+            target = field_spec(descriptor, name)
+            if target is None:
+                continue
+            options = option_values(descriptor, name)
+            if not options:
                 return None
-            shuffled = self.random.sample(roles, want)
-            return {"guess": shuffled}
-        target = field_spec(descriptor, "target")
-        if target is None:
-            return {}
-        options = option_values(descriptor, "target")
-        if not options:
-            return None
-        return {"target": self.random.choice(options)}
+            return {name: self.random.choice(options)}
+        return {}
 
     # ------------------------------------------------------------------ 白天技能
 
@@ -305,11 +222,9 @@ class HeuristicPolicy:
             if kind == "checkbox":
                 if item.get("required"):
                     result[name] = bool(item.get("default", True))
-                continue
             if kind == "drawing":
-                # 服务端把 drawing 字段改名成 ``image_id`` 接收；必填时给一张最小图片。
                 if item.get("required"):
-                    result["image"] = MINIMAL_DRAWING
+                    return None
                 continue
             options = option_values(descriptor, name)
             if not options:
@@ -439,6 +354,14 @@ class HeuristicPolicy:
         """照片授权、13水、复活、遗留证物等低频行动。"""
         for descriptor in client.view.get("actions", []):
             action_id = descriptor["id"]
+            if action_id == "honoka.witness":
+                roles = option_values(descriptor, "role")
+                if roles:
+                    return Decision(
+                        action_id,
+                        {**descriptor["payload"], "role": self.random.choice(roles)},
+                        "选择目击显示身份",
+                    )
             if action_id == "photo.permission":
                 photo_id = descriptor["payload"]["photo_id"]
                 # 授权可以反复改，但重复提交同一状态没有意义，会让对局原地打转。

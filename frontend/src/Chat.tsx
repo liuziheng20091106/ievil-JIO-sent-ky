@@ -322,9 +322,6 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
                         )?.name ?? message.avatar_role_id
                       }）`}
                   </strong>
-                  {message.mimic_seat_id && (
-                    <span className="tag gold">模仿 · 实为{message.mimic_seat_id}号</span>
-                  )}
                   <time dateTime={message.created_at}>
                     {formatTime(message.created_at)}
                   </time>

@@ -2949,6 +2949,36 @@ button.tiny {
     font-size: 10px;
   }
 }
+.status-grid {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+.status-card {
+  border-left: 4px solid var(--purple);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--raised);
+}
+.status-card h3,
+.status-card p {
+  margin: 0;
+}
+.status-card p {
+  margin-top: 4px;
+}
+.status-card.warning {
+  border-left-color: var(--gold);
+}
+.status-card.danger {
+  border-left-color: var(--danger);
+}
+.status-card.success {
+  border-left-color: #8bc8aa;
+}
+.declarations-card {
+  margin: 14px 0;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *:before,

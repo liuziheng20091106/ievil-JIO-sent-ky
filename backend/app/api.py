@@ -89,10 +89,14 @@ def require_gateway(request):
 
 
 def require_gateway_group(group_id):
-    expected = os.environ.get("GAME_QQ_GROUP_ID", "")
+    # GAME_QQ_GROUP_ID 可以是英文逗号分隔的多个群号，网关同时监听这些群。
+    expected = [
+        item.strip() for item in os.environ.get("GAME_QQ_GROUP_ID", "").split(",") if item.strip()
+    ]
     if not expected:
         raise HTTPException(503, "服务端尚未配置QQ群")
-    if not secrets.compare_digest(str(group_id).encode(), expected.encode()):
+    supplied = str(group_id).encode()
+    if not any(secrets.compare_digest(supplied, item.encode()) for item in expected):
         raise HTTPException(403, "QQ群不匹配")
 
 
@@ -616,10 +620,6 @@ async def command(game_id: str, body: schemas.Command, request: Request):
                 and storage.active_private_channel(db, game_id, actor["id"])
             ):
                 raise HTTPException(403, "私信期间不能执行游戏行动")
-            if body.action == "marg.mimic":
-                reason = storage.channel_send_reason(db, game, actor, "public")
-                if reason:
-                    raise HTTPException(403, reason)
             require_listed_action(db, game, actor, body.action, payload)
             if body.action.startswith("channel."):
                 rows = channel_command(db, game, actor, body.action, payload)

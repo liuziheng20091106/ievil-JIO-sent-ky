@@ -5,9 +5,11 @@ from random import SystemRandom
 
 from .catalog import NIGHT_ABILITIES, ROLES
 from .state import (
+    can_use_card,
     fallen_upper_role,
     check_winner,
     current,
+    effect_effective,
     half_key,
     hiro_pending,
     log_event,
@@ -15,7 +17,6 @@ from .state import (
     notify,
     owner,
     pending,
-    poisoned,
     present,
     require,
     role_card,
@@ -24,42 +25,21 @@ from .state import (
 )
 
 
-def information(game, events, card, title, truth, image_id=None):
+def information(game, events, card, title, truth, false_text, image_id=None):
     sid = owner(game, card["id"])["id"]
-    if poisoned(card):
-        pending(
-            game,
-            "information",
-            f"中毒信息裁定：{title}",
-            seat_id=sid,
-            truth=truth,
-            image_id=image_id,
-        )
-    else:
-        notify(game, events, truth, [sid], title, image_id)
-
+    text = truth if effect_effective(game, events, card, f"信息：{title}") else false_text
+    notify(game, events, text, [sid], title, image_id)
 
 def witch_information(game, events):
     if present(game, "coco") and role_card(game, "coco")["witch"]:
+        codex = game["codex"]
         information(
             game,
             events,
             role_card(game, "coco"),
             "魔女可可线索",
-            "魔典顺序："
-            + "、".join(ROLES[r]["name"] for r in game["codex"])
-            + f"；艾玛{'已' if role_card(game, 'emma')['witch'] else '未'}魔女化。",
-        )
-    if present(game, "nanoka") and role_card(game, "nanoka")["witch"]:
-        information(
-            game,
-            events,
-            role_card(game, "nanoka"),
-            "全员魔女化状态",
-            "；".join(
-                f"{ROLES[c['role_id']]['name']}：{'魔女' if c['witch'] else '普通'}"
-                for c in game["cards"].values()
-            ),
+            "魔典顺序：" + "、".join(ROLES[r]["name"] for r in codex),
+            "魔典顺序：" + "、".join(ROLES[r]["name"] for r in codex[-1:] + codex[:-1]),
         )
 
 
@@ -68,12 +48,6 @@ def night_text(game, actions):
         "\n".join(
             f"{a['seat_id']}号：{NIGHT_ABILITIES[a['ability']][1]}"
             + (f"，目标{a['target_seat']}号" if a.get("target_seat") else "")
-            + (
-                "，破译排列：" + "、".join(ROLES[r]["name"] for r in a["guess"])
-                if a.get("guess")
-                else ""
-            )
-            + ("，画作：" + a.get("text", "") if a["ability"] == "paint" else "")
             for a in actions
         )
         or "其余玩家均未发动行动。"
@@ -95,7 +69,7 @@ def begin_night(game, events):
         "reactions": [],
     }
     for sid, cid in game["night"]["actors"].items():
-        if not night_abilities(game, game["cards"][cid]):
+        if not can_use_card(game, game["cards"][cid]) or not night_abilities(game, game["cards"][cid]):
             game["night"]["confirmed"].append(sid)
             notify(
                 game,
@@ -127,79 +101,63 @@ def unlock_coco(game, events):
             role_card(game, "coco"),
             "其余夜间行动已锁定",
             night_text(game, game["night"]["actions"]),
+            "中毒幻觉：未辨识到有效夜间行动",
         )
-        for action in game["night"]["actions"]:
-            if action.get("image_id"):
-                information(
-                    game,
-                    events,
-                    role_card(game, "coco"),
-                    "夜间画作",
-                    action.get("text", "画作"),
-                    action["image_id"],
-                )
         notify(game, events, "夜间行动进入最后确认步骤。")
 
 
 def target_allowed(game, target_card_id):
-    gaze = game.get("gaze")
-    if gaze and gaze["night_day"] == game["day"]:
-        return target_card_id in gaze["cards"]
     return True
-
 
 def lock_night(game, events):
     night = game["night"]
     require(not night["locked"], "本夜已经锁定")
     require(set(night["actors"]).issubset(night["confirmed"]), "仍有玩家未确认；可先警告并等待30秒")
     night["locked"] = True
-    rng = SystemRandom()
     for action in night["actions"]:
         card = game["cards"][action["card_id"]]
         ability = action["ability"]
-        action["effective"] = ability == "knife" or not poisoned(card)
         action["title"] = f"{action['seat_id']}号 · {NIGHT_ABILITIES[ability][1]}"
-        if ability == "shoot":
-            require(card["uses"].get("bullets", 0) > 0, "子弹已经用尽")
-            card["uses"]["bullets"] -= 1
-            action["denominator"] = 3 if card["witch"] else 6
-            action["roll"] = rng.randrange(action["denominator"]) + 1
-            action["hit"] = action["roll"] == 1
-        elif ability == "spear":
-            action["denominator"] = 2
-            action["roll"] = rng.randrange(2) + 1
-            action["hit"] = action["roll"] == 1
-        elif ability in {"extra_kill", "frame"}:
-            card["uses"][ability] = True
-        elif ability == "decode":
-            card["uses"]["decode"] = card["uses"].get("decode", 0) + 1
-            count = sum(a == b for a, b in zip(action["guess"], game["codex"]))
-            action["correct"] = count
+        if action.get("resolved"):
+            continue
+        if ability == "witch_scan":
+            cards = list(game["cards"].values())
             information(
                 game,
                 events,
                 card,
-                "魔典破译",
-                f"本次猜对{count}个位置；已发动{card['uses']['decode']}/2次。",
+                "全员魔女化状态",
+                "；".join(f"{ROLES[c['role_id']]['name']}：{'魔女' if c['witch'] else '普通'}" for c in cards),
+                "；".join(f"{ROLES[c['role_id']]['name']}：{'普通' if c['witch'] else '魔女'}" for c in cards),
             )
-        if not action["effective"] and ability != "decode":
-            notify(game, events, "本次效果技能受中毒影响不生效。", [action["seat_id"]])
-        if ability == "frame" and action["effective"]:
-            card["states"]["framed_killer"] = action["target_card"]
+            action["effective"] = True
+            continue
+        action["effective"] = effect_effective(game, events, card, NIGHT_ABILITIES[ability][1])
+        if ability in {"extra_kill", "rain", "scapegoat"}:
+            card["uses"][ability] = True
+        if ability == "rain" and action["effective"]:
+            night["rain"] = True
+        if ability == "scapegoat" and action["effective"]:
+            card["states"]["display_killer"] = action["target_card"]
+        if ability == "arisa_injure" and action["effective"]:
+            seats = game["seats"]
+            index = seats.index(owner(game, card["id"]))
+            action["injuries"] = []
+            for neighbor in (seats[(index - 1) % len(seats)], seats[(index + 1) % len(seats)]):
+                target = current(game, neighbor)
+                roll = SystemRandom().randrange(2)
+                injured = roll == 0 and target is not None
+                if injured:
+                    action["injuries"].append(target["id"])
+                log_event(
+                    game,
+                    "roll",
+                    f"亚里沙令{neighbor['id']}号邻座负伤：骰值{roll}，{'发生' if injured else '未发生'}。",
+                )
     for photo in game["photos"]:
         if photo.get("allowed"):
-            actions = [a for a in night["actions"] if a["seat_id"] == photo["recipient"]]
-            notify(game, events, night_text(game, actions), [photo["sender"]], "照片授权的夜间行动")
-            for a in actions:
-                if a.get("image_id"):
-                    notify(
-                        game,
-                        events,
-                        a.get("text", "画作"),
-                        [photo["sender"]],
-                        "照片授权的画作",
-                        a["image_id"],
-                    )
+            actions = [a for a in night["actions"] if a["seat_id"] == photo["target"]]
+            notify(game, events, night_text(game, actions), [photo["sender"]], "信物授权的夜间行动")
     game["phase"] = "night_review"
     prepare_night_preview(game)
 
@@ -218,7 +176,9 @@ def damage_preview(game, attacks, protection=()):
         if current(game, sid)["id"] != cid and not attack.get("allow_lower"):
             continue
         protected = cid in protection or game["cards"][cid]["states"].get("protected")
-        if attack.get("injury") or (protected and not attack.get("unconditional")):
+        if attack.get("once_injury"):
+            injured[cid] = True
+        elif attack.get("injury") or (protected and not attack.get("unconditional")):
             if injured[cid]:
                 dead[cid] = {**attack, "seat_id": sid}
                 guarded_seats.add(sid)
@@ -263,26 +223,26 @@ def prepare_night_preview(game):
     # 本夜可能已经被 millia_swap / 上一次预结算换过，而 reactions 记录的是本夜反应。
     millia_card = role_card(game, "millia")
     millia_current = current(game, owner(game, "millia")) is millia_card
+    action = next(
+        (selected for selected in night["actions"] if selected["ability"] == "swap" and selected.get("effective")),
+        None,
+    )
     if (
-        "millia" in dead
+        action
+        and "millia" in dead
         and millia_current
         and not millia_card["uses"].get("swap")
-        and not poisoned(millia_card)
         and "millia" not in night["reactions"]
+        and effect_effective(game, [], millia_card, "临死交换")
     ):
-        action = next(
-            (a for a in night["actions"] if a["ability"] == "swap" and a.get("effective")), None
-        )
-        if action:
-            # 米莉亚自己选好了对象：直接换牌重算，不留主持人判定点。
-            swap_cards(game, action)
-            night["reactions"].append("millia")
-            preview, dead = night_damage(game)
+        swap_cards(game, action)
+        night["reactions"].append("millia")
+        preview, dead = night_damage(game)
     night["preview"] = preview
     if (
         "hiro" in dead
-        and not poisoned(role_card(game, "hiro"))
         and "hiro" not in night["reactions"]
+        and effect_effective(game, [], role_card(game, "hiro"), "时间回溯")
     ):
         mode = "witch" if role_card(game, "hiro")["witch"] else "normal"
         if not game["spiritual"]["hiro_used"][mode]:
@@ -293,27 +253,42 @@ def prepare_night_preview(game):
 def night_damage(game):
     attacks, protection = [], []
     night = game["night"]
-    for a in night["actions"]:
-        if not a.get("effective"):
+    for action in night["actions"]:
+        if not action.get("effective"):
             continue
-        ability = a["ability"]
-        target = a.get("target_card")
-        if a.get("follow_seat") and a.get("target_seat"):
-            now = current(game, a["target_seat"])
+        ability = action["ability"]
+        target = action.get("target_card")
+        if action.get("follow_seat") and action.get("target_seat"):
+            now = current(game, action["target_seat"])
             target = now["id"] if now else None
         if ability == "protect" and target:
             protection.append(target)
-        elif ability in {"knife", "extra_kill", "shoot", "spear"} and target and a.get("hit", True):
-            attacks.append({"target_card": target, "source_card": a["card_id"], "cause": ability})
+        elif ability in {"knife", "extra_kill"} and target:
+            attacks.append({"target_card": target, "source_card": action["card_id"], "cause": ability})
         elif ability == "massacre":
             attacks.extend(
-                {"target_card": c["id"], "source_card": a["card_id"], "cause": ability}
-                for c in game["cards"].values()
-                if c["alive"] and c["id"] != a["card_id"] and target_allowed(game, c["id"])
+                {"target_card": card["id"], "source_card": action["card_id"], "cause": ability}
+                for card in game["cards"].values()
+                if card["alive"] and card["id"] != action["card_id"]
             )
+        elif ability == "arisa_injure":
+            attacks.extend(
+                {"target_card": target_id, "source_card": action["card_id"], "cause": ability, "once_injury": True}
+                for target_id in action.get("injuries", [])
+            )
+    love = game.get("marg_love")
+    if love and present(game, "marg"):
+        loved = seat(game, love["seat_id"])
+        if not current(game, loved):
+            loved = owner(game, "marg")
+            love["seat_id"] = loved["id"]
+            love["self"] = True
+        target = current(game, loved)
+        if target:
+            attacks.append({"target_card": target["id"], "source_card": "marg", "cause": "love", "once_injury": True})
     attacks.extend(night.get("extra_attacks", []))
     preview = damage_preview(game, attacks, protection)
-    return preview, {d["target_card"] for d in preview["deaths"]}
+    return preview, {death["target_card"] for death in preview["deaths"]}
 
 
 def eliminate_seat(game, events, seat, notice):
@@ -365,6 +340,19 @@ def death_batch(game, events, preview):
             game["cards"][source]["states"].setdefault("kills", []).append(
                 {"card_id": cid, "day": game["day"]}
             )
+        if game["half"] == "night" and game["night"].get("rain") and source:
+            shown_source = game["cards"][source]["states"].get("display_killer", source)
+            source_seat = owner(game, shown_source)
+            if source_seat["id"] != s["id"]:
+                greater = int(source_seat["id"]) > int(s["id"])
+                if source == "hanna":
+                    greater = not greater
+                notify(
+                    game,
+                    events,
+                    f"雨夜脚印：凶手座位号{'大于' if greater else '小于'}死者座位号。",
+                    title="雨夜脚印",
+                )
         if cid == "sherry" and game["spiritual"]["sherry_bound"]:
             move_hanna(game, -3)
         suffix = (
@@ -400,7 +388,7 @@ def death_batch(game, events, preview):
             pending(
                 game,
                 "suspects",
-                f"{s['id']}号夜间死者：填写三名疑似凶手（含真凶与汉娜）",
+                f"{s['id']}号夜间死者：填写四名疑似凶手（真凶、汉娜及额外两人）",
                 seat_id=s["id"],
                 death_id=record["id"],
                 victim=cid,
@@ -418,6 +406,7 @@ def revive(game, events, card_id, puppet=None):
     card["injured"] = False
     if puppet:
         card["states"]["puppet"] = puppet
+        card["states"]["no_ability"] = True
     if card_id == "sherry" and game["spiritual"]["sherry_bound"]:
         move_hanna(game, 2)
     owner_seat = owner(game, card_id)

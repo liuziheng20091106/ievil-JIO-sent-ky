@@ -1252,10 +1252,6 @@ class MessageBubble extends StatelessWidget {
                                 fontSize: 12, color: AppColors.textTertiary),
                           ),
                         ),
-                        if (message.mimicSeatId != null) ...[
-                          const SizedBox(width: AppSpacing.sm),
-                          Tag('模仿 · 实为${message.mimicSeatId}号'),
-                        ],
                       ],
                     ),
                   ),
@@ -1775,6 +1771,12 @@ class ProfilePage extends StatelessWidget {
     final self = view.self;
     final cards = self['cards'] is List ? self['cards'] as List : const [];
     final currentId = self['current_card_id']?.toString();
+    final public = view.raw["public"] is Map
+        ? (view.raw["public"] as Map).map((key, value) => MapEntry(key.toString(), value))
+        : const <String, dynamic>{};
+    final declarations = public["declarations"] is List
+        ? public["declarations"] as List
+        : const [];
     final actor = store.actor!;
     return ListView(
       padding: EdgeInsets.fromLTRB(
@@ -1819,6 +1821,35 @@ class ProfilePage extends StatelessWidget {
             ),
           ),
         ),
+        if (view.statuses.isNotEmpty) ...[
+          const SectionTitle('当前状态', subtitle: '状态与权限由服务器实时计算。'),
+          for (final status in view.statuses)
+            Card(
+              color: switch (status['tone']?.toString()) {
+                'danger' => AppColors.dangerSoft,
+                'warning' => AppColors.warningSoft,
+                'success' => AppColors.successSoft,
+                _ => AppColors.accentSoft,
+              },
+              child: ListTile(
+                title: Text(status['title']?.toString() ?? ''),
+                subtitle: Text(status['text']?.toString() ?? ''),
+              ),
+            ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
+        if (declarations.isNotEmpty) ...[
+          const SectionTitle('当前公开技能声明', subtitle: '开放声明可在行动面板质疑。'),
+          for (final raw in declarations)
+            if (raw is Map)
+              Card(
+                child: ListTile(
+                  title: Text('${raw['seat_id']}号 · ${raw['label'] ?? ''}'),
+                  subtitle: Text('${raw['summary'] ?? ''} · ${raw['status'] == 'open' ? '可质疑' : '已停止'}'),
+                ),
+              ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
         // 当日目击名单：服务端只在白天到投票结束前后发给死者与主持人，常驻卡片显示。
         if (view.raw['witness'] is Map) ...[
           const SectionTitle(

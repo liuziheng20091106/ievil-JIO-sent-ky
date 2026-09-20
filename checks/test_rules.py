@@ -4,6 +4,7 @@ import unittest
 
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
 from backend.app.game.actions import actions_for
+from backend.app.game.state import DEAL_EXCLUDED_PAIRS, upgrade_game
 
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
@@ -26,7 +27,7 @@ def players(game):
 
 
 class SetupRules(unittest.TestCase):
-    def test_dealing_never_duplicates_cards_or_pairs_the_two_key_roles(self):
+    def test_dealing_never_duplicates_cards_or_pairs_excluded_roles(self):
         for _ in range(100):
             game = create_game(DEFAULT_CODEX)
             for actor in players(game):
@@ -37,9 +38,21 @@ class SetupRules(unittest.TestCase):
             self.assertEqual(len({card["id"] for card in cards}), 14)
             for seat in visible["seats"]:
                 self.assertEqual(len(seat["cards"]), 2)
-                self.assertFalse(
-                    {"millia", "arisa"}.issubset({card["role_id"] for card in seat["cards"]})
-                )
+                roles = {card["role_id"] for card in seat["cards"]}
+                self.assertTrue(all(not {left, right}.issubset(roles) for left, right in DEAL_EXCLUDED_PAIRS))
+
+    def test_upgrade_game_adds_revision_two_fields_without_replacing_history(self):
+        game = create_game(DEFAULT_CODEX)
+        game.pop("rules_revision")
+        game["night"].pop("reactions")
+        game.pop("marg_love")
+        game["information"].append({"id": "kept"})
+        self.assertTrue(upgrade_game(game))
+        self.assertEqual(game["rules_revision"], 2)
+        self.assertEqual(game["night"]["reactions"], [])
+        self.assertIsNone(game["marg_love"])
+        self.assertEqual(game["information"], [{"id": "kept"}])
+        self.assertFalse(upgrade_game(game))
 
     def test_player_views_hide_other_cards_while_spectator_gets_read_only_board(self):
         game = create_game(DEFAULT_CODEX)

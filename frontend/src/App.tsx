@@ -1289,6 +1289,8 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
   const { state, session, catalog } = useGame();
   if (!state) return null;
   const isHost = session.actor?.kind === "host";
+  const statuses = state.self.statuses ?? [];
+  const declarations = state.public.declarations ?? [];
   return (
     <>
       <div className="section-heading">
@@ -1332,6 +1334,27 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
           />
         ))}
       </div>
+      {!!statuses.length && (
+        <section className="status-grid" aria-label="当前状态">
+          {statuses.map((status) => (
+            <article className={`status-card ${status.tone}`} key={status.id}>
+              <h3>{status.title}</h3>
+              <p>{status.text}</p>
+            </article>
+          ))}
+        </section>
+      )}
+      {!!declarations.length && (
+        <section className="public-record declarations-card">
+          <h3>当前公开技能声明</h3>
+          {declarations.map((declaration) => (
+            <p key={declaration.id}>
+              {declaration.seat_id}号 · {declaration.label} · {declaration.summary} ·{" "}
+              {declaration.status === "open" ? "可质疑" : "已停止"}
+            </p>
+          ))}
+        </section>
+      )}
       {isHost && state.host && (
         <>
           <Codex />
@@ -1387,9 +1410,7 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
           </article>
         ))
       ) : (
-        <p className="hint">
-          尚无获准查看的线索。照片、画作和名单由规则与主持人决定接收范围。
-        </p>
+        <p className="hint">尚无获准查看的线索。信物、证物和名单由服务器按权限发送。</p>
       )}
     </>
   );
@@ -1675,15 +1696,8 @@ function HostSources() {
         </p>
       </details>
       <details className="record-section">
-        <summary>注视与洗脑</summary>
-        <p>
-          注视名单：
-          <RecordView value={host.gaze} />
-        </p>
-        <p>
-          洗脑：
-          <RecordView value={brainwash} />
-        </p>
+        <summary>洗脑</summary>
+        <RecordView value={brainwash} />
       </details>
       <details className="record-section">
         <summary>13水与警告</summary>
@@ -1705,20 +1719,18 @@ function HostSources() {
         )}
       </details>
       <details className="record-section">
-        <summary>照片与画作收发</summary>
+        <summary>信物授权</summary>
         {photos.length ? (
           <ul className="source-list">
             {photos.map((item) => (
               <li key={item.id}>
-                {seatName(item.sender)} → {seatName(item.recipient)} ·{" "}
-                {item.allowed ? "已送达" : "被拒收"}
-                {item.text ? ` · ${item.text}` : ""}
-                {item.image_id && <Evidence id={item.image_id} />}
+                第{item.day}天 · {seatName(item.sender)} → {seatName(item.target)} ·{" "}
+                {item.allowed ? "已授权" : "未授权"}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="hint">尚无照片或画作往来。</p>
+          <p className="hint">尚无信物授权。</p>
         )}
       </details>
     </>

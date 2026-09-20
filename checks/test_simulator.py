@@ -220,6 +220,7 @@ class SimulatorCase(unittest.TestCase):
                 "confirmed": True,
             }
         ]
+        role_card(game, "emma")["alive"] = False
         game["night"]["extra_attacks"] = [
             {"target_card": "millia", "cause": "host", "unconditional": True}
         ]

@@ -46,7 +46,6 @@ SHORT_LABELS = {
     "night.confirm": "确认",
     "day.skill": "技能",
     "day.challenge": "质疑",
-    "marg.mimic": "模仿",
     "honoka.disguise": "示人",
     "honoka.witness": "目击",
     "hiro.exit": "出局",
@@ -61,7 +60,7 @@ SHORT_LABELS = {
     "balloon.agree": "同意",
     "balloon.decline": "拒绝",
     "balloon.propose": "提名单",
-    "photo.permission": "照片",
+    "photo.permission": "信物",
     "water.use": "用水",
     "meruru.revive": "复活",
     "evidence.submit": "证物",
@@ -104,23 +103,6 @@ def role_options():
     return [(r, d["name"]) for r, d in ROLES.items()]
 
 
-def mimic_targets(game, sid):
-    """玛格可模仿的席位：顺序发言阶段只有当前发言人，其余白天阶段为全体在场玩家。
-
-    与 game_view 的 can_chat 保持一致：顺序发言阶段只看是否轮到你，其余白天阶段
-    要求席位仍有存活角色牌。
-    """
-    if game["half"] != "day":
-        return []
-    if game["phase"] == "speech":
-        allowed = {game["public"]["speaker"]}
-    else:
-        allowed = {s["id"] for s in game["seats"] if current(game, s)}
-    return [
-        (s["id"], f"{s['id']}号 · {s['name']}")
-        for s in game["seats"]
-        if s["id"] != sid and s["occupant_id"] and s["id"] in allowed
-    ]
 
 
 def speech_start(game):
@@ -158,6 +140,9 @@ def outstanding_seats(game):
             and role_card(game, cid)["uses"].get("bullets", 0) > 0
             and owner(game, cid)["id"] not in game["execution_ready"]
         ]
+    result += [
+        item["seat_id"] for item in game["pending"] if item["kind"] == "honoka_witness"
+    ]
     proposal = game.get("balloon_proposal")
     if proposal:
         # 名单表决期所有未表态的存活玩家都卡住流程，警告与自动推进都要等他们。
@@ -173,7 +158,7 @@ def outstanding_seats(game):
     return list(dict.fromkeys(result))
 
 
-def target_field(game, night=False, exclude=None):
+def target_field(game, night=False, exclude=None, avoid_treasure=False):
     return field(
         "target",
         "目标席位",
@@ -181,13 +166,18 @@ def target_field(game, night=False, exclude=None):
         [
             (sid, label)
             for sid, label in seat_options(game)
-            if sid != exclude and (not night or target_allowed(game, current(game, sid)["id"]))
+            if sid != exclude
+            and (not night or target_allowed(game, current(game, sid)["id"]))
+            and (
+                not avoid_treasure
+                or current(game, sid)["states"].get("treasure_protected_day") != game["day"]
+            )
         ],
     )
 
 
 def day_fields(game, ability, exclude=None):
-    if ability == "last_speaker":
+    if ability in {"last_speaker", "gaze"}:
         return []
     if ability == "balloon":
         return [
@@ -200,13 +190,7 @@ def day_fields(game, ability, exclude=None):
                 max=4,
             )
         ]
-    if ability == "photo":
-        return [
-            target_field(game),
-            field("text", "照片说明", "textarea", required=False),
-            field("image", "照片画面", "drawing", required=False),
-        ]
-    return [target_field(game)]
+    return [target_field(game, avoid_treasure=ability == "spear")]
 
 
 def can_day_ability(game, card, ability):
@@ -239,14 +223,16 @@ def can_day_ability(game, card, ability):
             and card["uses"].get("interrupt_day") != game["day"]
             and (ability != "last_speaker" or phase == "speech")
         )
-    if phase not in {"speech", "discussion", "balloon"}:
+    if ability == "gaze":
+        return role == "nanoka" and phase == "execution" and card["uses"].get("gaze_day") != game["day"]
+    if phase not in {"speech", "discussion", "balloon", "nomination", "voting"}:
         return False
     if DAY_ABILITIES[ability][0] != role:
         return False
     if ability == "love":
         return card["uses"].get("love_day") != game["day"]
-    if ability == "gaze":
-        return card["uses"].get("gaze_day") != game["day"]
+    if ability == "spear":
+        return card["uses"].get("spear_day") != game["day"]
     if ability == "balloon":
         return game["public"]["balloon"]["day"] != game["day"]
     return ability == "photo"
@@ -262,37 +248,57 @@ def claimable(role):
 
 
 def challengeable(game, declaration):
-    """只有艾玛、魔女安安与魔女玛格的技能可以质疑。"""
-    card = game["cards"][declaration["card_id"]]
-    shown = card["states"].get("disguise") if declaration["fake"] else card["role_id"]
-    if declaration["ability"] == "mass_brainwash":
-        return shown == "annan"
-    if declaration["ability"] == "brainwash":
-        return shown == "marg"
-    return shown == "emma" and declaration["ability"] in {"interrupt", "last_speaker"}
+    """除信物与爱以外，所有开放的白天技能声明均可质疑。"""
+    return declaration["ability"] not in {"photo", "love"}
+
+def day_fake_allowed(game, card, ability):
+    phase = game["phase"]
+    phases = {
+        "brainwash": {"voting"},
+        "mass_brainwash": {"discussion", "nomination", "voting"},
+        "interrupt": {"speech", "discussion"},
+        "last_speaker": {"speech"},
+        "gaze": {"execution"},
+    }.get(ability, {"speech", "discussion", "balloon", "nomination", "voting"})
+    shown = card["states"].get("disguise") if card["id"] == "honoka" else card["role_id"]
+    if phase not in phases or ability not in claimable(shown):
+        return False
+    if card["id"] == "honoka":
+        return True
+    if ability == "brainwash":
+        return not (
+            card["role_id"] == "annan" and not card["witch"]
+            or card["role_id"] == "marg"
+            and card["witch"]
+            and card["states"].get("learned_brainwash")
+        )
+    return ability == "mass_brainwash" and not (
+        card["role_id"] == "annan" and card["witch"]
+    )
 
 
 def night_abilities(game, card):
     role, witch, uses = card["role_id"], card["witch"], card["uses"]
     abilities = ["knife"] if witch else []
-    if role == "emma" and witch and game["day"] >= 3:
-        abilities.append("massacre")
+    if role == "emma":
+        abilities.append("treasure")
+        if witch and game["day"] >= 3:
+            abilities.append("massacre")
     if role == "hanna" and witch and not uses.get("extra_kill"):
         abilities.append("extra_kill")
     if role == "meruru":
         abilities.append("protect")
     if role == "noah":
-        abilities.append("paint")
-        if witch and not uses.get("frame"):
-            abilities.append("frame")
+        if not uses.get("rain"):
+            abilities.append("rain")
+        if witch and not uses.get("scapegoat"):
+            abilities.append("scapegoat")
     if role == "millia" and not uses.get("swap"):
         abilities.append("swap")
-    if role == "nanoka" and uses.get("bullets", 0) > 0:
-        abilities.append("shoot")
-    if role == "marg" and uses.get("decode", 0) < 2:
-        abilities.append("decode")
-    if role == "leia" and witch:
-        abilities.append("spear")
+    if role == "nanoka" and witch:
+        abilities.append("witch_scan")
+    if role == "arisa":
+        abilities.append("arisa_injure")
     return abilities
 
 
@@ -327,20 +333,19 @@ def pending_action(game, item):
         ]
     elif kind == "suspects":
         source = item.get("source_card")
-        killer = game["cards"][source]["states"].get("framed_killer", source) if source else None
-        third = next((r for r in ROLES if r not in {killer, "hanna"} and present(game, r)), None)
-        suggested = list(dict.fromkeys(r for r in (killer, "hanna", third) if r))
+        killer = game["cards"][source]["states"].get("display_killer", source) if source else None
+        suggested = list(dict.fromkeys(role for role in (killer, "hanna") if role))
+        suggested.extend(role for role in ROLES if role not in suggested and len(suggested) < 4)
         fields = [
             field(
                 "suspects",
-                "三名疑似凶手",
+                "四名疑似凶手（汉娜额外一人）",
                 "multiselect",
                 role_options(),
-                min=3,
-                max=3,
-                default=suggested if len(suggested) == 3 else None,
-            ),
-            field("omit_leia", "裁定魔女蕾雅不列入名单", "checkbox", required=False),
+                min=4,
+                max=4,
+                default=suggested,
+            )
         ]
         if not item.get("source_card"):
             fields.append(field("true_source", "补充裁定实际真凶", "select", role_options()))
@@ -353,21 +358,6 @@ def pending_action(game, item):
                 required=False,
                 default=True,
             )
-        ]
-    elif kind == "declaration":
-        fields = [
-            field(
-                "outcome",
-                "声明处理",
-                "select",
-                [
-                    ("execute", "执行尚未执行的效果并保留质疑窗口"),
-                    ("complete", "执行并完成声明"),
-                    ("stop", "依据裁定停止尚未完成部分"),
-                ],
-                default="execute",
-            ),
-            field("reason", "裁定说明", "textarea", required=False),
         ]
     elif kind == "water":
         fields = [
@@ -471,7 +461,9 @@ def host_actions(game):
         )
     else:
         result.append(action("host.advance", "完成当前阶段 / 推进", group="流程", blocking=True))
-    result.extend(pending_action(game, p) for p in game["pending"])
+    result.extend(
+        pending_action(game, item) for item in game["pending"] if item["kind"] != "honoka_witness"
+    )
     result.append(
         action(
             "host.water",
@@ -817,25 +809,22 @@ def actions_for(game, actor):
             acting = game["cards"][cid]
             submitted = {a["ability"] for a in night["actions"] if a["seat_id"] == sid}
             for ability in night_abilities(game, acting):
+                if ability == "treasure" and submitted - {"treasure"}:
+                    continue
+                if "treasure" in submitted and ability != "treasure":
+                    continue
                 fields = []
-                if ability == "paint":
+                if ability == "scapegoat":
+                    fields = [field("target_card", "显示为凶手的角色牌", "select", role_options())]
+                elif ability not in {"massacre", "rain", "treasure", "witch_scan", "arisa_injure"}:
                     fields = [
-                        field("image", "夜间画作", "drawing"),
-                        field("text", "画作说明", "textarea", required=False),
-                    ]
-                elif ability == "decode":
-                    fields = [
-                        field(
-                            "guess",
-                            "猜测11名角色及顺序",
-                            "multiselect",
-                            role_options(),
-                            min=11,
-                            max=11,
+                        target_field(
+                            game,
+                            True,
+                            sid if ability == "swap" else None,
+                            avoid_treasure=ability == "knife",
                         )
                     ]
-                elif ability != "massacre":
-                    fields = [target_field(game, True, sid if ability == "swap" else None)]
                 result.append(
                     action(
                         "night.submit",
@@ -843,6 +832,7 @@ def actions_for(game, actor):
                         fields,
                         {"ability": ability},
                         "夜间",
+                        danger=ability == "treasure",
                     )
                 )
             if submitted:
@@ -852,57 +842,45 @@ def actions_for(game, actor):
             )
     if card and game["half"] == "day":
         for ability in DAY_ABILITIES:
-            if can_day_ability(game, card, ability) and not any(
-                d["seat_id"] == sid and d["ability"] == ability and d["status"] == "open"
-                for d in game["declarations"]
+            if not (can_day_ability(game, card, ability) or day_fake_allowed(game, card, ability)):
+                continue
+            if any(
+                declaration["seat_id"] == sid
+                and declaration["ability"] == ability
+                and declaration["status"] == "open"
+                for declaration in game["declarations"]
             ):
-                result.append(
-                    action(
-                        "day.skill",
-                        DAY_ABILITIES[ability][1],
-                        day_fields(game, ability, sid),
-                        {"ability": ability},
-                        "白天技能",
-                    )
-                )
-        if card["role_id"] == "honoka" and phase in {
-            "speech",
-            "discussion",
-            "balloon",
-            "nomination",
-            "voting",
-        }:
-            shown = claimable(game["cards"]["honoka"]["states"].get("disguise"))
-            for ability in DAY_ABILITIES:
-                if ability not in shown:
-                    continue
-                if not any(
-                    d["seat_id"] == sid and d["ability"] == ability and d["status"] == "open"
-                    for d in game["declarations"]
-                ):
-                    result.append(
-                        action(
-                            "day.skill",
-                            "声称" + DAY_ABILITIES[ability][1],
-                            day_fields(game, ability, sid),
-                            {"ability": ability},
-                            "私密伪装选择",
-                        )
-                    )
-    if card and card["role_id"] == "marg":
-        targets = mimic_targets(game, sid)
-        if targets:
+                continue
+            fake = day_fake_allowed(game, card, ability)
             result.append(
                 action(
-                    "marg.mimic",
-                    "模仿他人发言",
-                    [
-                        field("target", "以谁的席位发言", "select", targets),
-                        field("text", "发言内容", "textarea"),
-                    ],
-                    group="玛格技能",
+                    "day.skill",
+                    ("声称" if fake else "") + DAY_ABILITIES[ability][1],
+                    day_fields(game, ability, sid),
+                    {"ability": ability},
+                    "私密伪装选择" if fake else "白天技能",
+                    danger=ability == "spear",
                 )
             )
+    witness = next(
+        (
+            item
+            for item in game["pending"]
+            if item["kind"] == "honoka_witness" and item["seat_id"] == sid
+        ),
+        None,
+    )
+    if witness:
+        result.append(
+            action(
+                "honoka.witness",
+                "选择本次目击名单中的显示角色",
+                [field("role", "名单显示身份", "select", role_options())],
+                {"pending_id": witness["id"]},
+                "私密信息",
+                blocking=True,
+            )
+        )
     honoka = game["cards"]["honoka"]
     if card and card["id"] == "honoka" and not honoka["states"].get("disguise_locked"):
         result.append(
@@ -910,14 +888,6 @@ def actions_for(game, actor):
                 "honoka.disguise",
                 "选择示人角色",
                 [field("role", "示人身份", "select", role_options())],
-            )
-        )
-    if card and card["id"] == "honoka" and card["witch"]:
-        result.append(
-            action(
-                "honoka.witness",
-                "设定目击名单中的显示角色",
-                [field("role", "名单显示身份", "select", role_options())],
             )
         )
     if card and card["role_id"] == "hiro" and card["witch"]:
@@ -964,9 +934,20 @@ def actions_for(game, actor):
                 group="流程",
             )
         )
+    nomination_options = [
+        option
+        for option in seat_options(game)
+        if current(game, option[0])["states"].get("treasure_protected_day") != game["day"]
+    ]
     if phase == "nomination" and card and sid not in game.get("nomination_done", []):
         result.append(
-            action("vote.nominate", "提名候选", [target_field(game)], group="投票", blocking=True)
+            action(
+                "vote.nominate",
+                "提名候选",
+                [field("target", "目标", "select", nomination_options)],
+                group="投票",
+                blocking=True,
+            )
         )
         result.append(action("vote.pass", "放弃本次提名", group="投票", blocking=True))
     elif game["half"] == "day" and card and sid not in game.get("nomination_done", []):
@@ -974,7 +955,7 @@ def actions_for(game, actor):
             action(
                 "vote.nominate",
                 "提名候选（可提前）",
-                [target_field(game)],
+                [field("target", "目标", "select", nomination_options)],
                 group="投票",
             )
         )
@@ -1003,13 +984,15 @@ def actions_for(game, actor):
         and sid not in game["execution_ready"]
     ):
         if card["role_id"] == "nanoka" and card["uses"].get("bullets", 0) > 0:
+            threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
             result.append(
                 action(
                     "execution.shoot",
-                    "临刑开枪（1/3魔女，1/6普通）",
+                    f"临刑开枪（命中率{threshold}/6）",
                     [target_field(game)],
                     group="处决",
                     blocking=True,
+                    danger=True,
                 )
             )
             result.append(
@@ -1068,11 +1051,11 @@ def actions_for(game, actor):
             )
         )
     for photo in game["photos"]:
-        if photo["recipient"] == sid:
+        if photo["target"] == sid:
             result.append(
                 action(
                     "photo.permission",
-                    f"{photo['sender']}号的照片：设置夜间行动授权",
+                    f"{photo['sender']}号的信物：设置夜间行动授权",
                     [
                         field(
                             "allow",
@@ -1097,26 +1080,24 @@ def actions_for(game, actor):
         )
     meruru = role_card(game, "meruru")
     if card and card["id"] == "meruru" and card["witch"] and not card["uses"].get("revive"):
-        targets = [
-            k["card_id"]
-            for k in meruru["states"].get("kills", [])
-            if k["day"] == game["day"] and not game["cards"][k["card_id"]]["alive"]
+        deaths = [
+            death
+            for death in game["deaths"]
+            if death["day"] == game["day"]
+            and death.get("source_card") == meruru["id"]
+            and not game["cards"][death["target_card"]]["alive"]
         ]
-        if targets:
+        if deaths:
             result.append(
                 action(
                     "meruru.revive",
-                    "复活当日所杀者为无投票权傀儡",
+                    "复活当日所杀者为无投票权、无技能傀儡",
                     [
                         field(
                             "death_id",
                             "复活对象",
                             "select",
-                            [
-                                (d["id"], f"{d['seat_id']}号当天出局的角色牌")
-                                for d in game["deaths"]
-                                if d["target_card"] in targets and d["day"] == game["day"]
-                            ],
+                            [(death["id"], f"{death['seat_id']}号当天出局的角色牌") for death in deaths],
                         )
                     ],
                 )
@@ -1128,19 +1109,6 @@ def actions_for(game, actor):
                 field("text", "留下一个证物", "textarea", required=False),
                 field("image", "证物图像", "drawing", required=False),
             ]
-            if cid == "noah":
-                fields.append(
-                    field(
-                        "paintings",
-                        "额外留下已画作品（可多选）",
-                        "multiselect",
-                        [
-                            (p["image_id"], p.get("text") or f"第{p['day']}天画作")
-                            for p in dead["states"].get("paintings", [])
-                        ],
-                        required=False,
-                    )
-                )
             result.append(
                 action("evidence.submit", "提交夜间遗留证物", fields, {"card_id": cid}, "证物")
             )

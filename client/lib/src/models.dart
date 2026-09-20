@@ -272,7 +272,6 @@ class GameMessage {
     senderId = raw['sender_id']?.toString();
     senderName = raw['sender_name']?.toString();
     avatarRoleId = raw['avatar_role_id']?.toString();
-    mimicSeatId = raw['mimic_seat_id']?.toString();
     createdAt = raw['created_at']?.toString() ?? '';
   }
 
@@ -284,7 +283,6 @@ class GameMessage {
   late final String? senderId;
   late final String? senderName;
   late final String? avatarRoleId;
-  late final String? mimicSeatId;
   late final String createdAt;
 }
 
@@ -364,6 +362,11 @@ class GameView {
           .toList(growable: false);
   Map<String, dynamic> get self =>
       raw['self'] == null ? const {} : jsonObject(raw['self'], 'state.self');
+  List<Map<String, dynamic>> get statuses => self['statuses'] == null
+      ? const []
+      : jsonArray(self['statuses'], 'state.self.statuses')
+          .map((item) => jsonObject(item, 'status'))
+          .toList(growable: false);
   Map<String, dynamic> get host =>
       raw['host'] == null ? const {} : jsonObject(raw['host'], 'state.host');
 

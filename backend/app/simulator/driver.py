@@ -206,29 +206,19 @@ class HostBrain:
         return self._submit_resolution(host, action_id, payload)
 
     def _fix_suspects(self, payload):
-        """把疑似凶手名单修正为合法三人：必须包含汉娜与技能处理后的真凶。
-
-        ``omit_leia`` 只在蕾雅确实是魔女时可勾选；模拟器无法从视图确认这一点，
-        因此一律不勾。名单里原来已有的成员优先保留（它们通常就是服务端算出的
-        真凶与汉娜）；若这份名单没有来处（``source_card`` 缺失）而需要补填
-        ``true_source``，那么被补填的真凶也必须留在名单里，否则服务端会以
-        「名单必须包含技能处理后的真凶」拒绝。
-        """
+        """把疑似凶手名单修正为合法四人，并保留必填成员。"""
         suspects = payload.get("suspects")
         if not isinstance(suspects, list):
             return
-        if payload.get("omit_leia"):
-            payload["omit_leia"] = False
         killer = payload.get("true_source")
-        # 必填成员排在最前面，保证 [:3] 不会把它挤掉。
         required = [role for role in ("hanna", killer) if role]
         chosen = list(dict.fromkeys([*required, *suspects]))
         for candidate in ("leia", "emma", "hiro", "sherry", "meruru", "noah"):
-            if len(chosen) >= 3:
+            if len(chosen) >= 4:
                 break
             if candidate not in chosen:
                 chosen.append(candidate)
-        payload["suspects"] = chosen[:3]
+        payload["suspects"] = chosen[:4]
 
     def _submit_resolution(self, host, action_id, payload):
         try:
@@ -252,20 +242,11 @@ class HostBrain:
         detail = error.detail or ""
         if action_id != "host.resolve":
             return None
-        if "蕾雅" in detail and payload.get("omit_leia"):
-            # 「不列入蕾雅」不成立：取消勾选，并把蕾雅放回名单。
-            fixed = {**payload, "omit_leia": False}
-            suspects = fixed.get("suspects")
-            if isinstance(suspects, list) and "leia" not in suspects:
-                fixed["suspects"] = list(dict.fromkeys([*suspects, "leia"]))[:3]
-            return self._submit_resolution(host, action_id, fixed)
         if "名单必须包含" in detail and isinstance(payload.get("suspects"), list):
-            # 名单缺人：把服务端点名的角色（中文名）翻回 id 插到最前面，
-            # 否则 [:3] 又会把它们截掉。
             named = [role_id for name, role_id in NAMED_ROLES.items() if name in detail]
             if named:
                 suspects = [*named, *payload["suspects"]]
-                fixed = {**payload, "suspects": list(dict.fromkeys(suspects))[:3]}
+                fixed = {**payload, "suspects": list(dict.fromkeys(suspects))[:4]}
                 return self._submit_resolution(host, action_id, fixed)
         return None
 

@@ -4,7 +4,7 @@ from copy import deepcopy
 from random import SystemRandom
 from uuid import uuid4
 
-from .catalog import ROLES
+from .catalog import NIGHT_ABILITIES, ROLES
 
 
 class GameError(ValueError):
@@ -73,7 +73,7 @@ def notify(game, events, text, seats=None, title="游戏信息", image_id=None, 
         game["information"].append({"id": uid(), **deepcopy(event)})
 
 
-def chat_event(game, events, seat_id, text, channel_id="public", mimic_seat_id=None):
+def chat_event(game, events, seat_id, text, channel_id="public"):
     """公开发言以玩家消息发布，两端展示与玩家自己发送的普通发言完全一致。"""
     s = seat(game, seat_id)
     events.append(
@@ -85,7 +85,6 @@ def chat_event(game, events, seat_id, text, channel_id="public", mimic_seat_id=N
             "sender_id": s["occupant_id"],
             "sender_name": s["name"],
             "avatar_role_id": s["avatar_role_id"],
-            "mimic_seat_id": mimic_seat_id,
         }
     )
 
@@ -148,16 +147,60 @@ def eligible_voters(game):
         for s in living(game)
         if not current(game, s)["states"].get("puppet")
         and not current(game, s)["states"].get("no_vote")
-        and game["spiritual"]["annan_penalty"].get(current(game, s)["id"]) != game["day"]
+        and (
+            game["spiritual"]["annan_penalty"].get(current(game, s)["id"], {}).get("day")
+            if isinstance(game["spiritual"]["annan_penalty"].get(current(game, s)["id"]), dict)
+            else game["spiritual"]["annan_penalty"].get(current(game, s)["id"])
+        )
+        != game["day"]
     ]
 
 
-def poisoned(card):
-    return bool(card["states"].get("poisoned"))
+def poison_sources(game, card):
+    """返回主持人可见的动态中毒来源；玩家只看到中毒结论。"""
+    sources = []
+    if card["states"].get("poisoned"):
+        sources.append("主持人状态")
+    target_seat = next((s for s in game["seats"] if card["id"] in s["cards"]), None)
+    emma = game["cards"].get("emma")
+    emma_seat = next((s for s in game["seats"] if emma and emma["id"] in s["cards"]), None)
+    if target_seat and emma_seat and emma["alive"]:
+        indexes = {s["id"]: index for index, s in enumerate(game["seats"])}
+        distance = (indexes[target_seat["id"]] - indexes[emma_seat["id"]]) % len(game["seats"])
+        same_other = target_seat == emma_seat and card["id"] != emma["id"]
+        adjacent_current = distance in {1, len(game["seats"]) - 1} and current(game, target_seat) == card
+        if same_other or adjacent_current:
+            sources.append("艾玛毒素")
+    if card["role_id"] == "annan" and target_seat:
+        noah = game["cards"].get("noah")
+        noah_seat = next((s for s in game["seats"] if noah and noah["id"] in s["cards"]), None)
+        if noah_seat and noah["alive"]:
+            indexes = {s["id"]: index for index, s in enumerate(game["seats"])}
+            distance = (indexes[target_seat["id"]] - indexes[noah_seat["id"]]) % len(game["seats"])
+            if target_seat == noah_seat or distance in {1, len(game["seats"]) - 1}:
+                sources.append("诺亚邻接")
+    return sources
+
+
+def poisoned(game, card):
+    return bool(poison_sources(game, card))
+
+
+def effect_effective(game, events, card, ability):
+    if not poisoned(game, card):
+        return True
+    roll = SystemRandom().randrange(2)
+    effective = roll == 0
+    text = f"{ROLES[card['role_id']]['name']} · {ability}：中毒骰值{roll}，效果{'生效' if effective else '无效'}。"
+    log_event(game, "poison", text)
+    notify(game, events, f"中毒判定：本次{ability}{'生效' if effective else '无效'}。", [owner(game, card["id"])["id"]], "中毒判定")
+    return effective
 
 
 def can_use_card(game, card):
     if not card or not card["alive"] or current(game, owner(game, card["id"])) != card:
+        return False
+    if card["states"].get("no_ability"):
         return False
     if card["states"].get("entry_blocked_at") == f"{game['day']}:{game['phase']}":
         return False
@@ -191,7 +234,7 @@ def deal_cards(game):
             "witch": False,
             "injured": False,
             "states": {},
-            "uses": {"bullets": 6} if r == "nanoka" else {},
+            "uses": {"bullets": 6, "shot_misses": 0} if r == "nanoka" else {},
         }
         for r in order
     }
@@ -199,6 +242,70 @@ def deal_cards(game):
         s["cards"] = order[i * 2 : i * 2 + 2]
         s["ready"] = False
     game["phase"] = "ordering"
+
+
+def upgrade_game(game):
+    """就地补齐第二版规则字段；保留旧局的全部历史数据。"""
+    changed = game.get("rules_revision") != 2
+    game["rules_revision"] = 2
+
+    def add(mapping, key, value):
+        nonlocal changed
+        if key not in mapping:
+            mapping[key] = deepcopy(value)
+            changed = True
+
+    night = game.setdefault("night", {})
+    for key, value in {
+        "actors": {},
+        "actions": [],
+        "confirmed": [],
+        "locked": False,
+        "preview": None,
+        "reactions": [],
+    }.items():
+        add(night, key, value)
+    legacy_actions = [action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES]
+    if legacy_actions:
+        night.setdefault("legacy_actions", []).extend(legacy_actions)
+        night["actions"] = [
+            action for action in night["actions"] if action.get("ability") in NIGHT_ABILITIES
+        ]
+        changed = True
+    spiritual = game.setdefault("spiritual", {})
+    for key, value in {
+        "hiro_used": {"normal": False, "witch": False},
+        "hiro_exception": False,
+        "sherry_bound": False,
+        "annan_penalty": {},
+        "personal_losses": [],
+        "persistent_states": {},
+    }.items():
+        add(spiritual, key, value)
+    public = game.setdefault("public", {})
+    add(public, "declarations", [])
+    for key, value in {
+        "declarations": [],
+        "half_exits": {},
+        "photos": [],
+        "marg_love": None,
+        "witness": None,
+        "log": [],
+    }.items():
+        add(game, key, value)
+    for photo in game["photos"]:
+        if "target" not in photo and photo.get("recipient"):
+            photo["target"] = photo["recipient"]
+            changed = True
+        add(photo, "day", game.get("day", 1))
+        add(photo, "allowed", False)
+    for card in game.get("cards", {}).values():
+        add(card, "states", {})
+        add(card, "uses", {})
+        if card.get("role_id") == "nanoka":
+            add(card["uses"], "bullets", 6)
+            add(card["uses"], "shot_misses", 0)
+    return changed
 
 
 def create_game(codex):
@@ -213,6 +320,7 @@ def create_game(codex):
     SystemRandom().shuffle(shuffled_codex)
     return {
         "id": uid(),
+        "rules_revision": 2,
         "version": 0,
         "status": "lobby",
         "join_open": False,
@@ -236,7 +344,14 @@ def create_game(codex):
         "information": [],
         "pending": [],
         "snapshots": [],
-        "night": {"actors": {}, "actions": [], "confirmed": [], "locked": False, "preview": None},
+        "night": {
+            "actors": {},
+            "actions": [],
+            "confirmed": [],
+            "locked": False,
+            "preview": None,
+            "reactions": [],
+        },
         "warnings": {},
         "deaths": [],
         "half_exits": {},
@@ -272,7 +387,7 @@ def create_game(codex):
         "execution_ready": [],
         "water": {"holder": None, "used": False},
         "photos": [],
-        "gaze": None,
+        "marg_love": None,
         "declarations": [],
         "witness": None,
         "log": [],
@@ -417,7 +532,7 @@ def check_winner(game):
             "winner": winner,
             "reason": "双方同一半天达成条件，白天好人优先、夜晚魔女优先"
             if good and evil
-            else "所有已生成魔女出局"
+            else "所有魔女牌出局"
             if good
             else "米莉亚与亚里沙均出局",
         }

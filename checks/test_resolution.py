@@ -3,6 +3,7 @@
 from copy import deepcopy
 from time import time
 import unittest
+from unittest.mock import patch
 
 from backend.app.game import (
     DEFAULT_CODEX,
@@ -17,10 +18,22 @@ from backend.app.game.resolution import (
     begin_night,
     damage_preview,
     death_batch,
+    lock_night,
+    night_damage,
     prepare_night_preview,
+    unlock_coco,
     revive,
 )
-from backend.app.game.state import check_winner, pending, pending_nominators, rewind, save_snapshot
+from backend.app.game.state import (
+    check_winner,
+    effect_effective,
+    owner,
+    pending,
+    pending_nominators,
+    poison_sources,
+    rewind,
+    save_snapshot,
+)
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
 PAIRS = [
@@ -64,19 +77,178 @@ def command(game, actor, action, payload=None):
     return events
 
 
-class ResolutionEdges(unittest.TestCase):
-    def test_marg_must_attack_her_target_unless_gaze_disallows_it(self):
+class PoisonAndDeclarations(unittest.TestCase):
+    def test_dynamic_poison_sources_and_each_effect_roll_independently(self):
+        game = arranged_game()
+        self.assertIn("艾玛毒素", poison_sources(game, game["cards"]["millia"]))
+        self.assertIn("艾玛毒素", poison_sources(game, game["cards"]["hiro"]))
+        self.assertIn("艾玛毒素", poison_sources(game, game["cards"]["nanoka"]))
+        self.assertIn("诺亚邻接", poison_sources(game, game["cards"]["annan"]))
+        with patch("backend.app.game.state.SystemRandom") as random:
+            random.return_value.randrange.side_effect = [0, 1]
+            events = []
+            self.assertTrue(effect_effective(game, events, game["cards"]["millia"], "测试技能"))
+            self.assertFalse(effect_effective(game, events, game["cards"]["millia"], "测试技能"))
+        self.assertEqual([entry["kind"] for entry in game["log"][-2:]], ["poison", "poison"])
+
+    def test_status_projection_hides_poison_source_and_host_secrets(self):
+        game = arranged_game()
+        game["cards"]["noah"]["states"]["display_killer"] = "coco"
+        player_view = game_view(game, player(game, "1"))
+        self.assertEqual(player_view["self"]["statuses"][0]["id"], "poison")
+        self.assertNotIn("艾玛", player_view["self"]["statuses"][0]["text"])
+        host_view = game_view(game, HOST)
+        self.assertIn("millia", host_view["host"]["poison_sources"])
+        spectator = game_view(
+            game,
+            {"id": "watcher", "kind": "spectator", "game_id": game["id"], "access_ids": []},
+        )
+        self.assertNotIn("host", spectator)
+        noah = next(
+            card
+            for seat_view in spectator["seats"]
+            for card in seat_view["cards"]
+            if card["id"] == "noah"
+        )
+        self.assertNotIn("display_killer", noah["states"])
+
+    def test_real_photo_creates_plain_token_but_fake_photo_does_not(self):
+        game = arranged_game()
+        game["cards"]["hiro"]["alive"] = False
+        game["cards"]["emma"]["alive"] = False
+        command(game, player(game, "2"), "day.skill", {"ability": "photo", "target": "1"})
+        self.assertEqual(
+            set(game["photos"][0]), {"id", "sender", "target", "day", "allowed"}
+        )
+
+        fake = arranged_game()
+        fake["cards"]["nanoka"]["alive"] = False
+        fake["cards"]["honoka"]["states"]["disguise"] = "coco"
+        command(fake, player(fake, "7"), "day.skill", {"ability": "photo", "target": "1"})
+        self.assertFalse(fake["photos"])
+
+    def test_fake_mass_brainwash_keeps_execution_but_challenge_cancels_penalty(self):
+        game = arranged_game()
+        game["cards"]["noah"]["alive"] = False
+        command(
+            game,
+            player(game, "6"),
+            "day.skill",
+            {"ability": "mass_brainwash", "target": "1"},
+        )
+        declaration = game["declarations"][-1]
+        self.assertTrue(declaration["fake"])
+        self.assertIn("millia", game["execution"])
+        self.assertEqual(
+            game["spiritual"]["annan_penalty"]["annan"]["declaration_id"], declaration["id"]
+        )
+        command(
+            game,
+            player(game, "2"),
+            "day.challenge",
+            {"declaration_id": declaration["id"]},
+        )
+        self.assertIn("millia", game["execution"])
+        self.assertNotIn("annan", game["spiritual"]["annan_penalty"])
+
+
+class NewNightRules(unittest.TestCase):
+    def test_once_injury_never_upgrades_existing_injury_to_death(self):
+        game = arranged_game("night_review", "night")
+        game["cards"]["marg"]["injured"] = True
+        preview = damage_preview(
+            game,
+            [{"target_card": "marg", "source_card": "arisa", "once_injury": True}],
+        )
+        self.assertTrue(preview["injured"]["marg"])
+        self.assertFalse(preview["deaths"])
+
+    def test_treasure_immediately_locks_night_and_grants_safe_protection(self):
         game = arranged_game("night", "night")
-        game["cards"]["marg"]["witch"] = True
-        game["cards"]["marg"]["states"]["madness_target"] = "hiro"
+        game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        actor = player(game, "4")
-        with self.assertRaises(GameError):
-            command(game, actor, "night.confirm")
-        game["gaze"] = {"cards": ["leia", "meruru"], "night_day": 2}
-        command(game, actor, "night.submit", {"ability": "knife", "target": "5"})
-        command(game, actor, "night.confirm")
-        self.assertTrue(game_view(game, actor)["self"]["night_confirmed"])
+        with patch("backend.app.game.engine.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1
+            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+        self.assertTrue(game["night"]["locked"])
+        self.assertEqual(game["phase"], "night_review")
+        self.assertEqual(game["cards"]["emma"]["states"]["treasure_protected_day"], 2)
+        self.assertEqual([action["ability"] for action in game["night"]["actions"]], ["treasure"])
+
+    def test_arisa_rolls_each_neighbor_and_marg_love_only_injures_once(self):
+        game = arranged_game("night", "night")
+        game["cards"]["leia"]["alive"] = False
+        game["night"] = {
+            "actors": {"5": "arisa"},
+            "actions": [
+                {"card_id": "arisa", "seat_id": "5", "ability": "arisa_injure", "confirmed": True}
+            ],
+            "confirmed": ["5"],
+            "locked": False,
+            "preview": None,
+            "reactions": [],
+        }
+        with patch("backend.app.game.resolution.SystemRandom") as random:
+            random.return_value.randrange.side_effect = [0, 1]
+            lock_night(game, [])
+        self.assertTrue(game["night"]["preview"]["injured"]["marg"])
+        self.assertFalse(game["night"]["preview"]["injured"]["noah"])
+
+        love = arranged_game("night_review", "night")
+        love["marg_love"] = {"seat_id": "2", "day": 2}
+        love["cards"]["hiro"]["injured"] = True
+        preview, _ = night_damage(love)
+        self.assertTrue(preview["injured"]["hiro"])
+        self.assertFalse(preview["deaths"])
+
+    def test_nanoka_hit_threshold_rises_from_one_to_six(self):
+        game = arranged_game("execution")
+        game["cards"]["emma"]["alive"] = False
+        game["execution"] = ["nanoka"]
+        game["execution_ready"] = []
+        game["execution_shots"] = []
+        with patch("backend.app.game.engine.SystemRandom") as random:
+            random.return_value.randrange.return_value = 5
+            for _ in range(6):
+                command(game, player(game, "7"), "execution.shoot", {"target": "2"})
+                game["execution_ready"].clear()
+        self.assertEqual([roll["threshold"] for roll in game["execution_rolls"]], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(len(game["execution_shots"]), 1)
+        self.assertEqual(game["cards"]["nanoka"]["uses"]["shot_misses"], 0)
+
+    def test_witch_honoka_renames_each_four_person_witness_list(self):
+        game = arranged_game("night_results", "night")
+        game["cards"]["nanoka"]["alive"] = False
+        game["cards"]["honoka"]["witch"] = True
+        item = pending(
+            game,
+            "suspects",
+            "目击裁定",
+            seat_id="1",
+            victim="millia",
+            source_card="noah",
+        )
+        command(
+            game,
+            HOST,
+            "host.resolve",
+            {
+                "pending_id": item["id"],
+                "suspects": ["hanna", "honoka", "noah", "coco"],
+            },
+        )
+        witness = next(action for action in actions_for(game, player(game, "7")) if action["id"] == "honoka.witness")
+        command(
+            game,
+            player(game, "7"),
+            "honoka.witness",
+            {"pending_id": witness["payload"]["pending_id"], "role": "coco"},
+        )
+        self.assertIn("可可", game["witness"]["text"])
+        self.assertNotIn("穗乃香", game["witness"]["text"])
+
+
+class ResolutionEdges(unittest.TestCase):
 
     def test_night_victory_cannot_turn_into_day_victory_on_advance(self):
         game = arranged_game("night_results", "night")
@@ -96,12 +268,11 @@ class ResolutionEdges(unittest.TestCase):
         data = {
             "pending_id": item["id"],
             "true_source": "nanoka",
-            "suspects": ["hanna", "emma", "noah"],
-            "omit_leia": False,
+            "suspects": ["hanna", "emma", "noah", "coco"],
         }
         with self.assertRaises(GameError):
             command(game, HOST, "host.resolve", data)
-        data["suspects"] = ["hanna", "emma", "nanoka"]
+        data["suspects"] = ["hanna", "emma", "nanoka", "coco"]
         command(game, HOST, "host.resolve", data)
         self.assertTrue(game_view(game, player(game, "1"))["information"])
         self.assertFalse(game_view(game, player(game, "2"))["information"])
@@ -151,6 +322,7 @@ class ResolutionEdges(unittest.TestCase):
                 "effective": True,
             },
         ]
+        game["cards"]["emma"]["alive"] = False
         prepare_night_preview(game)
         self.assertFalse(any(item["kind"] == "millia" for item in game["pending"]))
         self.assertTrue(game["cards"]["millia"]["uses"].get("swap"))
@@ -248,25 +420,16 @@ class ResolutionEdges(unittest.TestCase):
 
 
 class PlaytestFixes(unittest.TestCase):
-    def test_skill_less_seats_confirm_themselves_and_coco_still_acts_last(self):
+    def test_coco_still_acts_after_every_other_night_actor_confirms(self):
         game = arranged_game("night", "night")
-        layout = {
-            "1": ["emma", "hiro"],
-            "2": ["coco", "sherry"],
-            "3": ["hanna", "meruru"],
-            "4": ["annan", "noah"],
-            "5": ["leia", "marg"],
-            "6": ["nanoka", "millia"],
-            "7": ["arisa", "honoka"],
-        }
-        for seat in game["seats"]:
-            seat["cards"] = list(layout[seat["id"]])
+        game["cards"]["hiro"]["alive"] = False
         game["cards"]["coco"]["witch"] = True
-        game["cards"]["nanoka"]["uses"]["bullets"] = 0
         begin_night(game, [])
+        coco_seat = owner(game, "coco")["id"]
+        game["night"]["confirmed"] = [sid for sid in game["night"]["actors"] if sid != coco_seat]
+        unlock_coco(game, [])
         self.assertEqual(game["phase"], "night_coco")
-        self.assertEqual(sorted(game["night"]["confirmed"]), ["1", "3", "4", "5", "6", "7"])
-        coco = player(game, "2")
+        coco = player(game, coco_seat)
         self.assertIn("night.submit", [a["id"] for a in game_view(game, coco)["actions"]])
         command(game, coco, "night.confirm")
         command(game, HOST, "host.advance")
@@ -289,12 +452,11 @@ class PlaytestFixes(unittest.TestCase):
             {
                 "pending_id": item["id"],
                 "true_source": "hanna",
-                "suspects": ["hanna", "emma", "noah"],
-                "omit_leia": False,
+                "suspects": ["hanna", "emma", "noah", "coco"],
             },
         )
         seat_view = game_view(game, player(game, "3"))
-        self.assertTrue(any("三名疑似凶手" in i["text"] for i in seat_view["information"]))
+        self.assertTrue(any("四名疑似凶手" in i["text"] for i in seat_view["information"]))
         self.assertFalse(game["cards"]["meruru"]["states"].get("evidence_allowed"))
         self.assertNotIn("evidence.submit", [a["id"] for a in seat_view["actions"]])
         game["day"] += 1
@@ -312,8 +474,7 @@ class PlaytestFixes(unittest.TestCase):
             {
                 "pending_id": item["id"],
                 "true_source": "hanna",
-                "suspects": ["hanna", "emma", "noah"],
-                "omit_leia": False,
+                "suspects": ["hanna", "emma", "noah", "coco"],
             },
         )
         self.assertTrue(game["cards"]["hanna"]["states"]["evidence_allowed"])
@@ -429,7 +590,7 @@ class PlaytestFixes(unittest.TestCase):
         game["cards"]["honoka"]["states"]["disguise"] = "emma"
         self.assertEqual(
             [item["label"] for item in actions_for(game, honoka) if item["id"] == "day.skill"],
-            ["声称打断发言", "声称改为最后发言"],
+            ["声称打断发言"],
         )
         with self.assertRaises(GameError):
             command(game, honoka, "day.skill", {"ability": "gaze", "target": "1"})
@@ -552,19 +713,16 @@ class HostFreeAdjudication(unittest.TestCase):
             "day.challenge", [item["id"] for item in actions_for(game, player(game, "3"))]
         )
 
-    def test_disguised_day_skill_still_waits_for_the_host(self):
+    def test_disguised_photo_or_love_executes_without_state_or_host_todo(self):
         game = arranged_game()
         game["seats"][6]["cards"] = ["honoka", "nanoka"]
         game["cards"]["honoka"]["states"]["disguise"] = "marg"
         command(game, player(game, "7"), "day.skill", {"ability": "love", "target": "3"})
-        item = next(p for p in game["pending"] if p["kind"] == "declaration")
         declaration = game["declarations"][0]
         self.assertTrue(declaration["fake"])
-        self.assertFalse(declaration["executed"])
-        self.assertEqual(item["declaration_id"], declaration["id"])
-        self.assertNotIn("madness_target", game["cards"]["marg"]["states"])
-        command(game, HOST, "host.resolve", {"pending_id": item["id"], "outcome": "execute"})
-        self.assertTrue(game["declarations"][0]["executed"])
+        self.assertTrue(declaration["executed"])
+        self.assertEqual(game["pending"], [])
+        self.assertIsNone(game["marg_love"])
 
     def test_day_declarations_close_when_the_day_ends(self):
         game = arranged_game()
@@ -580,6 +738,7 @@ class HostFreeAdjudication(unittest.TestCase):
 
     def test_hiro_decides_his_own_rewind(self):
         game = arranged_game()
+        game["cards"]["emma"]["alive"] = False
         command(
             game,
             HOST,
@@ -599,6 +758,7 @@ class HostFreeAdjudication(unittest.TestCase):
 
     def test_the_host_todo_asks_to_warn_a_waiting_hiro(self):
         game = arranged_game()
+        game["cards"]["emma"]["alive"] = False
         command(
             game,
             HOST,
@@ -613,6 +773,7 @@ class HostFreeAdjudication(unittest.TestCase):
         game.update(day=1, phase="discussion")
         save_snapshot(game)
         game.update(day=2, phase="discussion")
+        game["cards"]["emma"]["alive"] = False
         command(
             game,
             HOST,
@@ -767,76 +928,6 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["phase"], "witch")
         self.assertEqual(game["speech_passed"], [])
 
-
-class MimicSpeech(unittest.TestCase):
-    """玛格常驻「模仿」：按目标身份公开发言，不推进对方顺序。"""
-
-    def mimic_of(self, game, sid):
-        return next(
-            item for item in actions_for(game, player(game, sid)) if item["id"] == "marg.mimic"
-        )
-
-    def test_only_the_current_speaker_can_be_mimicked_in_speech_order(self):
-        game = arranged_game("speech")
-        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
-        mimic = self.mimic_of(game, "4")
-        self.assertEqual([option["value"] for option in mimic["fields"][0]["options"]], ["1"])
-        events = command(game, player(game, "4"), "marg.mimic", {"target": "1", "text": "我不是玛格"})
-        self.assertEqual(
-            [
-                (item["kind"], item["sender_id"], item["sender_name"], item["mimic_seat_id"], item["text"])
-                for item in events
-            ],
-            [("chat", "p1", game["seats"][0]["name"], "4", "我不是玛格")],
-        )
-        self.assertEqual(game["public"]["speaker"], "1")
-        self.assertNotIn("4", game.get("speech_passed", []))
-
-    def test_day_discussion_offers_every_living_seat_except_marg(self):
-        game = arranged_game("discussion")
-        self.assertEqual(
-            [option["value"] for option in self.mimic_of(game, "4")["fields"][0]["options"]],
-            ["1", "2", "3", "5", "6", "7"],
-        )
-
-    def test_the_skill_is_gone_at_night_or_once_marg_is_out(self):
-        night = arranged_game("night", "night")
-        self.assertNotIn(
-            "marg.mimic", [item["id"] for item in actions_for(night, player(night, "4"))]
-        )
-        dead = arranged_game("discussion")
-        dead["cards"]["marg"]["alive"] = False
-        self.assertNotIn(
-            "marg.mimic", [item["id"] for item in actions_for(dead, player(dead, "4"))]
-        )
-        other = arranged_game("discussion")
-        self.assertNotIn(
-            "marg.mimic", [item["id"] for item in actions_for(other, player(other, "1"))]
-        )
-
-    def test_the_target_must_be_a_living_other_seat(self):
-        game = arranged_game("discussion")
-        with self.assertRaises(GameError):
-            command(game, player(game, "4"), "marg.mimic", {"target": "4", "text": "自己"})
-        game["cards"]["leia"]["alive"] = False
-        game["cards"]["arisa"]["alive"] = False
-        with self.assertRaises(GameError):
-            command(game, player(game, "4"), "marg.mimic", {"target": "5", "text": "无人"})
-        with self.assertRaises(GameError):
-            command(game, player(game, "4"), "marg.mimic", {"target": "1", "text": "   "})
-
-    def test_host_proxy_does_not_announce_that_it_was_the_host(self):
-        game = arranged_game("discussion")
-        changed = deepcopy(game)
-        events = apply_command(
-            changed,
-            player(changed, "4"),
-            "marg.mimic",
-            {"target": "1", "text": "代操作"},
-            by_host=True,
-        )
-        self.assertTrue(any(item["kind"] == "chat" for item in events))
-        self.assertFalse(any("主持人为" in item.get("text", "") for item in events))
 
 
 class BalloonFlow(unittest.TestCase):

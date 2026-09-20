@@ -73,6 +73,19 @@ export interface UIAction {
   payload?: Record<string, unknown>;
   fields: Field[];
 }
+export interface StatusCard {
+  id: string;
+  tone: "info" | "success" | "warning" | "danger";
+  title: string;
+  text: string;
+}
+export interface PublicDeclaration {
+  id: string;
+  seat_id: string;
+  label: string;
+  summary: string;
+  status: string;
+}
 export interface HostTask {
   id: string;
   kind: string;
@@ -105,14 +118,9 @@ export interface HostNomination {
 export interface HostPhoto {
   id: string;
   sender: string;
-  recipient: string;
+  target: string;
+  day: number;
   allowed: boolean;
-  text?: string;
-  image_id?: string | null;
-}
-export interface HostGaze {
-  cards: string[];
-  night_day: number;
 }
 export interface HostParticipant {
   id: string;
@@ -184,6 +192,7 @@ export interface GameView {
     balloon_choice?: string | null;
     warning_deadline?: number | null;
     honoka_upper?: { seat_id: string; name: string; role_id: string }[];
+    statuses?: StatusCard[];
   };
   actions: UIAction[];
   information: Information[];
@@ -191,6 +200,7 @@ export interface GameView {
     current_actor?: CurrentActor;
     auto_advance_at?: number | null;
     auto_advance_off?: boolean;
+    declarations?: PublicDeclaration[];
   } & Record<string, unknown>;
   host?: {
     codex: string[];
@@ -212,7 +222,6 @@ export interface GameView {
     }[];
     votes?: Record<string, string>;
     photos?: HostPhoto[];
-    gaze?: HostGaze | null;
     balloon_choices?: Record<string, string>;
     balloon_proposal?: {
       by: string;
@@ -253,7 +262,6 @@ export interface Message {
   text: string;
   created_at: string;
   image_id?: string;
-  mimic_seat_id?: string;
 }
 export interface MessagePage {
   messages: Message[];

@@ -8,8 +8,7 @@ from .actions import (
     actions_for,
     can_day_ability,
     challengeable,
-    claimable,
-    night_abilities,
+    day_fake_allowed,
     outstanding_seats,
 )
 from .catalog import AUTO_ADVANCE_DELAY, AUTO_PHASES, DAY_ABILITIES, NIGHT_ABILITIES, PHASES, ROLES
@@ -35,6 +34,7 @@ from .state import (
     current,
     deal_cards,
     eligible_voters,
+    effect_effective,
     finish,
     hiro_dilemma,
     hiro_pending,
@@ -46,7 +46,6 @@ from .state import (
     owner,
     pending,
     player_seat,
-    poisoned,
     present,
     require,
     rewind,
@@ -127,8 +126,6 @@ def set_witch(game, events, cid):
         [owner(game, cid)["id"]],
         "魔女化",
     )
-    if cid == "hiro":
-        card["states"]["madness_target"] = "emma"
 
 
 def convert_daily(game, events):
@@ -174,23 +171,23 @@ def apply_damage(game, events, preview, allow_reaction=True):
         if game["half"] == "night"
         else None
     )
-    if (
+    millia_triggered = (
         allow_reaction
         and swap
         and not millia["uses"].get("swap")
-        and not poisoned(millia)
-        and any(d["target_card"] == "millia" for d in preview["deaths"])
-    ):
+        and any(death["target_card"] == "millia" for death in preview["deaths"])
+    )
+    if millia_triggered and effect_effective(game, events, millia, "临死交换"):
         millia_swap(game, events, preview, swap)
         return
     hiro = role_card(game, "hiro")
     mode = "witch" if hiro["witch"] else "normal"
-    if (
+    hiro_triggered = (
         allow_reaction
-        and not poisoned(hiro)
         and not game["spiritual"]["hiro_used"][mode]
-        and any(d["target_card"] == "hiro" for d in preview["deaths"])
-    ):
+        and any(death["target_card"] == "hiro" for death in preview["deaths"])
+    )
+    if hiro_triggered and effect_effective(game, events, hiro, "时间回溯"):
         hiro_pending(game, events, mode, preview=preview)
     else:
         death_batch(game, events, preview)
@@ -377,7 +374,8 @@ def open_vote(game, events):
     rounds = nomination_rounds(game)
     index = len(game["vote_rounds"])
     if index >= len(rounds):
-        for cid, day in game["spiritual"]["annan_penalty"].items():
+        for cid, penalty in game["spiritual"]["annan_penalty"].items():
+            day = penalty.get("day") if isinstance(penalty, dict) else penalty
             if day == game["day"] and game["cards"][cid]["alive"] and cid not in game["execution"]:
                 game["execution"].append(cid)
         game["phase"] = "execution"
@@ -533,20 +531,6 @@ def advance(game, events):
         attacks.extend(game.get("execution_shots", []))
         preview = damage_preview(game, attacks)
         apply_damage(game, events, preview)
-        executed = [d["target_card"] for d in preview["deaths"] if d["cause"] == "execution"]
-        if executed and present(game, "nanoka"):
-            information(
-                game,
-                events,
-                role_card(game, "nanoka"),
-                "白天幻视",
-                "当天被投出者中"
-                + (
-                    "有魔女。"
-                    if any(game["cards"][cid]["witch"] for cid in executed)
-                    else "没有魔女。"
-                ),
-            )
         game["phase"] = "dusk"
     elif phase == "dusk":
         require(not game["winner_candidate"], "已有胜负候选，请确认本半天所有效果后宣判或裁定纠错")
@@ -583,9 +567,12 @@ def execute_declaration(game, events, declaration):
     data = declaration["data"]
     cid, sid, ability = declaration["card_id"], declaration["seat_id"], declaration["ability"]
     card = game["cards"][cid]
-    if not declaration["fake"] and poisoned(card):
+    if not declaration["fake"] and not effect_effective(game, events, card, DAY_ABILITIES[ability][1]):
+        declaration["fake"] = True
         declaration["executed"] = True
-        notify(game, events, "本次效果技能因中毒不生效。", [sid])
+        return
+    if declaration["fake"] and ability in {"photo", "love"}:
+        declaration["executed"] = True
         return
     target = data.get("target")
     target_card = current(game, target) if target else None
@@ -597,9 +584,7 @@ def execute_declaration(game, events, declaration):
             order = game["public"]["speech_order"]
             game["public"]["speech_order"] = [x for x in order if x != sid] + [sid]
             if game["public"]["speaker"] == sid:
-                game["public"]["speaker"] = next(
-                    (x for x in game["public"]["speech_order"] if x != sid), sid
-                )
+                game["public"]["speaker"] = next((x for x in order if x != sid), sid)
         else:
             require(target != sid, "不能打断自己的发言")
             if game["phase"] == "speech":
@@ -608,51 +593,54 @@ def execute_declaration(game, events, declaration):
             game["public"]["speaker"] = sid
     elif ability == "love":
         card["uses"]["love_day"] = game["day"]
-        card["states"]["madness_target"] = target_card["id"]
+        game["marg_love"] = {"seat_id": target, "day": game["day"]}
     elif ability == "gaze":
         card["uses"]["gaze_day"] = game["day"]
-        game["gaze"] = {"cards": [cid, target_card["id"]], "night_day": game["day"] + 1}
+        truth = any(game["cards"][target_id]["witch"] for target_id in game["execution"])
+        information(
+            game,
+            events,
+            card,
+            "处决幻视",
+            f"本日处决名单{'含有' if truth else '不含'}魔女。",
+            f"本日处决名单{'不含' if truth else '含有'}魔女。",
+        )
+    elif ability == "spear":
+        card["uses"]["spear_day"] = game["day"]
+        apply_damage(game, events, damage_preview(game, [{"target_card": target_card["id"], "source_card": cid, "cause": "spear"}]))
+        if cid not in game["execution"]:
+            game["execution"].append(cid)
     elif ability == "brainwash":
         game["brainwash"][cid] = target
         if cid == "annan" and not card["witch"]:
             marg = role_card(game, "marg")
             if present(game, "marg") and marg["witch"]:
                 marg["states"]["learned_brainwash"] = True
-                notify(
-                    game,
-                    events,
-                    "普通安安已发动洗脑，你已学会洗脑；同时发动时互相抵消。",
-                    [owner(game, "marg")["id"]],
-                )
+                notify(game, events, "普通安安已发动洗脑，你已学会洗脑；同时发动时互相抵消。", [owner(game, "marg")["id"]])
     elif ability == "mass_brainwash":
         card["uses"]["mass_brainwash"] = True
         if target_card["id"] not in game["execution"]:
             game["execution"].append(target_card["id"])
-        game["spiritual"]["annan_penalty"][cid] = game["day"] + 1
+        game["spiritual"]["annan_penalty"][cid] = {"day": game["day"] + 1, "declaration_id": declaration["id"]}
         notify(game, events, f"{target}号进入本轮处决名单。", alert=True)
     elif ability == "photo":
-        require(data.get("text") or data.get("image_id"), "照片需要真实内容或画面")
-        photo = {
-            "id": uid(),
-            "sender": sid,
-            "recipient": target,
-            "allowed": False,
-            "text": data.get("text", ""),
-            "image_id": data.get("image_id"),
-        }
+        photo = {"id": uid(), "sender": sid, "target": target, "day": game["day"], "allowed": False}
         game["photos"].append(photo)
-        notify(
-            game,
-            events,
-            photo["text"] or "收到照片，可自愿授权发送者查看你的夜间行动。",
-            [target],
-            "收到照片",
-            photo["image_id"],
-        )
+        notify(game, events, "收到信物，可自愿授权发送者查看你的夜间行动。", [target], "收到信物")
     elif ability == "balloon":
-        participants = [sid] + [p for p in data["participants"] if p != sid]
+        participants = [sid] + [participant for participant in data["participants"] if participant != sid]
         open_balloon(game, events, sid, participants)
     declaration["executed"] = True
+
+
+def publish_witness(game, events, item, suspects, honoka_role="honoka"):
+    shown = [honoka_role if role == "honoka" else role for role in suspects]
+    text = "四名疑似凶手：" + "、".join(ROLES[role]["name"] for role in shown)
+    notify(game, events, text, [item["seat_id"]], "夜间目击名单")
+    game["witness"] = {"day": game["day"], "seat_id": item["seat_id"], "text": text}
+    victim_seat = seat(game, item["seat_id"])
+    if not current(game, victim_seat):
+        game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
 
 
 def resolve_pending(game, events, data):
@@ -675,35 +663,30 @@ def resolve_pending(game, events, data):
     elif kind == "suspects":
         suspects = data["suspects"]
         source = item.get("source_card") or data.get("true_source")
-        if source:
-            source = game["cards"][source]["states"].get("framed_killer", source)
-        omit_leia = data.get("omit_leia", False)
-        require(not omit_leia or role_card(game, "leia")["witch"], "只有魔女蕾雅可裁定不入名单")
+        shown_source = (
+            game["cards"][source]["states"].get("display_killer", source) if source else None
+        )
         require("hanna" in suspects, "名单必须包含汉娜")
-        require(
-            not source or source in suspects or source == "leia" and omit_leia,
-            "名单必须包含技能处理后的真凶",
-        )
-        require(not (omit_leia and "leia" in suspects), "选择不列入蕾雅时请移除蕾雅")
-        shown = [
-            game["cards"][cid]["states"].get("witness_role", cid)
-            if cid == "honoka" and game["cards"][cid]["witch"]
-            else cid
-            for cid in suspects
-        ]
-        text = "三名疑似凶手：" + "、".join(ROLES[cid]["name"] for cid in shown)
-        notify(
-            game,
-            events,
-            text,
-            [item["seat_id"]],
-            "夜间目击名单",
-        )
-        # 白天阶段（到投票结束前）客户端常驻显示这份名单；下一份名单覆盖旧的。
-        game["witness"] = {"day": game["day"], "seat_id": item["seat_id"], "text": text}
-        victim_seat = seat(game, item["seat_id"])
-        if not current(game, victim_seat):
-            game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
+        require(not shown_source or shown_source in suspects, "名单必须包含技能处理后的真凶")
+        if "honoka" in suspects and game["cards"]["honoka"]["witch"]:
+            pending(
+                game,
+                "honoka_witness",
+                "穗乃香被列入目击：等待本人选择显示角色",
+                seat_id=owner(game, "honoka")["id"],
+                victim=item["victim"],
+                witness_seat=item["seat_id"],
+                suspects=list(suspects),
+            )
+            notify(
+                game,
+                events,
+                "你被列入一份目击名单，请选择本次显示的角色；超时将显示穗乃香。",
+                [owner(game, "honoka")["id"]],
+                "目击改名",
+            )
+        else:
+            publish_witness(game, events, item, suspects)
     elif kind == "lower_entry":
         if (
             data.get("allow")
@@ -716,19 +699,6 @@ def resolve_pending(game, events, data):
         game["cards"][item["card_id"]]["states"]["entry_blocked_at"] = (
             None if data.get("allow") else f"{game['day']}:{game['phase']}"
         )
-    elif kind == "declaration":
-        declaration = next(d for d in game["declarations"] if d["id"] == item["declaration_id"])
-        require(declaration["status"] == "open", "该声明已停止")
-        outcome = data["outcome"]
-        if outcome != "stop":
-            execute_declaration(game, events, declaration)
-        if outcome == "execute":
-            item["title"] = item["text"] = (
-                f"{declaration['seat_id']}号声明效果已执行：结束质疑窗口或停止后续"
-            )
-            return
-        declaration["status"] = "complete" if outcome == "complete" else "stopped"
-        sync_declarations(game)
     elif kind == "water":
         outcome = data["outcome"]
         if outcome == "cancel":
@@ -761,15 +731,6 @@ def resolve_pending(game, events, data):
                     recipients,
                     "遗留证物",
                     item.get("image_id"),
-                )
-            for painting in item.get("paintings", []):
-                notify(
-                    game,
-                    events,
-                    painting.get("text") or "诺亚遗留画作",
-                    recipients,
-                    "画作证物",
-                    painting["image_id"],
                 )
     elif kind == "codex":
         if data["outcome"] == "convert":
@@ -805,16 +766,24 @@ def resolve_pending(game, events, data):
 
 
 def sync_declarations(game):
+    def summary(declaration):
+        data = declaration["data"]
+        if data.get("target"):
+            return f"目标：{data['target']}号"
+        if data.get("participants"):
+            return "参与席位：" + "、".join(f"{sid}号" for sid in data["participants"])
+        return "无目标"
+
     game["public"]["declarations"] = [
         {
-            "id": d["id"],
-            "seat_id": d["seat_id"],
-            "ability": d["ability"],
-            "label": DAY_ABILITIES[d["ability"]][1],
-            "status": d["status"],
+            "id": declaration["id"],
+            "seat_id": declaration["seat_id"],
+            "label": DAY_ABILITIES[declaration["ability"]][1],
+            "summary": summary(declaration),
+            "status": declaration["status"],
         }
-        for d in game["declarations"]
-        if d["day"] == game["day"]
+        for declaration in game["declarations"]
+        if declaration["day"] == game["day"]
     ]
 
 
@@ -837,15 +806,17 @@ def host_command(game, events, action, data):
         game["status"] = "playing"
         game["phase"] = "witch"
         sid = honoka_seat["id"]
+        upper = [(s["id"], current(game, s)["role_id"]) for s in game["seats"] if s["id"] != sid]
+        shifted = [role for _, role in upper[-1:]] + [role for _, role in upper[:-1]]
         information(
             game,
             events,
             honoka,
             "开局上层角色",
+            "；".join(f"{seat_id}号：{ROLES[role]['name']}" for seat_id, role in upper),
             "；".join(
-                f"{s['id']}号：{ROLES[current(game, s)['role_id']]['name']}"
-                for s in game["seats"]
-                if s["id"] != sid
+                f"{seat_id}号：{ROLES[role]['name']}"
+                for (seat_id, _), role in zip(upper, shifted, strict=True)
             ),
         )
         save_snapshot(game)
@@ -1090,6 +1061,35 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             "title": f"{sid}号夜间选择",
             **deepcopy({k: v for k, v in data.items() if k != "ability"}),
         }
+        if ability == "treasure":
+            entry["effective"] = effect_effective(game, events, card, "寻宝")
+            entry["resolved"] = True
+            game["night"]["actions"] = [entry]
+            game["night"]["confirmed"] = list(game["night"]["actors"])
+            game["night"]["locked"] = True
+            game["phase"] = "night_review"
+            if entry["effective"]:
+                card["states"]["treasure_protected_day"] = game["day"]
+                roll = SystemRandom().randrange(5)
+                mine = roll == 0
+                entry["roll"] = roll
+                entry["mine"] = mine
+                log_event(game, "roll", f"艾玛寻宝骰值{roll}：{'触发地雷' if mine else '安全'}。")
+                notify(game, events, f"艾玛寻宝结果：{'触发地雷' if mine else '安全'}。", alert=True)
+                if mine:
+                    card["states"].pop("treasure_protected_day", None)
+                    apply_damage(
+                        game,
+                        events,
+                        damage_preview(
+                            game,
+                            [{"target_card": card["id"], "source_card": card["id"], "cause": "treasure"}],
+                        ),
+                    )
+            else:
+                notify(game, events, "艾玛寻宝未产生有效结果。", alert=True)
+            game["night"]["preview"] = damage_preview(game, [])
+            return
         if target:
             entry["target_seat"], entry["target_card"] = data["target"], target["id"]
         game["night"]["actions"] = [
@@ -1118,58 +1118,16 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                     "希罗唯一一夜的疯狂攻击例外已用，且艾玛在合法攻击范围内",
                 )
                 game["spiritual"]["hiro_exception"] = True
-        elif card["states"].get("madness_target"):
-            target = game["cards"].get(card["states"]["madness_target"])
-            attacks = set(night_abilities(game, card)) & {
-                "knife",
-                "shoot",
-                "spear",
-                "extra_kill",
-                "massacre",
-            }
-            if poisoned(card):
-                attacks &= {"knife"}
-            if (
-                attacks
-                and target
-                and target["alive"]
-                and current(game, owner(game, target["id"])) == target
-                and target_allowed(game, target["id"])
-            ):
-                attacked = any(
-                    a["ability"] in attacks
-                    and (
-                        a.get("target_card") == target["id"]
-                        or a["ability"] == "massacre"
-                        and target["id"] != card["id"]
-                    )
-                    for a in actions
-                )
-                require(attacked, "拥有攻击能力时，必须攻击合法范围内的疯狂目标；注视范围限制优先")
-        for a in actions:
-            a["confirmed"] = True
-            if a["ability"] == "paint":
-                card["states"].setdefault("paintings", []).append(
-                    {"image_id": a["image_id"], "text": a.get("text", ""), "day": game["day"]}
-                )
-                notify(
-                    game,
-                    events,
-                    a.get("text") or "本夜画作已保存。",
-                    [sid],
-                    "我的画作",
-                    a["image_id"],
-                )
-        if card["id"] == "noah":
-            card["states"]["paint_done"] = game["day"]
+        for selected in actions:
+            selected["confirmed"] = True
         game["night"]["confirmed"].append(sid)
         unlock_coco(game, events)
     elif action == "day.skill":
         ability = data["ability"]
-        # 穗乃香只能假装自己示人身份的技能
-        fake = card["id"] == "honoka" and ability in claimable(card["states"].get("disguise"))
-        require(fake or can_day_ability(game, card, ability), "此时不能声明该技能")
-        d = {
+        real = can_day_ability(game, card, ability)
+        fake = not real and day_fake_allowed(game, card, ability)
+        require(real or fake, "此时不能声明该技能")
+        declaration = {
             "id": uid(),
             "day": game["day"],
             "seat_id": sid,
@@ -1181,25 +1139,11 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             "status": "open",
             "executed": False,
         }
-        game["declarations"].append(d)
-        if fake:
-            # 规则九：伪装能不能成立、按什么结算由主持人裁定，仍保留主持人判定点。
-            pending(
-                game,
-                "declaration",
-                f"{sid}号声称{DAY_ABILITIES[ability][1]}（伪装）：裁定是否按真实流程结算",
-                declaration_id=d["id"],
-            )
-        else:
-            # 真实技能（含热气球）按技能条目直接结算，声明保持开放以保留质疑窗口。
-            execute_declaration(game, events, d)
+        game["declarations"].append(declaration)
+        execute_declaration(game, events, declaration)
         sync_declarations(game)
-        notify(
-            game,
-            events,
-            f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，其他玩家可质疑。",
-            alert=True,
-        )
+        suffix = "该技能不可质疑。" if ability in {"photo", "love"} else "其他玩家可质疑。"
+        notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，{suffix}", alert=True)
     elif action == "day.challenge":
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])
         require(d["status"] == "open", "该技能声明已结束")
@@ -1208,7 +1152,9 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         require(not lost_by_challenge(game, s), "质疑失败后不能再质疑")
         if d["fake"]:
             d["status"] = "stopped"
-            game["pending"] = [p for p in game["pending"] if p.get("declaration_id") != d["id"]]
+            for card_id, penalty in list(game["spiritual"]["annan_penalty"].items()):
+                if isinstance(penalty, dict) and penalty.get("declaration_id") == d["id"]:
+                    del game["spiritual"]["annan_penalty"][card_id]
             notify(
                 game,
                 events,
@@ -1244,7 +1190,23 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             s["avatar_role_id"] = data["role"]
             notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
     elif action == "honoka.witness":
-        card["states"]["witness_role"] = data["role"]
+        item = next(
+            pending_item
+            for pending_item in game["pending"]
+            if pending_item["id"] == data["pending_id"]
+            and pending_item["kind"] == "honoka_witness"
+            and pending_item["seat_id"] == sid
+        )
+        publish_witness(
+            game,
+            events,
+            {**item, "seat_id": item["witness_seat"]},
+            item["suspects"],
+            data["role"],
+        )
+        game["pending"] = [
+            pending_item for pending_item in game["pending"] if pending_item["id"] != item["id"]
+        ]
     elif action == "hiro.exit":
         attack = {"target_card": card["id"], "cause": "voluntary", "unconditional": True}
         if game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"}:
@@ -1278,10 +1240,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             game.setdefault("speech_queued", {})[sid] = text
             game.setdefault("speech_passed", []).append(sid)
             notify(game, events, f"{sid}号已写好发言，轮到时自动公开。")
-    elif action == "marg.mimic":
-        text = data["text"].strip()
-        require(text, "请先写下发言内容")
-        chat_event(game, events, data["target"], text, mimic_seat_id=sid)
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
@@ -1317,18 +1275,24 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             )
     elif action == "execution.shoot":
         card["uses"]["bullets"] -= 1
-        denominator = 3 if card["witch"] else 6
-        roll = SystemRandom().randrange(denominator) + 1
+        threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
+        roll = SystemRandom().randrange(6) + 1
         target = current(game, data["target"])
+        effective = effect_effective(game, events, card, "临刑开枪")
+        hit = roll <= threshold and effective
+        card["uses"]["shot_misses"] = 0 if hit else min(threshold, 6)
         game.setdefault("execution_rolls", []).append(
             {
                 "day": game["day"],
                 "roll": roll,
-                "denominator": denominator,
+                "threshold": threshold,
                 "target_card": target["id"],
+                "effective": effective,
+                "hit": hit,
             }
         )
-        if roll == 1 and not poisoned(card):
+        log_event(game, "roll", f"奈乃香临刑开枪：命中阈值{threshold}/6，骰值{roll}，{'命中' if hit else '未命中'}。")
+        if hit:
             game["execution_shots"].append(
                 {"target_card": target["id"], "source_card": card["id"], "cause": "shoot"}
             )
@@ -1336,7 +1300,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         notify(
             game,
             events,
-            f"{sid}号临刑开枪，命中率1/{denominator}，{'命中' if roll == 1 and not poisoned(card) else '未造成有效命中'}。",
+            f"{sid}号临刑开枪，命中率{threshold}/6，{'命中' if hit else '未命中'}。",
             alert=True,
         )
     elif action == "execution.confirm":
@@ -1400,7 +1364,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             events,
             f"{sid}号{'允许' if photo['allowed'] else '不再允许'}你查看其后续夜间行动。",
             [photo["sender"]],
-            "照片授权",
+            "信物授权",
         )
     elif action == "water.use":
         target = current(game, data["target"])
@@ -1417,19 +1381,16 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         )
     elif action == "meruru.revive":
         card["uses"]["revive"] = True
-        if not poisoned(card):
-            death = next(d for d in game["deaths"] if d["id"] == data["death_id"])
+        death = next(death for death in game["deaths"] if death["id"] == data["death_id"])
+        require(
+            death["day"] == game["day"] and death.get("source_card") == card["id"],
+            "只能复活当天由该梅露露牌造成的死亡",
+        )
+        if effect_effective(game, events, card, "傀儡复活"):
             revive(game, events, death["target_card"], puppet=card["id"])
-        else:
-            notify(game, events, "复活效果因中毒未生效。", [sid])
     elif action == "evidence.submit":
         dead = game["cards"][data["card_id"]]
-        paintings = [
-            p
-            for p in dead["states"].get("paintings", [])
-            if p["image_id"] in data.get("paintings", [])
-        ]
-        require(data.get("text") or data.get("image_id") or paintings, "至少选择一个证物或已画作品")
+        require(data.get("text") or data.get("image_id"), "至少填写证物或上传图像")
         dead["states"]["evidence_used"] = True
         pending(
             game,
@@ -1438,7 +1399,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             seat_id=sid,
             text=data.get("text", ""),
             image_id=data.get("image_id"),
-            paintings=paintings,
         )
     elif action == "player.surrender":
         if sid not in game["surrenders"]:
@@ -1456,7 +1416,6 @@ _LOG_SKIP = {
     "night.clear",
     "speech.done",
     "speech.speak",
-    "marg.mimic",
     "vote.cast",
     "vote.pass",
     "balloon.choose",
@@ -1479,7 +1438,7 @@ def _ability_label(ability):
 
 
 def _target_text(game, data):
-    target = data.get("target") or data.get("target_seat") or data.get("seat_id")
+    target = data.get("target") or data.get("target_card") or data.get("target_seat") or data.get("seat_id")
     if not target:
         return ""
     target = str(target)
@@ -1588,7 +1547,7 @@ def apply_command(game, actor, action, payload, *, by_host=False):
     if line is not None:
         kind = "host" if actor["kind"] == "host" else "action"
         log_event(game, kind, line)
-    if by_host and actor["kind"] == "player" and action != "marg.mimic":
+    if by_host and actor["kind"] == "player":
         notify(
             game,
             events,
@@ -1646,8 +1605,24 @@ def expire_warnings(game, now=None):
     events = []
     for sid in expired:
         phase = game["phase"]
+        witness = next(
+            (
+                item
+                for item in game["pending"]
+                if item["kind"] == "honoka_witness" and item["seat_id"] == sid
+            ),
+            None,
+        )
         hiro = hiro_dilemma(game, sid)
-        if hiro:
+        if witness:
+            publish_witness(
+                game,
+                events,
+                {**witness, "seat_id": witness["witness_seat"]},
+                witness["suspects"],
+            )
+            game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
+        elif hiro:
             game["pending"] = [p for p in game["pending"] if p["id"] != hiro["id"]]
             if hiro.get("preview"):
                 apply_damage(game, events, hiro["preview"], allow_reaction=False)
@@ -1655,8 +1630,6 @@ def expire_warnings(game, now=None):
         elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
             clear_seat_actions(game, sid)
             game["night"]["confirmed"].append(sid)
-            if game["night"]["actors"].get(sid) == "noah":
-                role_card(game, "noah")["states"]["paint_done"] = game["day"]
             unlock_coco(game, events)
         elif phase == "speech" and game["public"]["speaker"] == sid:
             speech_done(game, events)

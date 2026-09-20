@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from .actions import actions_for, outstanding_seats
-from .catalog import PHASES
+from .catalog import PHASES, ROLES
 from .resolution import coco_seat
 from .state import (
     can_use_card,
@@ -13,6 +13,7 @@ from .state import (
     pending_nominators,
     owner,
     player_seat,
+    poison_sources,
     require,
     role_card,
 )
@@ -22,6 +23,8 @@ def host_tasks(game):
     """Ordered to-do list for the host: every item is either blocking or a reminder."""
     tasks = []
     for item in game["pending"]:
+        if item["kind"] == "honoka_witness":
+            continue
         tasks.append(
             {
                 "id": item["id"],
@@ -55,6 +58,8 @@ def host_tasks(game):
     for item in game["pending"]:
         if item["kind"] == "hiro" and item.get("seat_id"):
             warn_task("hiro", item["seat_id"], f"{item['seat_id']}号尚未选择是否回溯")
+        elif item["kind"] == "honoka_witness" and item.get("seat_id"):
+            warn_task("honoka_witness", item["seat_id"], f"{item['seat_id']}号尚未选择目击显示角色")
     if phase in {"night", "night_coco"}:
         coco = coco_seat(game) if phase == "night" else None
         for sid in game["night"]["actors"]:
@@ -159,22 +164,72 @@ def card_view(game, card, host=False):
                 "poisoned",
                 "protected",
                 "no_vote",
+                "no_ability",
                 "learned_brainwash",
-                "paint_done",
                 "evidence_allowed",
                 "evidence_used",
-                "witness_role",
+                "treasure_protected_day",
                 "entry_allowed",
             }
         }
         if states.get("puppet"):
             result["states"]["puppet_master_seat"] = owner(game, states["puppet"])["id"]
-        if states.get("madness_target"):
-            result["states"]["madness_target_seat"] = owner(game, states["madness_target"])["id"]
-        if card["role_id"] == "noah":
-            result["states"]["paintings"] = deepcopy(states.get("paintings", []))
     result["states"]["entry_allowed"] = can_use_card(game, card)
     return result
+
+
+def status_cards(game, own):
+    if not own:
+        return []
+    cards = [game["cards"][card_id] for card_id in own["cards"]]
+    active = current(game, own)
+    statuses = []
+
+    def add(status_id, tone, title, text):
+        statuses.append({"id": status_id, "tone": tone, "title": title, "text": text})
+
+    if active and poison_sources(game, active):
+        add("poison", "warning", "中毒", "情报可能错误，技能可能被视为假。")
+    protected = next(
+        (card for card in cards if card["states"].get("treasure_protected_day", -1) >= game["day"]),
+        None,
+    )
+    if protected:
+        add("treasure", "success", "寻宝保护", "魔女刀、蕾雅长矛和提名暂不能选择你；全场攻击仍有效。")
+    swap = next(
+        (action for action in game["night"]["actions"] if action["seat_id"] == own["id"] and action["ability"] == "swap"),
+        None,
+    )
+    if swap:
+        add("millia_swap", "info", "米莉亚预选", f"已预选{swap['target_seat']}号；仅临死触发并消耗。")
+    nanoka = next((card for card in cards if card["role_id"] == "nanoka"), None)
+    if nanoka:
+        misses = nanoka["uses"].get("shot_misses", 0)
+        add("nanoka_bullets", "info", "奈乃香子弹", f"剩余{nanoka['uses'].get('bullets', 0)}颗；下一枪命中率{min(misses + 1, 6)}/6。")
+    if any(card["role_id"] == "marg" for card in cards) and game.get("marg_love"):
+        love = game["marg_love"]
+        add("marg_love", "info", "玛格之爱", f"当前爱人：{love['seat_id']}号" + ("（已转爱自己）" if love.get("self") else ""))
+    if any(card["role_id"] == "sherry" for card in cards) and game["spiritual"]["sherry_bound"]:
+        add("sherry_bound", "info", "雪莉绑定", "胜负跟随汉娜，不能同意处决汉娜。")
+    for card in cards:
+        penalty = game["spiritual"]["annan_penalty"].get(card["id"])
+        penalty_day = penalty.get("day") if isinstance(penalty, dict) else penalty
+        if penalty_day:
+            add("annan_penalty", "danger", "安安后果", f"第{penalty_day}天失去投票权并必须被处刑。")
+        if card["states"].get("puppet"):
+            add("puppet", "danger", "傀儡", "不能投票，也不能发动角色技能。")
+        if card["role_id"] == "noah":
+            if card["uses"].get("rain"):
+                add("noah_rain", "info", "诺亚下雨", "本局下雨已使用。")
+            if card["uses"].get("scapegoat"):
+                shown = card["states"].get("display_killer")
+                add(
+                    "noah_scapegoat",
+                    "info",
+                    "替罪凶手",
+                    "本局已使用" + (f"：显示为{ROLES[shown]['name']}" if shown else "。"),
+                )
+    return statuses
 
 
 def game_view(game, actor):
@@ -217,7 +272,7 @@ def game_view(game, actor):
         }
         if host or (spectator and not lobby):
             # 候场/调序阶段不公开任何角色信息；开局后观战者才看只读棋盘。
-            entry["cards"] = [card_view(game, game["cards"][cid], True) for cid in s["cards"]]
+            entry["cards"] = [card_view(game, game["cards"][cid], host) for cid in s["cards"]]
             entry["current_card_id"] = current(game, s)["id"] if current(game, s) else None
         seats.append(entry)
     access = set(actor.get("access_ids", [])) | {actor.get("id")}
@@ -296,6 +351,7 @@ def game_view(game, actor):
             "seat_id": own_id,
             "cards": [card_view(game, game["cards"][cid]) for cid in own["cards"]] if own else [],
             "current_card_id": current(game, own)["id"] if own and current(game, own) else None,
+            "statuses": status_cards(game, own),
         },
         "actions": actions_for(game, actor),
         "information": information,
@@ -362,7 +418,11 @@ def game_view(game, actor):
             "speech_passed": list(game.get("speech_passed", [])),
             "vote_rounds": deepcopy(game["vote_rounds"]),
             "photos": deepcopy(game["photos"]),
-            "gaze": deepcopy(game.get("gaze")),
+            "poison_sources": {
+                card_id: poison_sources(game, card)
+                for card_id, card in game["cards"].items()
+                if poison_sources(game, card)
+            },
             "log": deepcopy(game.get("log", [])),
             "tasks": host_tasks(game),
         }
