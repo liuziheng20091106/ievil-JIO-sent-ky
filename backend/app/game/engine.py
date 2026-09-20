@@ -21,11 +21,11 @@ from .resolution import (
     lock_night,
     prepare_night_preview,
     revive,
-    swap_cards,
     target_allowed,
     unlock_coco,
 )
 from .state import (
+    DEAL_LOWER_ROLES,
     GameError,
     audience,
     chat_event,
@@ -134,52 +134,61 @@ def convert_daily(game, events):
         begin_night(game, events)
         return
     game["witch_checked_day"] = game["day"]
-    for cid in game["codex"]:
+    destiny = game["public"].get("witch_destiny")
+    day = game["day"]
+
+    def legal(cid):
         c = game["cards"][cid]
         s = owner(game, cid)
         other = next(game["cards"][x] for x in s["cards"] if x != cid)
-        if (
+        return (
             cid not in {"sherry", "arisa"}
             and c["alive"]
             and not c["witch"]
             and current(game, s) == c
             and other["original_role_id"] not in {"millia", "arisa"}
-        ):
-            set_witch(game, events, cid)
-            begin_night(game, events)
-            return
-    pending(game, "codex", "魔典已无合法目标：主持人裁定本日转化或耗尽处理")
+            # 艾玛这张牌前两天不能魔女化
+            and not (c["role_id"] == "emma" and day <= 2)
+        )
 
-
-def millia_swap(game, events, preview, swap):
-    """米莉亚临死交换：选好对象就直接换上层牌并重新结算，不设主持人判定点。"""
-    left, right = owner(game, "millia"), seat(game, swap["target_seat"])
-    swap_cards(game, swap)
-    notify(game, events, "米莉亚临死交换已生效。", [left["id"], right["id"]], "角色交换")
-    apply_damage(game, events, damage_preview(game, deepcopy(preview["attacks"])))
+    converted = False
+    if destiny and day <= 3:
+        # 新版命运规则：前两天各转化指定席位当前牌，第三天转化前两日魔女各自的另一张牌。
+        if day <= 2 and day - 1 < len(destiny["first"]):
+            s = seat(game, destiny["first"][day - 1])
+            card = current(game, s)
+            if card and legal(card["id"]):
+                set_witch(game, events, card["id"])
+                converted = True
+        else:
+            for sid in destiny["first"]:
+                s = seat(game, sid)
+                other = next(
+                    (
+                        game["cards"][cid]
+                        for cid in s["cards"]
+                        if not game["cards"][cid]["witch"] and game["cards"][cid]["alive"]
+                    ),
+                    None,
+                )
+                if other is not None and other["role_id"] not in {"sherry", "arisa"}:
+                    set_witch(game, events, other["id"])
+                    converted = True
+    if not converted:
+        # 命运席位当前牌不可转化（雪莉当道、亚里沙/米莉亚同席、已出局等）时，
+        # 退回魔典顺序找第一个合法目标；仍无目标才交主持人裁定。
+        for cid in game["codex"]:
+            if legal(cid):
+                set_witch(game, events, cid)
+                converted = True
+                break
+    if not converted:
+        pending(game, "codex", "本日无合法魔女化目标：主持人裁定转化或耗尽处理")
+        return
+    begin_night(game, events)
 
 
 def apply_damage(game, events, preview, allow_reaction=True):
-    millia = role_card(game, "millia")
-    # 换牌只从本夜行动里挑：夜间换牌未触发时行动整体保留，白天伤害不得
-    # 捡起昨夜残留行动重复结算（希罗回溯规则允许白天触发，不在此限）。
-    swap = (
-        next(
-            (a for a in game["night"]["actions"] if a["ability"] == "swap" and a.get("effective")),
-            None,
-        )
-        if game["half"] == "night"
-        else None
-    )
-    millia_triggered = (
-        allow_reaction
-        and swap
-        and not millia["uses"].get("swap")
-        and any(death["target_card"] == "millia" for death in preview["deaths"])
-    )
-    if millia_triggered and effect_effective(game, events, millia, "临死交换"):
-        millia_swap(game, events, preview, swap)
-        return
     hiro = role_card(game, "hiro")
     mode = "witch" if hiro["witch"] else "normal"
     hiro_triggered = (
@@ -578,19 +587,13 @@ def execute_declaration(game, events, declaration):
     target_card = current(game, target) if target else None
     if target:
         require(target_card is not None, "声明目标已不在场，请停止声明并重新裁定")
-    if ability in {"interrupt", "last_speaker"}:
+    if ability == "interrupt":
         card["uses"]["interrupt_day"] = game["day"]
-        if ability == "last_speaker":
-            order = game["public"]["speech_order"]
-            game["public"]["speech_order"] = [x for x in order if x != sid] + [sid]
-            if game["public"]["speaker"] == sid:
-                game["public"]["speaker"] = next((x for x in order if x != sid), sid)
-        else:
-            require(target != sid, "不能打断自己的发言")
-            if game["phase"] == "speech":
-                require(game["public"]["speaker"] == target, "只能打断当前发言者")
-            game["public"]["interrupted_speaker"] = target
-            game["public"]["speaker"] = sid
+        require(target != sid, "不能打断自己的发言")
+        if game["phase"] == "speech":
+            require(game["public"]["speaker"] == target, "只能打断当前发言者")
+        game["public"]["interrupted_speaker"] = target
+        game["public"]["speaker"] = sid
     elif ability == "love":
         card["uses"]["love_day"] = game["day"]
         game["marg_love"] = {"seat_id": target, "day": game["day"]}
@@ -1030,6 +1033,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
     if action == "lobby.order":
         require(game["status"] == "lobby" and game["phase"] == "ordering", "发牌后才能调整上下牌")
         require(not s["ready"], "下层牌已确定，不能再改上层角色")
+        top_role = game["cards"][data["top"]]["role_id"]
+        require(top_role not in DEAL_LOWER_ROLES, "艾玛、米莉亚、亚里沙必须放在下层")
         s["cards"] = [data["top"]] + [cid for cid in s["cards"] if cid != data["top"]]
         s["ready"] = False
     elif action == "lobby.ready":
@@ -1040,6 +1045,15 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         ):
             deal_cards(game)
             notify(game, events, "全员首次准备完成，已私下发牌；请调整上下牌并再次准备。")
+            destiny = game["public"]["witch_destiny"]["seats"]
+            for i, s in enumerate(game["seats"]):
+                notify(
+                    game,
+                    events,
+                    "本局你会魔女化。" if destiny[i] else "本局你不会魔女化。",
+                    [s["id"]],
+                    "魔女化命运",
+                )
     elif action == "player.profile":
         require(1 <= len(data["name"].strip()) <= 30, "公开称呼需为1至30字")
         s["name"] = data["name"].strip()
@@ -1090,6 +1104,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                 notify(game, events, "艾玛寻宝未产生有效结果。", alert=True)
             game["night"]["preview"] = damage_preview(game, [])
             return
+        if ability == "swap":
+            require(target is not None, "米莉亚每晚必须选择一名玩家换血")
         if target:
             entry["target_seat"], entry["target_card"] = data["target"], target["id"]
         game["night"]["actions"] = [
@@ -1124,14 +1140,28 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         unlock_coco(game, events)
     elif action == "day.skill":
         ability = data["ability"]
-        real = can_day_ability(game, card, ability)
-        fake = not real and day_fake_allowed(game, card, ability)
+        use_card = card
+        if data.get("card_id") and data["card_id"] != (card["id"] if card else None):
+            candidate = game["cards"].get(data["card_id"])
+            # 新版规则：艾玛即使在下层也可打断一次发言。
+            require(
+                candidate
+                and candidate["role_id"] == "emma"
+                and ability == "interrupt"
+                and candidate["alive"]
+                and owner(game, candidate["id"])["id"] == sid,
+                "此时不能用该角色牌声明技能",
+            )
+            use_card = candidate
+        require(use_card is not None, "当前没有可声明技能的角色牌")
+        real = can_day_ability(game, use_card, ability)
+        fake = not real and day_fake_allowed(game, use_card, ability)
         require(real or fake, "此时不能声明该技能")
         declaration = {
             "id": uid(),
             "day": game["day"],
             "seat_id": sid,
-            "card_id": card["id"],
+            "card_id": use_card["id"],
             "ability": ability,
             "fake": fake,
             "by_host": by_host,

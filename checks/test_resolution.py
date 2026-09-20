@@ -275,10 +275,12 @@ class ResolutionEdges(unittest.TestCase):
         data["suspects"] = ["hanna", "emma", "nanoka", "coco"]
         command(game, HOST, "host.resolve", data)
         self.assertTrue(game_view(game, player(game, "1"))["information"])
-        self.assertFalse(game_view(game, player(game, "2"))["information"])
+        # 他人信息里没有这份目击名单；开局告知的魔女化命运属公开规则，不算泄露。
+        others = game_view(game, player(game, "2"))["information"]
+        self.assertFalse([item for item in others if item["title"] != "魔女化命运"])
 
     def test_millia_leftover_swap_action_is_not_replayed_by_day_damage(self):
-        # 夜间未死的米莉亚换牌行动残留到白天后，白天伤害不得捡起它重复结算。
+        # 夜间残留的换血行动在白天伤害结算里不生效：米莉亚死后下层艾玛登场。
         game = arranged_game("night_review", "night")
         game["night"]["actions"] = [
             {
@@ -296,13 +298,12 @@ class ResolutionEdges(unittest.TestCase):
             "host.damage",
             {"targets": ["millia"], "effect": "death", "source": "coco", "reason": "测试白天残留"},
         )
-        # 换牌未触发：技能不消耗、上层牌不动、米莉亚死后下层艾玛登场。
-        self.assertFalse(game["cards"]["millia"]["uses"].get("swap"))
         self.assertEqual(game["seats"][0]["cards"], ["millia", "emma"])
         self.assertEqual(game_view(game, player(game, "1"))["self"]["current_card_id"], "emma")
         self.assertFalse(game["cards"]["millia"]["alive"])
 
-    def test_night_preview_swaps_immediately_without_a_host_step(self):
+    def test_millia_substitutes_the_swapped_players_death(self):
+        # 新版米莉亚：换血对象即将死亡时，米莉亚牌代替其死亡，不产生主持人待办。
         game = arranged_game("night_review", "night")
         game["night"]["reactions"] = []
         game["night"]["actions"] = [
@@ -310,7 +311,7 @@ class ResolutionEdges(unittest.TestCase):
                 "ability": "knife",
                 "card_id": "emma",
                 "seat_id": "2",
-                "target_card": "millia",
+                "target_card": "meruru",
                 "effective": True,
                 "hit": True,
             },
@@ -323,14 +324,46 @@ class ResolutionEdges(unittest.TestCase):
             },
         ]
         game["cards"]["emma"]["alive"] = False
-        prepare_night_preview(game)
+        with patch("backend.app.game.state.SystemRandom") as random, patch(
+            "backend.app.game.resolution.SystemRandom"
+        ) as resolution_random:
+            random.return_value.randrange.return_value = 0  # 中毒骰固定生效
+            resolution_random.return_value.randrange.return_value = 0
+            prepare_night_preview(game)
         self.assertFalse(any(item["kind"] == "millia" for item in game["pending"]))
-        self.assertTrue(game["cards"]["millia"]["uses"].get("swap"))
-        self.assertEqual(game["seats"][0]["cards"], ["meruru", "emma"])
-        self.assertEqual(game["seats"][2]["cards"], ["millia", "hanna"])
-        self.assertEqual(
-            {death["target_card"] for death in game["night"]["preview"]["deaths"]}, {"millia"}
-        )
+        deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
+        self.assertEqual(deaths, {"millia"})
+        self.assertTrue(game["cards"]["meruru"]["alive"])
+
+    def test_millia_does_not_substitute_when_poisoned(self):
+        # 米莉亚中毒时换血失效，不替死。
+        game = arranged_game("night_review", "night")
+        game["night"]["reactions"] = []
+        game["night"]["actions"] = [
+            {
+                "ability": "knife",
+                "card_id": "noah",
+                "seat_id": "5",
+                "target_card": "meruru",
+                "effective": True,
+                "hit": True,
+            },
+            {
+                "ability": "swap",
+                "card_id": "millia",
+                "seat_id": "1",
+                "target_seat": "3",
+                "effective": True,
+            },
+        ]
+        with patch("backend.app.game.state.SystemRandom") as random, patch(
+            "backend.app.game.resolution.SystemRandom"
+        ) as resolution_random:
+            random.return_value.randrange.return_value = 1  # 中毒骰值1：技能失效
+            resolution_random.return_value.randrange.return_value = 1
+            prepare_night_preview(game)
+        deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
+        self.assertEqual(deaths, {"meruru"})
 
     def test_protection_and_half_day_limit_prevent_extra_card_exit(self):
         game = arranged_game()

@@ -177,7 +177,7 @@ def target_field(game, night=False, exclude=None, avoid_treasure=False):
 
 
 def day_fields(game, ability, exclude=None):
-    if ability in {"last_speaker", "gaze"}:
+    if ability == "gaze":
         return []
     if ability == "balloon":
         return [
@@ -216,12 +216,11 @@ def can_day_ability(game, card, ability):
             and witch
             and not card["uses"].get("mass_brainwash")
         )
-    if ability in {"interrupt", "last_speaker"}:
+    if ability == "interrupt":
         return (
             role == "emma"
             and phase in {"speech", "discussion"}
             and card["uses"].get("interrupt_day") != game["day"]
-            and (ability != "last_speaker" or phase == "speech")
         )
     if ability == "gaze":
         return role == "nanoka" and phase == "execution" and card["uses"].get("gaze_day") != game["day"]
@@ -257,7 +256,6 @@ def day_fake_allowed(game, card, ability):
         "brainwash": {"voting"},
         "mass_brainwash": {"discussion", "nomination", "voting"},
         "interrupt": {"speech", "discussion"},
-        "last_speaker": {"speech"},
         "gaze": {"execution"},
     }.get(ability, {"speech", "discussion", "balloon", "nomination", "voting"})
     shown = card["states"].get("disguise") if card["id"] == "honoka" else card["role_id"]
@@ -282,7 +280,7 @@ def night_abilities(game, card):
     abilities = ["knife"] if witch else []
     if role == "emma":
         abilities.append("treasure")
-        if witch and game["day"] >= 3:
+        if witch:
             abilities.append("massacre")
     if role == "hanna" and witch and not uses.get("extra_kill"):
         abilities.append("extra_kill")
@@ -293,7 +291,7 @@ def night_abilities(game, card):
             abilities.append("rain")
         if witch and not uses.get("scapegoat"):
             abilities.append("scapegoat")
-    if role == "millia" and not uses.get("swap"):
+    if role == "millia":
         abilities.append("swap")
     if role == "nanoka" and witch:
         abilities.append("witch_scan")
@@ -841,8 +839,26 @@ def actions_for(game, actor):
                 action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True)
             )
     if card and game["half"] == "day":
+        day_cards = [card]
+        # 新版规则：艾玛即使在下层也可打断一次发言。
+        emma_card = next((c for c in game["cards"].values() if c["role_id"] == "emma"), None)
+        if (
+            emma_card
+            and emma_card["alive"]
+            and owner(game, "emma")["id"] == sid
+            and emma_card["id"] != card["id"]
+        ):
+            day_cards.append(emma_card)
         for ability in DAY_ABILITIES:
-            if not (can_day_ability(game, card, ability) or day_fake_allowed(game, card, ability)):
+            ability_card = next(
+                (
+                    c
+                    for c in day_cards
+                    if can_day_ability(game, c, ability) or day_fake_allowed(game, c, ability)
+                ),
+                None,
+            )
+            if ability_card is None:
                 continue
             if any(
                 declaration["seat_id"] == sid
@@ -851,13 +867,17 @@ def actions_for(game, actor):
                 for declaration in game["declarations"]
             ):
                 continue
-            fake = day_fake_allowed(game, card, ability)
+            fake = not can_day_ability(game, ability_card, ability)
+            payload = {"ability": ability}
+            # 下层艾玛打断才需要指定用牌，提交时一并带回。
+            if ability_card["id"] != card["id"]:
+                payload["card_id"] = ability_card["id"]
             result.append(
                 action(
                     "day.skill",
                     ("声称" if fake else "") + DAY_ABILITIES[ability][1],
                     day_fields(game, ability, sid),
-                    {"ability": ability},
+                    payload,
                     "私密伪装选择" if fake else "白天技能",
                     danger=ability == "spear",
                 )

@@ -182,7 +182,10 @@ class SetupRules(unittest.TestCase):
             apply_command(game, HOST, "host.start", {})
         for actor in actors[:2]:
             own = game_view(game, actor)["self"]
-            apply_command(game, actor, "lobby.order", {"top": own["cards"][1]["id"]})
+            top = next(
+                c["id"] for c in own["cards"] if c["role_id"] not in {"emma", "millia", "arisa"}
+            )
+            apply_command(game, actor, "lobby.order", {"top": top})
         for actor in [HOST, *actors, observer]:
             self.assertTrue(
                 all(seat["avatar_role_id"] is None for seat in game_view(game, actor)["seats"])

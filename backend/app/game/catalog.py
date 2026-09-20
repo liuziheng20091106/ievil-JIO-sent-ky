@@ -5,8 +5,8 @@ CATALOG = [
         "id": "emma",
         "name": "艾玛",
         "avatar": "/assets/characters/樱羽艾玛.png",
-        "normal": "每个白天可打断一次他人发言并可改为末位发言；每夜可寻宝。只要仍存活，同席另一张牌及相邻席当前牌中毒。",
-        "witch": "第三天或更晚时，夜里可杀死所有其他角色。",
+        "normal": "即使在下层，每个白天也可打断一次他人发言；每夜可寻宝。只要仍存活，同席另一张牌及相邻席当前牌中毒。这张牌前两天不能魔女化。",
+        "witch": "夜里可杀死所有其他角色。",
     },
     {
         "id": "hiro",
@@ -54,7 +54,7 @@ CATALOG = [
         "id": "millia",
         "name": "米莉亚",
         "avatar": "/assets/characters/佐伯米莉亚.png",
-        "normal": "每夜选择一名玩家。按不交换预结算后，仅当自己上层牌会出局才交换双方上层牌，消耗一次技能并重新结算。",
+        "normal": "每晚必须交换一名玩家。其即将死亡时，你代替其死亡。",
         "witch": "无额外魔女化技能；魔女可独立使用魔女刀。",
     },
     {
@@ -75,7 +75,7 @@ CATALOG = [
         "id": "arisa",
         "name": "亚里沙",
         "avatar": "/assets/characters/紫藤亚里沙.png",
-        "normal": "不能魔女化。白天可组织热气球；每夜可令环形左右邻座各以50%概率负伤一次。",
+        "normal": "不能魔女化。白天可组织热气球；每夜可令环形左右邻座各以50%概率负伤一次。如果白天有对跳且没有在对跳里处决，即使你在下层也出局（主持人裁定）。",
         "witch": "不能魔女化。",
     },
     {
@@ -133,7 +133,6 @@ AUTO_PHASES = {
 AUTO_ADVANCE_DELAY = 5
 DAY_ABILITIES = {
     "interrupt": ("emma", "打断发言"),
-    "last_speaker": ("emma", "改为最后发言"),
     "brainwash": ("annan", "秘密洗脑"),
     "mass_brainwash": ("annan", "全场洗脑"),
     "love": ("marg", "宣布爱上或移情"),
@@ -149,7 +148,7 @@ NIGHT_ABILITIES = {
     "protect": ("meruru", "庇护"),
     "rain": ("noah", "下雨"),
     "scapegoat": ("noah", "替罪凶手"),
-    "swap": ("millia", "预选交换"),
+    "swap": ("millia", "换血"),
     "treasure": ("emma", "寻宝"),
     "witch_scan": ("nanoka", "查看魔女化状态"),
     "arisa_injure": ("arisa", "令邻座负伤"),

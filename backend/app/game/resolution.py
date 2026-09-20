@@ -205,39 +205,53 @@ def damage_preview(game, attacks, protection=()):
     return {"deaths": list(dead.values()), "injured": injured, "attacks": deepcopy(attacks)}
 
 
-def swap_cards(game, swap):
-    """米莉亚与被选席位交换上层角色牌，并记下本技能已使用。"""
-    left, right = owner(game, "millia"), seat(game, swap["target_seat"])
-    a, b = current(game, left), current(game, right)
-    require(a and b and a["id"] == "millia", "换牌对象已改变，请先纠错")
-    ia, ib = left["cards"].index(a["id"]), right["cards"].index(b["id"])
-    left["cards"][ia], right["cards"][ib] = b["id"], a["id"]
-    a["uses"]["swap"] = True
+def millia_substitute(game, attacks):
+    """新版米莉亚：每晚必须换血一名玩家；其即将死亡时米莉亚牌代替其死亡。
+
+    在攻击列表层面把指向换血对象当前牌的攻击改写为指向米莉亚牌，随后一次
+    预结算即可；米莉亚牌同夜已死或技能被毒掉时不替死。
+    """
+    night = game["night"]
+    action = next(
+        (
+            selected
+            for selected in night["actions"]
+            if selected["ability"] == "swap" and selected.get("effective")
+        ),
+        None,
+    )
+    millia_card = role_card(game, "millia")
+    if (
+        not action
+        or "millia" in night["reactions"]
+        or not millia_card["alive"]
+        or not effect_effective(game, [], millia_card, "代替死亡")
+    ):
+        return attacks
+    target = current(game, seat(game, action["target_seat"]))
+    if not target:
+        return attacks
+    substituted = False
+    rewritten = []
+    for attack in attacks:
+        if (
+            attack["target_card"] == target["id"]
+            and not substituted
+            and not attack.get("once_injury")
+            and attack.get("cause") != "devotion"
+        ):
+            attack = {**attack, "target_card": "millia"}
+            substituted = True
+        rewritten.append(attack)
+    if substituted:
+        night["reactions"].append("millia")
+    return rewritten
 
 
 def prepare_night_preview(game):
     night = game["night"]
+    night["reactions"] = [r for r in night["reactions"] if r != "millia"]
     preview, dead = night_damage(game)
-    # 换牌前置条件：米莉亚这张牌仍然是其持有席位的当前牌。换过一次之后
-    # 米莉亚牌会落到对方席位，此时不能再换；只靠 uses.swap 不够，因为
-    # 本夜可能已经被 millia_swap / 上一次预结算换过，而 reactions 记录的是本夜反应。
-    millia_card = role_card(game, "millia")
-    millia_current = current(game, owner(game, "millia")) is millia_card
-    action = next(
-        (selected for selected in night["actions"] if selected["ability"] == "swap" and selected.get("effective")),
-        None,
-    )
-    if (
-        action
-        and "millia" in dead
-        and millia_current
-        and not millia_card["uses"].get("swap")
-        and "millia" not in night["reactions"]
-        and effect_effective(game, [], millia_card, "临死交换")
-    ):
-        swap_cards(game, action)
-        night["reactions"].append("millia")
-        preview, dead = night_damage(game)
     night["preview"] = preview
     if (
         "hiro" in dead
@@ -287,6 +301,7 @@ def night_damage(game):
         if target:
             attacks.append({"target_card": target["id"], "source_card": "marg", "cause": "love", "once_injury": True})
     attacks.extend(night.get("extra_attacks", []))
+    attacks = millia_substitute(game, attacks)
     preview = damage_preview(game, attacks, protection)
     return preview, {death["target_card"] for death in preview["deaths"]}
 

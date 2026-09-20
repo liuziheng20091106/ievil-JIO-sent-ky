@@ -103,7 +103,12 @@ class HeuristicPolicy:
         marker = (view["day"], view["phase"], bool(self_seat and self_seat.get("ready")))
         if order is not None and marker not in self._ordered:
             self._ordered.add(marker)
-            top = self.random.choice(self_card_ids)
+            # 艾玛、米莉亚、亚里沙必须放下层，上层只能从另一牌里选。
+            fixed_lower = {"emma", "millia", "arisa"}
+            top = next(
+                (card["id"] for card in view["self"]["cards"] if card["role_id"] not in fixed_lower),
+                self_card_ids[0],
+            )
             return Decision("lobby.order", {"top": top}, "选上层")
         return Decision("lobby.ready", {}, "准备")
 
@@ -189,8 +194,6 @@ class HeuristicPolicy:
             if not speaker or speaker == view["self"]["seat_id"]:
                 return None
             payload["target"] = speaker
-        elif ability == "last_speaker":
-            payload.pop("target", None)
         elif ability == "photo":
             # 赠照片：不能送给自己，且必须有真实内容或画面，否则服务端拒收。
             mine = client.view["self"]["seat_id"]

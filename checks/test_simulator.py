@@ -181,25 +181,21 @@ class SimulatorCase(unittest.TestCase):
             self.assertLessEqual(len(orders), 14, "\n".join(orders))
             self.assertGreaterEqual(len(readies), 7, "\n".join(readies))
 
-    def test_millia_swap_stays_idempotent_across_repeated_preview(self):
-        """米莉亚预选换牌只能生效一次：反复重算预结算不能让牌来回换。
+    def test_millia_substitute_stays_idempotent_across_repeated_preview(self):
+        """米莉亚替死在反复重算预结算下保持稳定：只转移一次致命攻击。
 
-        ``prepare_night_preview`` 会在主持人改动状态、下层登场、警告超时等时机被
-        反复调用（``clear_seat_actions`` 还会清空 ``night["reactions"]`` 再重算）。
-        换牌把米莉亚牌搬到对方席位之后，如果重算再次满足「米莉亚出局且未换过」，
-        就会发生第二次交换把牌换回去，或者撞上 ``swap_cards`` 的前置条件。
-        这里直接压测这个重算入口，要求牌序在反复重算下保持稳定。
+        ``prepare_night_preview`` 会在主持人改动状态、警告超时等时机被反复调用。
+        替死把指向换血对象的攻击改写为米莉亚牌后，重算不能叠加、不能漂移。
         """
         from backend.app.game import DEFAULT_CODEX, create_game
         from backend.app.game.resolution import begin_night, prepare_night_preview
-        from backend.app.game.state import current, deal_cards, owner, role_card
+        from backend.app.game.state import current, deal_cards, owner
 
         game = create_game(DEFAULT_CODEX)
         for seat in game["seats"]:
             seat["occupant_id"] = f"p{seat['id']}"
         deal_cards(game)
         millia_seat = owner(game, "millia")
-        # 发牌是位置式的，米莉亚不一定在上层；本检查要在上层才谈得上换牌。
         millia_seat["cards"] = ["millia"] + [c for c in millia_seat["cards"] if c != "millia"]
         game["status"] = "playing"
         game["phase"] = "ordering"
@@ -207,7 +203,7 @@ class SimulatorCase(unittest.TestCase):
         target_seat = next(
             s for s in game["seats"] if s["id"] != millia_seat["id"] and current(game, s)
         )
-        # begin_night 会重建 actors/actions，所以行动必须在它之后注入。
+        target_card = current(game, target_seat)
         game["night"]["actions"] = [
             {
                 "id": "swap-action",
@@ -215,40 +211,32 @@ class SimulatorCase(unittest.TestCase):
                 "card_id": "millia",
                 "ability": "swap",
                 "target_seat": target_seat["id"],
-                "target_card": current(game, target_seat)["id"],
+                "target_card": target_card["id"],
                 "effective": True,
                 "confirmed": True,
             }
         ]
-        role_card(game, "emma")["alive"] = False
         game["night"]["extra_attacks"] = [
-            {"target_card": "millia", "cause": "host", "unconditional": True}
+            {"target_card": target_card["id"], "cause": "host", "unconditional": True}
         ]
-        prepare_night_preview(game)
-        self.assertTrue(role_card(game, "millia")["uses"].get("swap"), "换牌没有生效")
-        order_after_first = list(millia_seat["cards"])
-        other_order = list(target_seat["cards"])
+        from unittest.mock import patch
 
-        # 换牌之后米莉亚牌已经落到对方席位，并且是该席位的当前牌。
-        # 若此时再对这张牌造成一次出局（例如其它伤害在同一夜复核），
-        # night_damage 会再次把 millia 报进 dead，从而再次满足换牌条件——
-        # 没有「米莉亚牌仍在其持有席位」的前置检查就会二次交换并直接失败。
-        game["night"]["extra_attacks"].append(
-            {"target_card": "millia", "cause": "host", "unconditional": True}
-        )
-        game["night"]["reactions"] = []
-        prepare_night_preview(game)
-        self.assertEqual(list(millia_seat["cards"]), order_after_first, "被二次换牌了")
-        self.assertEqual(list(target_seat["cards"]), other_order, "被二次换牌了")
-        self.assertIsNotNone(current(game, millia_seat))
-        self.assertIsNotNone(current(game, target_seat))
-
-        # 持续重算也不能漂移。
-        for _ in range(3):
-            game["night"]["reactions"] = []
+        with patch("backend.app.game.state.SystemRandom") as random, patch(
+            "backend.app.game.resolution.SystemRandom"
+        ) as resolution_random:
+            # 中毒骰固定为生效（roll=0），否则米莉亚被艾玛毒到时替死随机失效。
+            random.return_value.randrange.return_value = 0
+            resolution_random.return_value.randrange.return_value = 0
             prepare_night_preview(game)
-            self.assertEqual(list(millia_seat["cards"]), order_after_first)
-            self.assertEqual(list(target_seat["cards"]), other_order)
+            deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
+            self.assertIn("millia", deaths, "换血对象的致命攻击没有转移到米莉亚牌")
+            self.assertNotIn(target_card["id"], deaths, "换血对象仍在预结算中出局")
+
+            for _ in range(3):
+                prepare_night_preview(game)
+                deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
+                self.assertIn("millia", deaths, "重算后预结算漂移")
+                self.assertNotIn(target_card["id"], deaths, "重算后预结算漂移")
 
     def client(self):
         client = TestClient(

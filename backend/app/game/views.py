@@ -190,6 +190,15 @@ def status_cards(game, own):
 
     if active and poison_sources(game, active):
         add("poison", "warning", "中毒", "情报可能错误，技能可能被视为假。")
+    destiny = game["public"].get("witch_destiny")
+    if destiny and game["status"] != "lobby" and int(own["id"]) <= len(destiny["seats"]):
+        will = destiny["seats"][int(own["id"]) - 1]
+        add(
+            "witch_destiny",
+            "danger" if will else "info",
+            "魔女化命运",
+            "本局你会魔女化。" if will else "本局你不会魔女化。",
+        )
     protected = next(
         (card for card in cards if card["states"].get("treasure_protected_day", -1) >= game["day"]),
         None,
@@ -201,7 +210,7 @@ def status_cards(game, own):
         None,
     )
     if swap:
-        add("millia_swap", "info", "米莉亚预选", f"已预选{swap['target_seat']}号；仅临死触发并消耗。")
+        add("millia_swap", "info", "米莉亚换血", f"本夜与{swap['target_seat']}号换血；其即将死亡时你代替其死亡。")
     nanoka = next((card for card in cards if card["role_id"] == "nanoka"), None)
     if nanoka:
         misses = nanoka["uses"].get("shot_misses", 0)

@@ -214,6 +214,9 @@ def can_use_card(game, card):
 # 规则上不允许两人同一天挤在同一席位。
 DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"), ("millia", "hiro"))
 
+# 艾玛、米莉亚、亚里沙不会发给同一个人，且必须放在每席两张牌的下层（牌序索引为奇数）。
+DEAL_LOWER_ROLES = ("emma", "millia", "arisa")
+
 
 def deal_cards(game):
     require(game["phase"] == "lobby" and not game["cards"], "本局已经发牌")
@@ -221,8 +224,14 @@ def deal_cards(game):
     rng = SystemRandom()
     while True:
         rng.shuffle(order)
-        if all(
-            order.index(a) // 2 != order.index(b) // 2 for a, b in DEAL_EXCLUDED_PAIRS
+        lower_seats = {order.index(role) // 2 for role in DEAL_LOWER_ROLES}
+        emma_seat = order.index("emma") // 2
+        if (
+            all(order.index(a) // 2 != order.index(b) // 2 for a, b in DEAL_EXCLUDED_PAIRS)
+            and all(order.index(role) % 2 == 1 for role in DEAL_LOWER_ROLES)
+            and len(lower_seats) == 3
+            # 艾玛席另一牌不能是雪莉/亚里沙，否则前两天命运无人可转化
+            and order[emma_seat * 2] not in {"sherry", "arisa"}
         ):
             break
     game["cards"] = {
@@ -241,6 +250,22 @@ def deal_cards(game):
     for i, s in enumerate(game["seats"]):
         s["cards"] = order[i * 2 : i * 2 + 2]
         s["ready"] = False
+    # 开局即定本局命运：前两天各一名魔女（不同席位），第三天魔女是前两天魔女
+    # 各自另一张牌（同席）。艾玛所在席位、以及另一牌是米莉亚或亚里沙的席位，
+    # 前两天都不能被魔女化，命运席位从其余席位里抽。
+    emma_seat = order.index("emma") // 2
+    ineligible = {
+        i
+        for i in range(7)
+        if i == emma_seat or {order[i * 2], order[i * 2 + 1]} & {"millia", "arisa"}
+    }
+    eligible_seats = [i for i in range(7) if i not in ineligible]
+    first = rng.sample(eligible_seats, 2) if len(eligible_seats) >= 2 else eligible_seats
+    destiny = [i in first for i in range(7)]
+    game["public"]["witch_destiny"] = {
+        "seats": destiny,
+        "first": [str(i + 1) for i in first],
+    }
     game["phase"] = "ordering"
 
 
@@ -284,6 +309,7 @@ def upgrade_game(game):
         add(spiritual, key, value)
     public = game.setdefault("public", {})
     add(public, "declarations", [])
+    add(public, "witch_destiny", None)
     for key, value in {
         "declarations": [],
         "half_exits": {},
