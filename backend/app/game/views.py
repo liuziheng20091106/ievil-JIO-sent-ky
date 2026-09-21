@@ -90,7 +90,7 @@ def host_tasks(game):
     balloon = game["public"]["balloon"]
     if balloon["status"] == "collecting":
         for sid in balloon["participants"]:
-            if sid not in game["balloon_choices"]:
+            if sid not in game["balloon_choices"] and current(game, sid):
                 warn_task("balloon", sid, f"{sid}号尚未提交热气球选择")
     if phase == "night_review" and game["night"]["preview"] is not None:
         tasks.append(
@@ -455,7 +455,7 @@ def game_view(game, actor):
             reason = (
                 "夜间与夜间结果阶段无公开发言；可私信主持人"
                 if game["half"] == "night"
-                else "当前角色已全部出局，等待主持人安排发言"
+                else "当前角色已全部出局，不再参与白天发言；可私信主持人"
             )
     view["can_chat"], view["chat_reason"] = can_chat, reason
     return view

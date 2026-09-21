@@ -961,6 +961,37 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["phase"], "witch")
         self.assertEqual(game["speech_passed"], [])
 
+    def test_fully_eliminated_seats_leave_the_speech_order(self):
+        """两张牌都出局的席位不再占发言序列，流程也不能停在它身上。"""
+        game = arranged_game("night_review", "night")
+        game["night"]["reactions"] = []
+        game["night"]["preview"] = damage_preview(game, [])
+        dead = game["seats"][0]
+        for cid in dead["cards"]:
+            game["cards"][cid]["alive"] = False
+        game["deaths"] = [
+            {
+                "seat_id": "1",
+                "card_id": dead["cards"][0],
+                "day": 2,
+                "half": "night",
+                "cause": "knife",
+                "source_card": None,
+            }
+        ]
+        command(game, HOST, "host.advance")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["public"]["speech_order"], ["2", "3", "4", "5", "6", "7"])
+        self.assertEqual(game["public"]["speaker"], "2")
+        self.assertEqual(outstanding_seats(game), ["2"])
+        self.assertNotIn("speech.done", [item["id"] for item in actions_for(game, player(game, "1"))])
+        with self.assertRaises(GameError):
+            command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        # 轮到之前出局的席位同样跳过，不留一个等不到人的发言位。
+        for cid in game["seats"][1]["cards"]:
+            game["cards"][cid]["alive"] = False
+        command(game, player(game, "2"), "speech.done", {})
+        self.assertEqual(game["public"]["speaker"], "3")
 
 
 class BalloonFlow(unittest.TestCase):
@@ -1079,6 +1110,36 @@ class BalloonFlow(unittest.TestCase):
         self.assertIsNone(game["balloon_proposal"])
         self.assertEqual(game["public"]["balloon"]["status"], "idle")
 
+    def test_a_listed_player_who_dies_mid_vote_is_dropped_instead_of_blocking(self):
+        """表决期间名单里的人出局：过半同意照常组织，只带存活者。"""
+        game = arranged_game()
+        game["cards"]["arisa"]["alive"] = False
+        command(game, player(game, "1"), "balloon.propose", {"participants": ["2", "3"]})
+        for card_id in game["seats"][1]["cards"]:
+            game["cards"][card_id]["alive"] = False
+        for sid in ("3", "4", "5"):
+            command(game, player(game, sid), "balloon.agree", {})
+        self.assertIsNone(game["balloon_proposal"])
+        balloon = game["public"]["balloon"]
+        self.assertEqual(balloon["status"], "collecting")
+        self.assertEqual(balloon["participants"], ["3"])
+        self.assertEqual(balloon["organizer"], "1号提议")
+
+    def test_a_proposal_whose_list_all_died_is_dropped(self):
+        game = arranged_game()
+        game["cards"]["arisa"]["alive"] = False
+        command(game, player(game, "1"), "balloon.propose", {"participants": ["2", "3"]})
+        for index in (1, 2):
+            for card_id in game["seats"][index]["cards"]:
+                game["cards"][card_id]["alive"] = False
+        command(game, player(game, "4"), "balloon.agree", {})
+        events = command(game, player(game, "5"), "balloon.agree", {})
+        self.assertIsNone(game["balloon_proposal"])
+        self.assertEqual(game["public"]["balloon"]["status"], "idle")
+        self.assertIn(
+            "作废", "".join(event["text"] for event in events if event["audience"] is None)
+        )
+
 
 class AutoAdvance(unittest.TestCase):
     """玩家行动完的阶段由系统倒计时推进；自由发言这类仍等主持人。"""
@@ -1166,6 +1227,18 @@ class NominationFlow(unittest.TestCase):
         self.assertNotIn(
             "vote.nominate", [item["id"] for item in actions_for(night, player(night, "1"))]
         )
+
+    def test_a_seat_that_cannot_nominate_does_not_hold_up_the_phase(self):
+        """傀儡等当前牌不能行动的席位没有提名按钮，就只能视为跳过，否则阶段永远卡住。"""
+        game = arranged_game("nomination")
+        game["cards"][game["seats"][1]["cards"][0]]["states"]["no_ability"] = True
+        self.assertNotIn("2", pending_nominators(game))
+        offered = [item["id"] for item in actions_for(game, player(game, "2"))]
+        self.assertNotIn("vote.nominate", offered)
+        for sid in ("1", "3", "4", "5", "6", "7"):
+            command(game, player(game, sid), "vote.pass", {})
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "execution")
 
     def test_nominating_early_does_not_clear_the_phases_warning(self):
         game = arranged_game("speech")

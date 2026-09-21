@@ -133,12 +133,20 @@ def lost_by_challenge(game, seat):
 
 
 def pending_nominators(game):
-    """Seats that have not nominated or passed yet; they may act at the same time."""
+    """Seats that have not nominated or passed yet; they may act at the same time.
+
+    当前牌本阶段不能行动的席位（傀儡、下层登场受限等）拿不到提名按钮，
+    也不能算作待办，否则阶段永远等不到它提交，只能由主持人纠错。
+    """
     order = dict.fromkeys(
         game["public"].get("speech_order", []) + [s["id"] for s in game["seats"]]
     )
     done = game.get("nomination_done", [])
-    return [sid for sid in order if sid not in done and current(game, sid)]
+    return [
+        sid
+        for sid in order
+        if sid not in done and (card := current(game, sid)) and can_use_card(game, card)
+    ]
 
 
 def eligible_voters(game):

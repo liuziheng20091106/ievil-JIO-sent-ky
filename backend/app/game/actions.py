@@ -106,10 +106,15 @@ def role_options():
 
 
 def speech_start(game):
-    """Speeches usually start at today's last dead seat; fall back to seat 1."""
+    """Speeches usually start at today's last dead seat; fall back to the first living seat."""
+    alive = [s["id"] for s in living(game)]
     return next(
-        (d["seat_id"] for d in reversed(game["deaths"]) if d["day"] == game["day"]),
-        "1",
+        (
+            d["seat_id"]
+            for d in reversed(game["deaths"])
+            if d["day"] == game["day"] and d["seat_id"] in alive
+        ),
+        alive[0] if alive else "1",
     )
 
 
@@ -514,7 +519,7 @@ def host_actions(game):
                             "start",
                             "从谁开始（通常为死者）",
                             "select",
-                            seat_options(game, False),
+                            seat_options(game),
                             default=speech_start(game),
                         ),
                         field(

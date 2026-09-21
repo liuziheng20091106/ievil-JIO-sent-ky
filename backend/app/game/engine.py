@@ -285,7 +285,14 @@ def resolve_balloon_proposal(game, events):
     agreed = sum(1 for value in proposal["votes"].values() if value)
     if agreed * 2 > len(alive):
         game["balloon_proposal"] = None
-        open_balloon(game, events, f"{proposal['by']}号提议", proposal["participants"])
+        # 名单在创建时校验过存活，但表决可能跨阶段，期间名单里的人会出局。
+        # 这里剔除出局者再组织，否则「过半同意」这一步会一直撞 open_balloon 的
+        # 存活校验并回滚投票，名单永远无法通过也无人能再提议。
+        participants = [sid for sid in proposal["participants"] if current(game, sid)]
+        if not participants:
+            notify(game, events, "名单内玩家已全部出局，本次热气球提议作废，可以重新提议。", alert=True)
+            return
+        open_balloon(game, events, f"{proposal['by']}号提议", participants)
         return
     remaining = len(alive) - len(proposal["votes"])
     if agreed + remaining <= len(alive) / 2:
@@ -313,22 +320,26 @@ def speech_done(game, events):
 
 
 def next_speaker(game, current_speaker, events):
-    """下一位发言人；提前发言的席位在此刻才公开内容，宣布不发言的直接跳过。"""
+    """下一位发言人；提前发言的席位在此刻才公开内容，宣布不发言或已出局的直接跳过。"""
     order = game["public"]["speech_order"]
     passed = set(game.get("speech_passed", []))
     queued = game.get("speech_queued", {})
     index = order.index(current_speaker) + 1 if current_speaker in order else 0
-    while index < len(order) and order[index] in passed:
+    while index < len(order) and (order[index] in passed or not current(game, order[index])):
         sid = order[index]
         if sid in queued:
+            # 跳过或轮到自己前已出局：提前写好的内容照旧公开，不静默丢弃。
             chat_event(game, events, sid, f"{queued.pop(sid)}")
         index += 1
     return order[index] if index < len(order) else None
 
 
 def speech_plan(game, dead_first):
-    """死者先发言；其余在顺序与逆序间取让魔女化玩家更早发言的一侧。"""
-    seats = [s["id"] for s in game["seats"]]
+    """死者先发言；其余在顺序与逆序间取让魔女化玩家更早发言的一侧。
+
+    两张牌都已出局的席位不再发言，不占本轮顺序。
+    """
+    seats = [s["id"] for s in living(game)]
     dead = [sid for sid in seats if sid in set(dead_first)]
     anchor = seats.index(dead[-1] if dead else seats[0])
     witches = {
@@ -848,7 +859,8 @@ def host_command(game, events, action, data):
     elif action == "host.speech":
         # 仅发言阶段可调整：提前预设会整体旁路死者优先、魔女化更早的自动排序。
         require(game["phase"] == "speech", "进入顺序发言阶段后才能调整发言顺序")
-        ids = [s["id"] for s in game["seats"]]
+        ids = [s["id"] for s in living(game)]
+        require(data["start"] in ids, "只能从尚未出局的席位开始")
         index = ids.index(data["start"])
         order = ids[index:] + ids[:index]
         if data["direction"] == "desc":
