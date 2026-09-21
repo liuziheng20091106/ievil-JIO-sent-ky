@@ -15,8 +15,10 @@ from fastapi.testclient import TestClient
 
 from backend.app import storage
 from backend.app.main import app
+from backend.app.simulator.client import ProtocolClient
 from backend.app.simulator.harness import Harness
 from backend.app.simulator.policy import option_values
+from backend.app.simulator.transport import TestClientTransport, gateway_authenticator
 
 # 一局完整对局要走完魔女化、夜间、顺序发言、热气球、提名、投票与处决，
 # 同时等待系统自己 5 秒的自动推进，因此给足时间但保持有界。
@@ -237,6 +239,44 @@ class SimulatorCase(unittest.TestCase):
                 deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
                 self.assertIn("millia", deaths, "重算后预结算漂移")
                 self.assertNotIn(target_card["id"], deaths, "重算后预结算漂移")
+
+    def test_gateway_authenticator_sends_a_numeric_group(self):
+        """网关核销的群号必须是整数：schema 是 StrictInt，命令行传进来的是字符串或群列表。"""
+        with self.client() as client:
+            with patch.dict(os.environ, {"GAME_QQ_GROUP_ID": "1105925736,775621176"}):
+                transport = TestClientTransport(client)
+                authenticate = gateway_authenticator(
+                    transport, "test-gateway-secret", "1105925736,775621176"
+                )
+                player = ProtocolClient(transport, "虚拟玩家1", origin="http://testserver")
+                player.login_player(
+                    "900001",
+                    "虚拟玩家1",
+                    gateway_token="test-gateway-secret",
+                    group_id="1105925736,775621176",
+                    authenticator=authenticate,
+                )
+            self.assertTrue(player.token, "网关核销失败时拿不到玩家令牌")
+
+    def test_policy_never_un_readies_itself_in_the_lobby(self):
+        """首次准备阶段不能重复点「准备」：该行动在 lobby 阶段是开关，重复提交等于取消准备。"""
+        with self.client() as client:
+            harness = Harness(client, seed=23)
+            harness.join()
+            actor = harness.roster.seats[0]
+            actor.client.refresh()
+            self.assertEqual(actor.client.view["phase"], "lobby")
+            actor.client.submit("lobby.ready", {})
+            actor.client.refresh()
+            decision = actor.policy.decide(actor.client)
+            self.assertNotEqual(
+                decision and decision.action, "lobby.ready", "已准备的席位被策略再次提交准备"
+            )
+            if decision is not None:
+                actor.client.submit(decision.action, decision.payload)
+            actor.client.refresh()
+            seat = next(item for item in actor.client.view["seats"] if item["id"] == actor.seat_id)
+            self.assertTrue(seat["ready"], "策略把自己的准备状态取消了")
 
     def client(self):
         client = TestClient(

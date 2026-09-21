@@ -110,6 +110,11 @@ class HeuristicPolicy:
                 self_card_ids[0],
             )
             return Decision("lobby.order", {"top": top}, "选上层")
+        if view["phase"] == "lobby" and self_seat is not None and self_seat.get("ready"):
+            # 首次准备阶段的 ``lobby.ready`` 是开关：已准备时再点一次等于「取消准备」。
+            # 七个席位全部入座并准备后才会发牌，重复提交会让准备状态一直闪烁，
+            # 也会让真人对局永远凑不齐「全员准备」（``ordering`` 阶段的该行动才是单向的）。
+            return None
         return Decision("lobby.ready", {}, "准备")
 
     def _hiro(self, client):

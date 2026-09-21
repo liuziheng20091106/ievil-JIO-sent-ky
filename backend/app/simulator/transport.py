@@ -57,8 +57,23 @@ class HttpTransport:
             return error.code, payload
 
 
+def group_number(value):
+    """把群号收敛成单个整数。
+
+    服务端的 ``QQLogin.group_id`` 是 ``StrictInt``，命令行与环境变量传进来的却是
+    字符串；``GAME_QQ_GROUP_ID`` 还允许逗号分隔多个群，这里取第一个群。
+    """
+
+    text = str(value).split(",")[0].strip()
+    if not text.isdigit():
+        raise RuntimeError(f"群号必须是数字：{value!r}")
+    return int(text)
+
+
 def gateway_authenticator(transport, gateway_token, group_id):
     """返回一个走真实网关接口的登录码核销函数。"""
+
+    default_group = group_number(group_id)
 
     def authenticate(code, qq_id, nickname, group):
         status, payload = transport(
@@ -69,7 +84,7 @@ def gateway_authenticator(transport, gateway_token, group_id):
                 "qq_id": qq_id,
                 "nickname": nickname,
                 "avatar_url": f"https://example.invalid/{qq_id}",
-                "group_id": group if group is not None else group_id,
+                "group_id": default_group if group is None else group_number(group),
             },
             {"X-Gateway-Token": gateway_token},
         )
