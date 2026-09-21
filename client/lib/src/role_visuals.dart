@@ -177,7 +177,7 @@ class RoleAvatar extends StatelessWidget {
             width: size,
             height: size,
             alignment: Alignment.center,
-            color: AppColors.surfaceStrong,
+            color: context.palette.surfaceStrong,
             child: Text(
               role == null
                   ? '?'
@@ -185,7 +185,7 @@ class RoleAvatar extends StatelessWidget {
               style: TextStyle(
                 fontSize: size * 0.4,
                 fontWeight: FontWeight.w600,
-                color: AppColors.textSecondary,
+                color: context.palette.textSecondary,
               ),
             ),
           )
@@ -197,12 +197,12 @@ class RoleAvatar extends StatelessWidget {
             errorBuilder: (context, error, stack) => Container(
               width: size,
               height: size,
-              color: AppColors.surfaceStrong,
+              color: context.palette.surfaceStrong,
               alignment: Alignment.center,
               child: Text(
                 role.name.characters.first,
                 style: TextStyle(
-                    fontSize: size * 0.4, color: AppColors.textSecondary),
+                    fontSize: size * 0.4, color: context.palette.textSecondary),
               ),
             ),
           );
@@ -212,8 +212,8 @@ class RoleAvatar extends StatelessWidget {
         height: size,
         child: dead
             ? ColorFiltered(
-                colorFilter: const ColorFilter.mode(
-                    AppColors.dead, BlendMode.saturation),
+                colorFilter:  ColorFilter.mode(
+                    context.palette.dead, BlendMode.saturation),
                 child: content,
               )
             : content,
@@ -226,7 +226,7 @@ class RoleAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         border: border ??
             Border.all(
-              color: dead ? AppColors.dead : AppColors.border,
+              color: dead ? context.palette.dead : context.palette.border,
               width: 1.5,
             ),
       ),

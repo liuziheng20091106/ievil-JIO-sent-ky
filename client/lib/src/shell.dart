@@ -146,17 +146,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
               children: [
                 Text(
                   ended ? '本局已落幕' : view.phaseLabel,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.text),
+                      color: context.palette.text),
                 ),
                 Text(
                   ended
                       ? '结局可只读查看'
                       : '第 ${view.day} 日 · ${view.half == 'night' ? '夜间' : '白天'}',
-                  style: const TextStyle(
-                      fontSize: 12, color: AppColors.textTertiary),
+                  style:  TextStyle(
+                      fontSize: 12, color: context.palette.textTertiary),
                 ),
               ],
             ),
@@ -175,15 +175,15 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
               // 两栏时「我的/管理」收进右侧抽屉，入口保留该页的待办角标。
               if (twoPane && !threePane)
                 Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.sm),
+                  padding:  EdgeInsets.only(right: AppSpacing.sm),
                   child: IconButton(
                     tooltip: labels[2],
                     onPressed: () => _scaffold.currentState?.openEndDrawer(),
                     icon: Badge.count(
                       count: counts[2],
                       isLabelVisible: counts[2] > 0,
-                      backgroundColor: AppColors.accent,
-                      child: Icon(icons[2], color: AppColors.text),
+                      backgroundColor: context.palette.accent,
+                      child: Icon(icons[2], color: context.palette.text),
                     ),
                   ),
                 ),
@@ -197,8 +197,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                       height: 34,
                       decoration: BoxDecoration(
                         color: store.connectionStatus == '已连接'
-                            ? AppColors.successSoft
-                            : AppColors.warningSoft,
+                            ? context.palette.successSoft
+                            : context.palette.warningSoft,
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -207,8 +207,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                             : Icons.cloud_off_outlined,
                         size: 18,
                         color: store.connectionStatus == '已连接'
-                            ? AppColors.success
-                            : AppColors.warning,
+                            ? context.palette.success
+                            : context.palette.warning,
                       ),
                     ),
                   ),
@@ -276,11 +276,11 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           bottomNavigationBar: twoPane
               ? null
               : SafeArea(
-                  minimum: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                  minimum:  EdgeInsets.fromLTRB(20, 0, 20, 14),
                   child: Material(
                     elevation: 10,
                     shadowColor: Colors.black.withValues(alpha: .10),
-                    color: AppColors.surface,
+                    color: context.palette.surface,
                     borderRadius: BorderRadius.circular(AppRadius.sheet),
                     clipBehavior: Clip.antiAlias,
                     child: NavigationBar(
@@ -306,8 +306,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                               count: counts[item],
                               isLabelVisible: counts[item] > 0,
                               backgroundColor: item == 0 && urgent
-                                  ? AppColors.danger
-                                  : AppColors.accent,
+                                  ? context.palette.danger
+                                  : context.palette.accent,
                               child: Icon(icons[item]),
                             ),
                             label: labels[item],
@@ -345,27 +345,27 @@ class PaneFrame extends StatelessWidget {
         children: [
           Container(
             height: 46,
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-            decoration: const BoxDecoration(
-              color: AppColors.background,
-              border: Border(bottom: BorderSide(color: AppColors.border)),
+            padding:  EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            decoration:  BoxDecoration(
+              color: context.palette.background,
+              border: Border(bottom: BorderSide(color: context.palette.border)),
             ),
             child: Row(
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary),
+                      color: context.palette.textSecondary),
                 ),
-                const Spacer(),
+                 Spacer(),
                 if (count > 0)
                   Tag(
                     '$count',
-                    color: urgent ? AppColors.danger : AppColors.accent,
+                    color: urgent ? context.palette.danger : context.palette.accent,
                     background:
-                        urgent ? AppColors.dangerSoft : AppColors.accentSoft,
+                        urgent ? context.palette.dangerSoft : context.palette.accentSoft,
                   ),
                 if (trailing != null) trailing!,
               ],
@@ -381,10 +381,10 @@ class PaneDivider extends StatelessWidget {
   const PaneDivider({super.key});
 
   @override
-  Widget build(BuildContext context) => const VerticalDivider(
+  Widget build(BuildContext context) =>  VerticalDivider(
         width: 1,
         thickness: 1,
-        color: AppColors.border,
+        color: context.palette.border,
       );
 }
 
@@ -434,15 +434,15 @@ class _PhaseOverlayState extends State<PhaseOverlay> {
       child: AnimatedOpacity(
         opacity: shown ? 1 : 0,
         duration:
-            reduceMotion ? Duration.zero : const Duration(milliseconds: 260),
+            reduceMotion ? Duration.zero :  Duration(milliseconds: 260),
         child: ColoredBox(
-          color: AppColors.surface,
+          color: context.palette.surface,
           child: Center(
             child: AnimatedScale(
               scale: shown ? 1 : .92,
               duration: reduceMotion
                   ? Duration.zero
-                  : const Duration(milliseconds: 340),
+                  :  Duration(milliseconds: 340),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -450,34 +450,34 @@ class _PhaseOverlayState extends State<PhaseOverlay> {
                     width: 88,
                     height: 88,
                     decoration: BoxDecoration(
-                      color: night ? AppColors.accentSoft : AppColors.hostSoft,
+                      color: night ? context.palette.accentSoft : context.palette.hostSoft,
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       night ? Icons.nightlight_round : Icons.wb_sunny_outlined,
                       size: 40,
-                      color: night ? AppColors.accent : AppColors.host,
+                      color: night ? context.palette.accent : context.palette.host,
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.xl),
+                   SizedBox(height: AppSpacing.xl),
                   Text(
                     '第 ${view.day} 日',
-                    style: const TextStyle(
-                        fontSize: 15, color: AppColors.textTertiary),
+                    style:  TextStyle(
+                        fontSize: 15, color: context.palette.textTertiary),
                   ),
-                  const SizedBox(height: AppSpacing.sm),
+                   SizedBox(height: AppSpacing.sm),
                   Text(
                     view.phaseLabel,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 30,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.text),
+                        color: context.palette.text),
                   ),
-                  const SizedBox(height: AppSpacing.sm),
+                   SizedBox(height: AppSpacing.sm),
                   Text(
                     night ? '夜间' : '白天',
-                    style: const TextStyle(
-                        fontSize: 14, color: AppColors.textSecondary),
+                    style:  TextStyle(
+                        fontSize: 14, color: context.palette.textSecondary),
                   ),
                 ],
               ),
@@ -577,14 +577,14 @@ class _ChatActionPageState extends State<ChatActionPage> {
             children: [
               for (final entry in scopes.entries)
                 Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.sm),
+                  padding:  EdgeInsets.only(right: AppSpacing.sm),
                   child: FilterChip(
                     avatar: Icon(
                       entry.value.$2,
                       size: 15,
                       color: store.messageScope == entry.key
-                          ? AppColors.accent
-                          : AppColors.textTertiary,
+                          ? context.palette.accent
+                          : context.palette.textTertiary,
                     ),
                     label: Text(entry.value.$1),
                     selected: store.messageScope == entry.key,
@@ -688,7 +688,7 @@ class _Composer extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend = channel?.canSend == true && !store.writeBusy;
     return Material(
-      color: AppColors.surface,
+      color: context.palette.surface,
       child: SafeArea(
         top: false,
         minimum: EdgeInsets.fromLTRB(
@@ -724,17 +724,17 @@ class _Composer extends StatelessWidget {
             ),
             if (!canSend && (channel?.reason.isNotEmpty ?? false))
               Padding(
-                padding: const EdgeInsets.only(top: AppSpacing.sm),
+                padding:  EdgeInsets.only(top: AppSpacing.sm),
                 child: Row(
                   children: [
-                    const Icon(Icons.info_outline,
-                        size: 14, color: AppColors.textTertiary),
-                    const SizedBox(width: AppSpacing.xs),
+                     Icon(Icons.info_outline,
+                        size: 14, color: context.palette.textTertiary),
+                     SizedBox(width: AppSpacing.xs),
                     Expanded(
                       child: Text(
                         channel!.reason,
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textTertiary),
+                        style:  TextStyle(
+                            fontSize: 12, color: context.palette.textTertiary),
                       ),
                     ),
                   ],
@@ -752,7 +752,7 @@ class _Composer extends StatelessWidget {
                         alignment: Alignment.centerLeft,
                         child: Badge.count(
                           count: actions.length,
-                          backgroundColor: AppColors.accent,
+                          backgroundColor: context.palette.accent,
                           child: FilledButton.tonalIcon(
                             onPressed: () =>
                                 openActionPicker(context, store, actions),
@@ -796,7 +796,7 @@ class DashedDivider extends StatelessWidget {
         width: double.infinity,
         child: CustomPaint(
           painter: _DashedLinePainter(
-            color: color ?? AppColors.borderStrong,
+            color: color ?? context.palette.borderStrong,
             dash: dash,
             gap: gap,
           ),
@@ -868,7 +868,7 @@ class _ChannelButton extends StatelessWidget {
     return Tooltip(
       message: '选择发送频道',
       child: Material(
-        color: AppColors.surfaceMuted,
+        color: context.palette.surfaceMuted,
         borderRadius: BorderRadius.circular(AppRadius.field),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.field),
@@ -896,21 +896,21 @@ class _ChannelButton extends StatelessWidget {
                           ? Icons.info_outline
                           : Icons.lock_outline,
                   size: 16,
-                  color: AppColors.textSecondary,
+                  color: context.palette.textSecondary,
                 ),
-                const SizedBox(width: 6),
+                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     label.replaceFirst('私密 · ', ''),
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
-                        color: AppColors.text),
+                        color: context.palette.text),
                   ),
                 ),
-                const Icon(Icons.expand_more,
-                    size: 16, color: AppColors.textTertiary),
+                 Icon(Icons.expand_more,
+                    size: 16, color: context.palette.textTertiary),
               ],
             ),
           ),
@@ -931,7 +931,7 @@ class _ChannelSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Padding(
+             Padding(
               padding: EdgeInsets.fromLTRB(
                   AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
               child: Text(
@@ -939,7 +939,7 @@ class _ChannelSheet extends StatelessWidget {
                 style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.text),
+                    color: context.palette.text),
               ),
             ),
             Flexible(
@@ -948,7 +948,9 @@ class _ChannelSheet extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(
                     AppSpacing.md, 0, AppSpacing.md, AppSpacing.lg),
                 children: [
-                  for (final item in store.view!.channels)
+                  // 已结束的私信不再占用频道列表；历史消息仍在消息流里可见。
+                  for (final item in store.view!.channels
+                      .where((item) => item.status != 'ended'))
                     ListTile(
                       leading: Icon(
                         item.id == 'public'
@@ -957,15 +959,15 @@ class _ChannelSheet extends StatelessWidget {
                                 ? Icons.info_outline
                                 : Icons.lock_outline,
                         color: item.canSend
-                            ? AppColors.accent
-                            : AppColors.textTertiary,
+                            ? context.palette.accent
+                            : context.palette.textTertiary,
                       ),
                       title: Text(item.label),
                       subtitle: item.canSend
                           ? null
                           : Text(item.reason.isEmpty ? '只读' : item.reason),
                       trailing: item.id == store.selectedChannelId
-                          ? const Icon(Icons.check, color: AppColors.accent)
+                          ?  Icon(Icons.check, color: context.palette.accent)
                           : null,
                       enabled: item.canSend,
                       onTap: () => Navigator.pop(context, item),
@@ -1072,28 +1074,28 @@ class _QuickTool {
 
   Widget build(BuildContext context, GameStore store) {
     final danger = action.raw['danger'] == true;
-    final tint = danger ? AppColors.danger : AppColors.textSecondary;
+    final tint = danger ? context.palette.danger : context.palette.textSecondary;
     final enabled = !store.writeBusy && action.unsupportedReason == null;
     return Material(
-      color: AppColors.surfaceMuted,
+      color: context.palette.surfaceMuted,
       borderRadius: BorderRadius.circular(AppRadius.chip),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.chip),
         onTap: enabled ? () => showActionForm(context, store, action) : null,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding:  EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon,
-                  size: 15, color: enabled ? tint : AppColors.textTertiary),
-              const SizedBox(width: 6),
+                  size: 15, color: enabled ? tint : context.palette.textTertiary),
+               SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: enabled ? AppColors.text : AppColors.textTertiary,
+                  color: enabled ? context.palette.text : context.palette.textTertiary,
                 ),
               ),
             ],
@@ -1119,37 +1121,37 @@ class ActionChipButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final danger = action.raw['danger'] == true;
     final unsupported = action.unsupportedReason;
-    final tint = actionTint(action.group, danger: danger);
+    final tint = actionTint(context, action.group, danger: danger);
     return Tooltip(
       message: unsupported ?? action.label,
       child: Material(
         color: unsupported != null
-            ? AppColors.surfaceMuted
+            ? context.palette.surfaceMuted
             : tint.withValues(alpha: .10),
         borderRadius: BorderRadius.circular(AppRadius.chip),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.chip),
           onTap: busy || unsupported != null ? null : onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (unsupported != null)
-                  const Icon(Icons.block, size: 16, color: AppColors.danger)
+                   Icon(Icons.block, size: 16, color: context.palette.danger)
                 else
                   ActionIcon(actionId: action.id, size: 17, color: tint),
-                const SizedBox(width: 7),
+                 SizedBox(width: 7),
                 Text(
                   action.shortLabel,
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: unsupported != null
-                        ? AppColors.textTertiary
+                        ? context.palette.textTertiary
                         : danger
-                            ? AppColors.danger
-                            : AppColors.text,
+                            ? context.palette.danger
+                            : context.palette.text,
                   ),
                 ),
               ],
@@ -1194,20 +1196,20 @@ class MessageBubble extends StatelessWidget {
     final system = message.kind != 'chat';
     if (system) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+        padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
         child: Center(
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 420),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            constraints:  BoxConstraints(maxWidth: 420),
+            padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: AppColors.surfaceMuted,
+              color: context.palette.surfaceMuted,
               borderRadius: BorderRadius.circular(AppRadius.chip),
             ),
             child: Text(
               _systemText,
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 13, color: AppColors.textSecondary, height: 1.5),
+              style:  TextStyle(
+                  fontSize: 13, color: context.palette.textSecondary, height: 1.5),
             ),
           ),
         ),
@@ -1248,8 +1250,8 @@ class MessageBubble extends StatelessWidget {
                               : () => onAvatar!(message.senderId),
                           child: Text(
                             message.senderName!,
-                            style: const TextStyle(
-                                fontSize: 12, color: AppColors.textTertiary),
+                            style:  TextStyle(
+                                fontSize: 12, color: context.palette.textTertiary),
                           ),
                         ),
                       ],
@@ -1257,11 +1259,11 @@ class MessageBubble extends StatelessWidget {
                   ),
                 Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                       EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
-                    color: mine ? AppColors.accent : AppColors.surface,
+                    color: mine ? context.palette.accent : context.palette.surface,
                     borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: mine ? null : Border.all(color: AppColors.border),
+                    border: mine ? null : Border.all(color: context.palette.border),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1279,7 +1281,7 @@ class MessageBubble extends StatelessWidget {
                                 size: 12,
                                 color: mine
                                     ? Colors.white70
-                                    : AppColors.textTertiary,
+                                    : context.palette.textTertiary,
                               ),
                               const SizedBox(width: 4),
                               Text(
@@ -1290,7 +1292,7 @@ class MessageBubble extends StatelessWidget {
                                   fontSize: 11,
                                   color: mine
                                       ? Colors.white70
-                                      : AppColors.textTertiary,
+                                      : context.palette.textTertiary,
                                 ),
                               ),
                             ],
@@ -1301,17 +1303,17 @@ class MessageBubble extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 15,
                           height: 1.5,
-                          color: mine ? AppColors.onAccent : AppColors.text,
+                          color: mine ? context.palette.onAccent : context.palette.text,
                         ),
                       ),
                       if (_time.isNotEmpty) ...[
-                        const SizedBox(height: AppSpacing.xs),
+                         SizedBox(height: AppSpacing.xs),
                         Text(
                           _time,
                           style: TextStyle(
                             fontSize: 11,
                             color:
-                                mine ? Colors.white70 : AppColors.textTertiary,
+                                mine ? Colors.white70 : context.palette.textTertiary,
                           ),
                         ),
                       ],
@@ -1335,7 +1337,7 @@ class MessageBubble extends StatelessWidget {
 }
 
 /// 状态页：牌桌 + 阶段信息。
-class BoardPage extends StatelessWidget {
+class BoardPage extends StatefulWidget {
   const BoardPage({
     super.key,
     required this.store,
@@ -1347,6 +1349,79 @@ class BoardPage extends StatelessWidget {
   final double bottomInset;
 
   @override
+  State<BoardPage> createState() => _BoardPageState();
+}
+
+class _BoardPageState extends State<BoardPage> {
+  Timer? _ticker;
+  bool _loading = false;
+
+  GameStore get store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _ticker = Timer.periodic(const Duration(seconds: 10), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    // 与大厅同一个理由：慢响应时跳过这一拍，避免轮询叠加。
+    if (!mounted || _loading) return;
+    _loading = true;
+    try {
+      await widget.store.loadOnline(gameId: widget.store.view?.id);
+    } finally {
+      _loading = false;
+    }
+  }
+
+  List<OnlineAccount> _others() => store.online
+      .where((account) => account.id != store.actor?.accountId)
+      .toList(growable: false);
+
+  Widget _inviteTrailing(BuildContext context, OnlineAccount account) {
+    final actor = store.actor;
+    final canInvite =
+        actor != null && !actor.isSpectator && account.available && !account.invited;
+    if (account.invited) {
+      return  Tag('已邀请');
+    }
+    if (!canInvite) {
+      return Tag(
+        '不可邀请',
+        color: context.palette.textTertiary,
+        background: context.palette.surfaceMuted,
+      );
+    }
+    return FilledButton(
+      onPressed: store.writeBusy ? null : () => _invite(context, account),
+      child: const Text('邀请'),
+    );
+  }
+
+  Future<void> _invite(BuildContext context, OnlineAccount account) async {
+    try {
+      await store.inviteAccount(account.id);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('已邀请 ${account.name}')));
+      }
+    } on ApiException catch (failure) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(failure.message)));
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final view = store.view!;
     final result = view.raw['result'];
@@ -1355,12 +1430,12 @@ class BoardPage extends StatelessWidget {
         AppSpacing.lg,
         AppSpacing.sm,
         AppSpacing.lg,
-        bottomInset,
+        widget.bottomInset,
       ),
       children: [
         Card(
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
+            padding:  EdgeInsets.all(AppSpacing.lg),
             child: Row(
               children: [
                 Container(
@@ -1368,8 +1443,8 @@ class BoardPage extends StatelessWidget {
                   height: 46,
                   decoration: BoxDecoration(
                     color: view.half == 'night'
-                        ? AppColors.accentSoft
-                        : AppColors.hostSoft,
+                        ? context.palette.accentSoft
+                        : context.palette.hostSoft,
                     borderRadius: BorderRadius.circular(AppRadius.field),
                   ),
                   child: Icon(
@@ -1377,8 +1452,8 @@ class BoardPage extends StatelessWidget {
                         ? Icons.nightlight_round
                         : Icons.wb_sunny_outlined,
                     color: view.half == 'night'
-                        ? AppColors.accent
-                        : AppColors.host,
+                        ? context.palette.accent
+                        : context.palette.host,
                   ),
                 ),
                 const SizedBox(width: AppSpacing.md),
@@ -1388,16 +1463,16 @@ class BoardPage extends StatelessWidget {
                     children: [
                       Text(
                         '第 ${view.day} 日 · ${view.phaseLabel}',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.text),
+                            color: context.palette.text),
                       ),
-                      const SizedBox(height: 2),
+                       SizedBox(height: 2),
                       Text(
                         '已准备 ${view.raw['ready_count'] ?? 0} 人 · 连接${store.connectionStatus}',
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textTertiary),
+                        style:  TextStyle(
+                            fontSize: 12, color: context.palette.textTertiary),
                       ),
                     ],
                   ),
@@ -1438,39 +1513,68 @@ class BoardPage extends StatelessWidget {
             ],
           ),
         ),
-        if (result is Map && result.isNotEmpty) ...[
-          const SectionTitle('结算'),
+        if (view.status != 'ended') ...[
+          const SectionTitle('在线玩家',
+              subtitle: '邀请在线账号入席；对方需等主持人开放加入后才能接受。'),
           Card(
-            color: AppColors.hostSoft,
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_others().isEmpty)
+                     Padding(
+                      padding: EdgeInsets.all(AppSpacing.sm),
+                      child: Text(
+                        '当前没有其他人在线。',
+                        style: TextStyle(
+                            fontSize: 13, color: context.palette.textTertiary),
+                      ),
+                    ),
+                  for (final account in _others())
+                    ListTile(
+                      leading:  RoleAvatar(roleId: null, size: 40),
+                      title: Text(account.name),
+                      trailing: _inviteTrailing(context, account),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+        if (result is Map && result.isNotEmpty) ...[
+           SectionTitle('结算'),
+          Card(
+            color: context.palette.hostSoft,
+            child: Padding(
+              padding:  EdgeInsets.all(AppSpacing.lg),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.emoji_events_outlined,
-                          color: AppColors.host),
-                      const SizedBox(width: AppSpacing.md),
+                       Icon(Icons.emoji_events_outlined,
+                          color: context.palette.host),
+                       SizedBox(width: AppSpacing.md),
                       Expanded(
                         child: Text(
                           _resultTitle(result),
-                          style: const TextStyle(
+                          style:  TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.text,
+                            color: context.palette.text,
                           ),
                         ),
                       ),
                     ],
                   ),
                   if (result['reason']?.toString().isNotEmpty == true) ...[
-                    const SizedBox(height: AppSpacing.sm),
+                     SizedBox(height: AppSpacing.sm),
                     Text(
                       result['reason'].toString(),
-                      style: const TextStyle(
-                          fontSize: 14, height: 1.5, color: AppColors.text),
+                      style:  TextStyle(
+                          fontSize: 14, height: 1.5, color: context.palette.text),
                     ),
                   ],
                   // 对局终止或分出胜负后，本局只读；这里给出回到主界面的入口。
@@ -1480,14 +1584,14 @@ class BoardPage extends StatelessWidget {
                       onPressed: store.writeBusy
                           ? null
                           : () => returnToLobby(context, store),
-                      icon: const Icon(Icons.meeting_room_outlined, size: 18),
-                      label: const Text('返回主界面（大厅）'),
+                      icon:  Icon(Icons.meeting_room_outlined, size: 18),
+                      label:  Text('返回主界面（大厅）'),
                     ),
-                    const SizedBox(height: AppSpacing.sm),
-                    const Text(
+                     SizedBox(height: AppSpacing.sm),
+                     Text(
                       '本局记录在主持人开启下一局前仍可只读查看；返回大厅后，主持人可建立新一局。',
                       style: TextStyle(
-                          fontSize: 12, color: AppColors.textTertiary),
+                          fontSize: 12, color: context.palette.textTertiary),
                     ),
                   ],
                 ],
@@ -1553,23 +1657,23 @@ class SeatCard extends StatelessWidget {
                       children: [
                         Text(
                           '${seat['id']} 号',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.text),
+                              color: context.palette.text),
                         ),
-                        const SizedBox(width: AppSpacing.sm),
+                         SizedBox(width: AppSpacing.sm),
                         Flexible(
                           child: Text(
                             name.isNotEmpty ? name : (occupied ? '等待命名' : '空席'),
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 14, color: AppColors.textSecondary),
+                            style:  TextStyle(
+                                fontSize: 14, color: context.palette.textSecondary),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: AppSpacing.xs),
+                     SizedBox(height: AppSpacing.xs),
                     Wrap(
                       spacing: AppSpacing.sm,
                       runSpacing: AppSpacing.xs,
@@ -1577,30 +1681,30 @@ class SeatCard extends StatelessWidget {
                         Tag(
                           alive ? '存活' : '已出局',
                           color: alive
-                              ? AppColors.success
-                              : AppColors.textSecondary,
+                              ? context.palette.success
+                              : context.palette.textSecondary,
                           background: alive
-                              ? AppColors.successSoft
-                              : AppColors.surfaceMuted,
+                              ? context.palette.successSoft
+                              : context.palette.surfaceMuted,
                         ),
                         if (seat['online'] == true)
-                          const Tag('在线', icon: Icons.wifi_tethering),
+                           Tag('在线', icon: Icons.wifi_tethering),
                         if (seat['ready'] == true)
-                          const Tag('已准备', icon: Icons.check),
+                           Tag('已准备', icon: Icons.check),
                         for (final label in witches)
                           Tag('$label · 魔女',
-                              color: AppColors.danger,
-                              background: AppColors.dangerSoft),
+                              color: context.palette.danger,
+                              background: context.palette.dangerSoft),
                       ],
                     ),
                   ],
                 ),
               ),
               if (onTap != null)
-                const Icon(
+                 Icon(
                   Icons.chevron_right,
                   size: 20,
-                  color: AppColors.textTertiary,
+                  color: context.palette.textTertiary,
                 ),
             ],
           ),
@@ -1719,13 +1823,13 @@ class _LayeredAvatar extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: AppColors.surface,
+          color: context.palette.surface,
           boxShadow: front
               ? [
                   BoxShadow(
                       color: Colors.black.withValues(alpha: .10),
                       blurRadius: 6,
-                      offset: const Offset(0, 2))
+                      offset:  Offset(0, 2))
                 ]
               : null,
         ),
@@ -1734,7 +1838,7 @@ class _LayeredAvatar extends StatelessWidget {
           size: size,
           dead: dead,
           border: Border.all(
-            color: front ? AppColors.accent : AppColors.border,
+            color: front ? context.palette.accent : context.palette.border,
             // 桌上大图保持原观感；紧凑入口按尺寸等比收细，避免糊成一团。
             width: overlap >= 23 ? (front ? 2 : 1.5) : 1.25,
           ),
@@ -1799,20 +1903,20 @@ class ProfilePage extends StatelessWidget {
                     children: [
                       Text(
                         actor.name,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.text),
+                            color: context.palette.text),
                       ),
-                      const SizedBox(height: 2),
+                       SizedBox(height: 2),
                       Text(
                         actor.isHost
                             ? '主持人'
                             : actor.isSpectator
                                 ? '观战者 · 只读牌桌'
                                 : '${actor.seatId ?? '-'} 号玩家',
-                        style: const TextStyle(
-                            fontSize: 13, color: AppColors.textTertiary),
+                        style:  TextStyle(
+                            fontSize: 13, color: context.palette.textTertiary),
                       ),
                     ],
                   ),
@@ -1822,14 +1926,14 @@ class ProfilePage extends StatelessWidget {
           ),
         ),
         if (view.statuses.isNotEmpty) ...[
-          const SectionTitle('当前状态', subtitle: '状态与权限由服务器实时计算。'),
+           SectionTitle('当前状态', subtitle: '状态与权限由服务器实时计算。'),
           for (final status in view.statuses)
             Card(
               color: switch (status['tone']?.toString()) {
-                'danger' => AppColors.dangerSoft,
-                'warning' => AppColors.warningSoft,
-                'success' => AppColors.successSoft,
-                _ => AppColors.accentSoft,
+                'danger' => context.palette.dangerSoft,
+                'warning' => context.palette.warningSoft,
+                'success' => context.palette.successSoft,
+                _ => context.palette.accentSoft,
               },
               child: ListTile(
                 title: Text(status['title']?.toString() ?? ''),
@@ -1848,30 +1952,30 @@ class ProfilePage extends StatelessWidget {
                   subtitle: Text('${raw['summary'] ?? ''} · ${raw['status'] == 'open' ? '可质疑' : '已停止'}'),
                 ),
               ),
-          const SizedBox(height: AppSpacing.sm),
+           SizedBox(height: AppSpacing.sm),
         ],
         // 当日目击名单：服务端只在白天到投票结束前后发给死者与主持人，常驻卡片显示。
         if (view.raw['witness'] is Map) ...[
-          const SectionTitle(
+           SectionTitle(
             '当日目击名单',
             subtitle: '昨夜出局者的目击结果，投票结束前常驻。',
           ),
           Card(
-            color: AppColors.accentSoft,
+            color: context.palette.accentSoft,
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
+              padding:  EdgeInsets.all(AppSpacing.lg),
               child: Row(
                 children: [
-                  const Icon(Icons.visibility_outlined,
-                      size: 20, color: AppColors.accent),
-                  const SizedBox(width: AppSpacing.md),
+                   Icon(Icons.visibility_outlined,
+                      size: 20, color: context.palette.accent),
+                   SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
                       view.raw['witness']['text']?.toString() ?? '',
-                      style: const TextStyle(
+                      style:  TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.text,
+                        color: context.palette.text,
                       ),
                     ),
                   ),
@@ -1923,16 +2027,16 @@ class ProfilePage extends StatelessWidget {
                           children: [
                             Text(
                               raw['title']?.toString() ?? '游戏信息',
-                              style: const TextStyle(
+                              style:  TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
-                                  color: AppColors.textSecondary),
+                                  color: context.palette.textSecondary),
                             ),
                             if (raw['text']?.toString().isNotEmpty == true)
                               Text(
                                 raw['text'].toString(),
-                                style: const TextStyle(
-                                    fontSize: 14, color: AppColors.text),
+                                style:  TextStyle(
+                                    fontSize: 14, color: context.palette.text),
                               ),
                           ],
                         ),
@@ -1959,17 +2063,17 @@ class ProfilePage extends StatelessWidget {
                         contentPadding: EdgeInsets.zero,
                         title: Text(
                           '${raw['seat_id']}号 ${raw['name']}',
-                          style: const TextStyle(
-                              fontSize: 14, color: AppColors.text),
+                          style:  TextStyle(
+                              fontSize: 14, color: context.palette.text),
                         ),
                         trailing: Text(
                           roleVisual(raw['role_id']?.toString())?.name ??
                               raw['role_id']?.toString() ??
                               '未知',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.accent),
+                              color: context.palette.accent),
                         ),
                       ),
                 ],
@@ -1978,20 +2082,20 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
         if (self['warning_deadline'] != null) ...[
-          const SizedBox(height: AppSpacing.md),
+           SizedBox(height: AppSpacing.md),
           Card(
-            color: AppColors.dangerSoft,
+            color: context.palette.dangerSoft,
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
+              padding:  EdgeInsets.all(AppSpacing.lg),
               child: Row(
                 children: [
-                  const Icon(Icons.timer_outlined, color: AppColors.danger),
-                  const SizedBox(width: AppSpacing.md),
+                   Icon(Icons.timer_outlined, color: context.palette.danger),
+                   SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
                       '主持人已警告，请在 ${_warningDeadlineText(self['warning_deadline'])} 前完成操作。',
                       style:
-                          const TextStyle(fontSize: 13, color: AppColors.text),
+                           TextStyle(fontSize: 13, color: context.palette.text),
                     ),
                   ),
                 ],
@@ -2025,7 +2129,7 @@ class _OwnCard extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppRadius.card),
           border: Border.all(
-              color: isCurrent ? AppColors.accent : Colors.transparent,
+              color: isCurrent ? context.palette.accent : Colors.transparent,
               width: 2),
         ),
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -2042,16 +2146,16 @@ class _OwnCard extends StatelessWidget {
                     children: [
                       Text(
                         role?.name ?? card['role_id']?.toString() ?? '未知',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.text),
+                            color: context.palette.text),
                       ),
                       const SizedBox(width: AppSpacing.sm),
-                      if (isCurrent) const Tag('当前上层'),
+                      if (isCurrent) Tag('当前上层'),
                     ],
                   ),
-                  const SizedBox(height: AppSpacing.xs),
+                   SizedBox(height: AppSpacing.xs),
                   Wrap(
                     spacing: AppSpacing.sm,
                     runSpacing: AppSpacing.xs,
@@ -2059,26 +2163,26 @@ class _OwnCard extends StatelessWidget {
                       Tag(
                         alive ? '存活' : '已出局',
                         color:
-                            alive ? AppColors.success : AppColors.textSecondary,
+                            alive ? context.palette.success : context.palette.textSecondary,
                         background: alive
-                            ? AppColors.successSoft
-                            : AppColors.surfaceMuted,
+                            ? context.palette.successSoft
+                            : context.palette.surfaceMuted,
                       ),
                       if (card['witch'] == true)
-                        const Tag('魔女化',
-                            color: AppColors.danger,
-                            background: AppColors.dangerSoft),
+                         Tag('魔女化',
+                            color: context.palette.danger,
+                            background: context.palette.dangerSoft),
                       if (card['injured'] == true)
-                        const Tag('负伤',
-                            color: AppColors.warning,
-                            background: AppColors.warningSoft),
+                         Tag('负伤',
+                            color: context.palette.warning,
+                            background: context.palette.warningSoft),
                       if (uses is Map && uses.isNotEmpty)
                         Tag(
                           uses.entries
                               .map((e) => '${e.key} ${e.value}')
                               .join(' · '),
-                          color: AppColors.textSecondary,
-                          background: AppColors.surfaceMuted,
+                          color: context.palette.textSecondary,
+                          background: context.palette.surfaceMuted,
                         ),
                     ],
                   ),
@@ -2217,16 +2321,16 @@ class _HostManagementPageState extends State<HostManagementPage> {
       ),
       children: [
         Card(
-          color: blocking > 0 ? AppColors.dangerSoft : AppColors.successSoft,
+          color: blocking > 0 ? context.palette.dangerSoft : context.palette.successSoft,
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
+            padding:  EdgeInsets.all(AppSpacing.lg),
             child: Row(
               children: [
                 Icon(
                   blocking > 0
                       ? Icons.pending_actions_outlined
                       : Icons.check_circle_outline,
-                  color: blocking > 0 ? AppColors.danger : AppColors.success,
+                  color: blocking > 0 ? context.palette.danger : context.palette.success,
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
@@ -2235,16 +2339,16 @@ class _HostManagementPageState extends State<HostManagementPage> {
                     children: [
                       Text(
                         '${view.phaseLabel} · 第 ${view.day} 日',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.text),
+                            color: context.palette.text),
                       ),
-                      const SizedBox(height: 2),
+                       SizedBox(height: 2),
                       Text(
                         blocking > 0 ? '有 $blocking 项待办阻塞推进' : '没有阻塞项，可以推进',
-                        style: const TextStyle(
-                            fontSize: 13, color: AppColors.textSecondary),
+                        style:  TextStyle(
+                            fontSize: 13, color: context.palette.textSecondary),
                       ),
                     ],
                   ),
@@ -2260,10 +2364,10 @@ class _HostManagementPageState extends State<HostManagementPage> {
         ),
         Card(
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
+            padding:  EdgeInsets.all(AppSpacing.md),
             child: codex.isEmpty
-                ? const Text('未读取到魔典名单',
-                    style: TextStyle(color: AppColors.textTertiary))
+                ?  Text('未读取到魔典名单',
+                    style: TextStyle(color: context.palette.textTertiary))
                 : Wrap(
                     spacing: AppSpacing.sm,
                     runSpacing: AppSpacing.sm,
@@ -2281,11 +2385,11 @@ class _HostManagementPageState extends State<HostManagementPage> {
           SectionTitle(group),
           if (group == '当前待办')
             if (tasks.isEmpty)
-              const Card(
+               Card(
                 child: Padding(
                   padding: EdgeInsets.all(AppSpacing.lg),
                   child: Text('当前没有待办。',
-                      style: TextStyle(color: AppColors.textTertiary)),
+                      style: TextStyle(color: context.palette.textTertiary)),
                 ),
               )
             else
@@ -2314,11 +2418,11 @@ class _HostManagementPageState extends State<HostManagementPage> {
               ],
             )
           else if (group != '当前待办')
-            const Padding(
+             Padding(
               padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
               child: Text('当前无可用操作',
                   style:
-                      TextStyle(color: AppColors.textTertiary, fontSize: 13)),
+                      TextStyle(color: context.palette.textTertiary, fontSize: 13)),
             ),
         ],
         SectionTitle('对局日志', subtitle: '仅主持人可见；按时间记录全部关键操作。'),
@@ -2338,9 +2442,9 @@ class _HostManagementPageState extends State<HostManagementPage> {
                           children: [
                             Text(
                               '第${raw['day']}天',
-                              style: const TextStyle(
+                              style:  TextStyle(
                                   fontSize: 12,
-                                  color: AppColors.textTertiary),
+                                  color: context.palette.textTertiary),
                             ),
                             const SizedBox(width: AppSpacing.sm),
                             Expanded(
@@ -2349,7 +2453,7 @@ class _HostManagementPageState extends State<HostManagementPage> {
                                 style: TextStyle(
                                   fontSize: 13,
                                   height: 1.45,
-                                  color: _logColor(
+                                  color: _logColor(context,
                                       raw['kind']?.toString()),
                                 ),
                               ),
@@ -2362,11 +2466,11 @@ class _HostManagementPageState extends State<HostManagementPage> {
             ),
           )
         else
-          const Card(
+           Card(
             child: Padding(
               padding: EdgeInsets.all(AppSpacing.lg),
               child: Text('还没有日志记录。',
-                  style: TextStyle(color: AppColors.textTertiary)),
+                  style: TextStyle(color: context.palette.textTertiary)),
             ),
           ),
         SectionTitle('席位代操作', subtitle: '先读取该席位当前视角，再提交它实际可用的行动。'),
@@ -2388,22 +2492,22 @@ class _HostManagementPageState extends State<HostManagementPage> {
                         ),
                     ],
                   )
-                : const Text('本局还没有可以代操作的席位。',
+                :  Text('本局还没有可以代操作的席位。',
                     style:
-                        TextStyle(fontSize: 13, color: AppColors.textTertiary)),
+                        TextStyle(fontSize: 13, color: context.palette.textTertiary)),
           ),
         ),
       ],
     );
   }
 
-  static Color _logColor(String? kind) => switch (kind) {
-        'death' => AppColors.danger,
-        'vote' => AppColors.host,
-        'phase' => AppColors.accent,
-        'system' => AppColors.info,
-        'host' => AppColors.textTertiary,
-        _ => AppColors.textSecondary,
+  static Color _logColor(BuildContext context, String? kind) => switch (kind) {
+        'death' => context.palette.danger,
+        'vote' => context.palette.host,
+        'phase' => context.palette.accent,
+        'system' => context.palette.info,
+        'host' => context.palette.textTertiary,
+        _ => context.palette.textSecondary,
       };
 
   /// 主持人待办可能同时存在多条同动作条目（多份 host.resolve 裁定并存）。
@@ -2543,29 +2647,29 @@ class _SeatActionTile extends StatelessWidget {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.surfaceMuted,
-                  border: Border.all(color: AppColors.border, width: 1.5),
+                  color: context.palette.surfaceMuted,
+                  border: Border.all(color: context.palette.border, width: 1.5),
                 ),
-                child: const Text('?',
+                child:  Text('?',
                     style: TextStyle(
                         fontSize: _avatarSize * .45,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textTertiary)),
+                        color: context.palette.textTertiary)),
               ),
             ),
     );
 
     final (String value, Color valueColor) = !occupied
-        ? ('空席', AppColors.textTertiary)
+        ? ('空席', context.palette.textTertiary)
         : !alive
-            ? ('已出局', AppColors.textSecondary)
+            ? ('已出局', context.palette.textSecondary)
             : loading
-                ? ('读取中', AppColors.textTertiary)
+                ? ('读取中', context.palette.textTertiary)
                 : count == null
-                    ? ('点击读取', AppColors.textTertiary)
+                    ? ('点击读取', context.palette.textTertiary)
                     : count == 0
-                        ? ('无可用行动', AppColors.textTertiary)
-                        : ('$count 项行动', AppColors.accent);
+                        ? ('无可用行动', context.palette.textTertiary)
+                        : ('$count 项行动', context.palette.accent);
 
     return Semantics(
       button: enabled,
@@ -2577,19 +2681,19 @@ class _SeatActionTile extends StatelessWidget {
             ? '$id 号${name.isEmpty ? '' : ' · $name'}；${slot?.count == null ? '点击读取该席位视角' : value}'
             : '$id 号空席，暂无可代操作的身份',
         child: Material(
-          color: AppColors.surfaceMuted,
+          color: context.palette.surfaceMuted,
           borderRadius: BorderRadius.circular(AppRadius.field),
           child: InkWell(
             borderRadius: BorderRadius.circular(AppRadius.field),
             onTap: onTap,
             child: Container(
               width: width,
-              padding: const EdgeInsets.symmetric(
+              padding:  EdgeInsets.symmetric(
                   horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(AppRadius.field),
                 border: Border.all(
-                  color: enabled ? AppColors.border : AppColors.borderStrong,
+                  color: enabled ? context.palette.border : context.palette.borderStrong,
                 ),
               ),
               child: Column(
@@ -2602,32 +2706,32 @@ class _SeatActionTile extends StatelessWidget {
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: enabled
-                                ? AppColors.text
-                                : AppColors.textTertiary,
+                                ? context.palette.text
+                                : context.palette.textTertiary,
                           )),
-                      const Spacer(),
+                       Spacer(),
                       if (loading)
-                        const SizedBox(
+                         SizedBox(
                           width: 12,
                           height: 12,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       else if (count == 0)
-                        const Icon(Icons.check_rounded,
-                            size: 13, color: AppColors.textTertiary)
+                         Icon(Icons.check_rounded,
+                            size: 13, color: context.palette.textTertiary)
                       else if (count != null)
                         Container(
-                          padding: const EdgeInsets.symmetric(
+                          padding:  EdgeInsets.symmetric(
                               horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
-                            color: AppColors.accentSoft,
+                            color: context.palette.accentSoft,
                             borderRadius: BorderRadius.circular(AppRadius.chip),
                           ),
                           child: Text('$count',
-                              style: const TextStyle(
+                              style:  TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.accent,
+                                color: context.palette.accent,
                               )),
                         ),
                     ],
@@ -2645,21 +2749,21 @@ class _SeatActionTile extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 12,
                             color: enabled
-                                ? AppColors.textSecondary
-                                : AppColors.textTertiary,
+                                ? context.palette.textSecondary
+                                : context.palette.textTertiary,
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                   SizedBox(height: 6),
                   Text(value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: enabled ? valueColor : AppColors.textTertiary,
+                        color: enabled ? valueColor : context.palette.textTertiary,
                       )),
                 ],
               ),
@@ -2701,27 +2805,27 @@ class _TaskCard extends StatelessWidget {
                 children: [
                   Text(
                     task['title']?.toString() ?? '',
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.text),
+                        color: context.palette.text),
                   ),
                   if (task['detail']?.toString().isNotEmpty == true) ...[
-                    const SizedBox(height: 2),
+                     SizedBox(height: 2),
                     Text(
                       task['detail'].toString(),
-                      style: const TextStyle(
-                          fontSize: 12, color: AppColors.textTertiary),
+                      style:  TextStyle(
+                          fontSize: 12, color: context.palette.textTertiary),
                     ),
                   ],
                 ],
               ),
             ),
             if (blocking)
-              const Padding(
+               Padding(
                 padding: EdgeInsets.only(right: AppSpacing.md),
                 child: Tag('阻塞',
-                    color: AppColors.danger, background: AppColors.dangerSoft),
+                    color: context.palette.danger, background: context.palette.dangerSoft),
               ),
             TextButton(
               onPressed: actionId.isEmpty || store.writeBusy

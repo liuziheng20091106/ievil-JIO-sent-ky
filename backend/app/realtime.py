@@ -16,6 +16,26 @@ logger = logging.getLogger(__name__)
 lock = asyncio.Lock()
 connections = set()
 
+# 账号级在线：大厅里的账号没有 WebSocket，靠轮询 /api/lobby、/api/online 续期；
+# 对局内的连接由 pong 续期。窗口与连接心跳一致（60 秒）。
+PRESENCE_SECONDS = 60
+presence: dict[str, float] = {}
+
+
+def touch(key):
+    """刷新某个身份的在线时间；key 是账号 id，主持人固定密码登录用 "host"。"""
+    if key:
+        presence[key] = time.monotonic()
+
+
+def online_keys():
+    """返回在线窗口内的身份集合，并顺手清掉过期条目。"""
+    stamp = time.monotonic()
+    for key, seen in list(presence.items()):
+        if stamp - seen >= PRESENCE_SECONDS:
+            presence.pop(key, None)
+    return set(presence)
+
 
 @dataclass(eq=False)
 class Connection:
@@ -26,6 +46,7 @@ class Connection:
     name: str
     kind: str
     seat_id: str | None
+    account_id: str | None
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=256))
     last_pong: float = field(default_factory=time.monotonic)
     last_ping: float = field(default_factory=time.monotonic)
@@ -115,6 +136,7 @@ async def receiver(peer):
         data = await peer.socket.receive_json()
         if isinstance(data, dict) and data.get("type") == "pong":
             peer.last_pong = time.monotonic()
+            touch(peer.account_id or "host")
 
 
 async def live(socket):
@@ -145,9 +167,11 @@ async def live(socket):
                 actor["name"],
                 actor["kind"],
                 actor["seat_id"],
+                actor["account_id"],
             )
             first = actor["id"] not in online(game["id"])
             connections.add(peer)
+            touch(peer.account_id or "host")
             notices = []
             with storage.transaction() as db:
                 if first:

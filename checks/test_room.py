@@ -276,6 +276,110 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(after["kind"], "account")
         self.assertEqual(after["account_id"], before["account_id"])
 
+    def test_online_roster_covers_lobby_accounts_and_expires(self):
+        realtime.presence.clear()
+        roster = self.client.get("/api/online", headers=self.host).json()
+        self.assertTrue(roster["host_online"])
+        self.assertEqual(roster["accounts"], [])
+        headers, actor = self.account("20001")
+        self.client.get("/api/lobby", headers=headers).raise_for_status()
+        self.assertIn(actor["account_id"], realtime.online_keys())
+        roster = self.client.get("/api/online", headers=self.host).json()
+        self.assertEqual(
+            [item["name"] for item in roster["accounts"]], ["QQ20001"]
+        )
+        realtime.presence[actor["account_id"]] -= realtime.PRESENCE_SECONDS + 1
+        roster = self.client.get("/api/online", headers=self.host).json()
+        self.assertEqual(roster["accounts"], [])
+
+    def test_invites_need_open_join_and_then_seat_the_player(self):
+        self.open_join()
+        first, first_actor, _ = self.join("21001")
+        self.command(self.host, "room.open_join", {"open": False})
+        guest, guest_actor = self.account("21002")
+        self.client.get("/api/lobby", headers=guest).raise_for_status()
+        invited = self.client.post(
+            self.root + "/invites",
+            headers=self.host,
+            json={"account_id": guest_actor["account_id"]},
+        )
+        invited.raise_for_status()
+        invite_id = invited.json()["id"]
+        lobby = self.client.get("/api/lobby", headers=guest).json()
+        self.assertEqual(len(lobby["invites"]), 1)
+        self.assertEqual(lobby["invites"][0]["id"], invite_id)
+        self.assertEqual(lobby["invites"][0]["from_name"], "主持人")
+        self.assertFalse(lobby["invites"][0]["game"]["can_join_player"])
+        blocked = self.client.post(
+            f"/api/invites/{invite_id}/accept", headers=guest
+        )
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        self.assertIn("尚未开放", blocked.text)
+        self.open_join()
+        accepted = self.client.post(
+            f"/api/invites/{invite_id}/accept", headers=guest
+        )
+        accepted.raise_for_status()
+        self.assertEqual(accepted.json()["actor"]["kind"], "player")
+        self.assertIsNotNone(accepted.json()["actor"]["seat_id"])
+        lobby = self.client.get("/api/lobby", headers=guest).json()
+        self.assertEqual(lobby["invites"], [])
+        with storage.connect() as db:
+            row = db.execute(
+                "SELECT status FROM invites WHERE id=?", (invite_id,)
+            ).fetchone()
+        self.assertEqual(row["status"], "accepted")
+        self.assertNotEqual(first_actor["id"], accepted.json()["actor"]["id"])
+
+    def test_invites_reject_offline_self_and_spectators(self):
+        self.open_join()
+        player, player_actor, _ = self.join("22001")
+        spectator, _, _ = self.join("22002", "spectator")
+        offline, offline_actor = self.account("22003")
+        realtime.presence.clear()
+        not_online = self.client.post(
+            self.root + "/invites",
+            headers=player,
+            json={"account_id": offline_actor["account_id"]},
+        )
+        self.assertEqual(not_online.status_code, 409, not_online.text)
+        self.assertIn("不在线", not_online.text)
+        self.client.get("/api/lobby", headers=offline).raise_for_status()
+        self_invite = self.client.post(
+            self.root + "/invites",
+            headers=player,
+            json={"account_id": player_actor["account_id"]},
+        )
+        self.assertEqual(self_invite.status_code, 422, self_invite.text)
+        self.assertIn("自己", self_invite.text)
+        by_spectator = self.client.post(
+            self.root + "/invites",
+            headers=spectator,
+            json={"account_id": offline_actor["account_id"]},
+        )
+        self.assertEqual(by_spectator.status_code, 403, by_spectator.text)
+        invited = self.client.post(
+            self.root + "/invites",
+            headers=player,
+            json={"account_id": offline_actor["account_id"]},
+        )
+        invited.raise_for_status()
+        invite_id = invited.json()["id"]
+        rejected = self.client.post(
+            f"/api/invites/{invite_id}/reject", headers=offline
+        )
+        rejected.raise_for_status()
+        with storage.connect() as db:
+            row = db.execute(
+                "SELECT status FROM invites WHERE id=?", (invite_id,)
+            ).fetchone()
+        self.assertEqual(row["status"], "rejected")
+        state = self.client.get(self.root + "/state", headers=self.host).json()
+        names = {
+            seat["name"] for seat in state["seats"] if seat.get("occupant_id")
+        }
+        self.assertNotIn("QQ22003", names)
+
 
 
 class Migration(unittest.TestCase):
@@ -327,7 +431,11 @@ class Migration(unittest.TestCase):
                 self.assertIsNotNone(storage.load_game(db, game["id"]))
                 tables = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 self.assertNotIn("sessions", tables)
-                self.assertNotIn("invites", tables)
+                # 旧的邀请码 invites 表必须被替换为新的定向邀请表（带 account_id）。
+                self.assertIn(
+                    "account_id",
+                    {row["name"] for row in db.execute("PRAGMA table_info(invites)")},
+                )
                 self.assertIn("account_id", {row["name"] for row in db.execute("PRAGMA table_info(participants)")})
                 columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
                 self.assertNotIn("mimic_seat_id", columns)
@@ -345,6 +453,10 @@ class NoOriginGate(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # storage.DATA_DIR 是模块级常量，env 补丁不影响已绑定的值；直接改常量。
+        self.data = patch.object(storage, "DATA_DIR", Path(self.temp.name))
+        self.data.start()
+        self.addCleanup(self.data.stop)
         self.env = patch.dict(
             os.environ,
             {

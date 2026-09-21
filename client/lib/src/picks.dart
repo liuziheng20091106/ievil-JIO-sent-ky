@@ -132,29 +132,29 @@ class _PlayerPickerSheetState extends State<_PlayerPickerSheet> {
               children: [
                 Text(
                   widget.title,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.text),
+                      color: context.palette.text),
                 ),
                 if (widget.subtitle != null) ...[
-                  const SizedBox(height: AppSpacing.xs),
+                   SizedBox(height: AppSpacing.xs),
                   Text(
                     widget.subtitle!,
-                    style: const TextStyle(
-                        fontSize: 13, color: AppColors.textTertiary),
+                    style:  TextStyle(
+                        fontSize: 13, color: context.palette.textTertiary),
                   ),
                 ],
                 if (max != null) ...[
-                  const SizedBox(height: AppSpacing.xs),
+                   SizedBox(height: AppSpacing.xs),
                   Text(
                     '已选 ${chosen.length} / $max',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: chosen.length > max
-                          ? AppColors.danger
-                          : AppColors.accent,
+                          ? context.palette.danger
+                          : context.palette.accent,
                     ),
                   ),
                 ],
@@ -235,17 +235,17 @@ class _PlayerRow extends StatelessWidget {
     return Opacity(
       opacity: disabled ? .45 : 1,
       child: Material(
-        color: picked ? AppColors.accentSoft : AppColors.surface,
+        color: picked ? context.palette.accentSoft : context.palette.surface,
         borderRadius: BorderRadius.circular(AppRadius.card),
         child: InkWell(
           onTap: disabled ? null : onTap,
           borderRadius: BorderRadius.circular(AppRadius.card),
           child: Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
+            padding:  EdgeInsets.all(AppSpacing.md),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.card),
               border: Border.all(
-                  color: picked ? AppColors.accent : AppColors.border,
+                  color: picked ? context.palette.accent : context.palette.border,
                   width: picked ? 1.6 : 1),
             ),
             child: Row(
@@ -260,30 +260,30 @@ class _PlayerRow extends StatelessWidget {
                         player.seatId != null
                             ? '${player.seatId}号 · ${player.name}'
                             : player.name,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.text),
+                            color: context.palette.text),
                       ),
-                      const SizedBox(height: 2),
+                       SizedBox(height: 2),
                       Text(
                         role != null
                             ? '角色：${role.name}'
                             : (player.subtitle ?? '角色未公开'),
-                        style: const TextStyle(
-                            fontSize: 13, color: AppColors.textTertiary),
+                        style:  TextStyle(
+                            fontSize: 13, color: context.palette.textTertiary),
                       ),
                     ],
                   ),
                 ),
                 if (player.dead)
-                  const Tag('已出局',
-                      color: AppColors.textSecondary,
-                      background: AppColors.surfaceMuted),
+                   Tag('已出局',
+                      color: context.palette.textSecondary,
+                      background: context.palette.surfaceMuted),
                 if (picked) ...[
-                  const SizedBox(width: AppSpacing.sm),
-                  const Icon(Icons.check_circle,
-                      size: 22, color: AppColors.accent),
+                   SizedBox(width: AppSpacing.sm),
+                   Icon(Icons.check_circle,
+                      size: 22, color: context.palette.accent),
                 ],
               ],
             ),
@@ -310,14 +310,14 @@ Future<ActionDescriptor?> showActionPicker(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(
+              padding:  EdgeInsets.fromLTRB(
                   AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
               child: Text(
                 title,
-                style: const TextStyle(
+                style:  TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.text),
+                    color: context.palette.text),
               ),
             ),
             Expanded(
@@ -326,22 +326,22 @@ Future<ActionDescriptor?> showActionPicker(
                     AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.lg),
                 itemCount: actions.length,
                 separatorBuilder: (_, __) =>
-                    const SizedBox(height: AppSpacing.sm),
+                     SizedBox(height: AppSpacing.sm),
                 itemBuilder: (context, index) {
                   final action = actions[index];
                   final unsupported = action.unsupportedReason;
                   final danger = action.raw['danger'] == true;
                   return Material(
-                    color: AppColors.surface,
+                    color: context.palette.surface,
                     borderRadius: BorderRadius.circular(AppRadius.card),
                     child: InkWell(
                       borderRadius: BorderRadius.circular(AppRadius.card),
                       onTap: () => Navigator.pop(context, action),
                       child: Container(
-                        padding: const EdgeInsets.all(AppSpacing.md),
+                        padding:  EdgeInsets.all(AppSpacing.md),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(AppRadius.card),
-                          border: Border.all(color: AppColors.border),
+                          border: Border.all(color: context.palette.border),
                         ),
                         child: Row(
                           children: [
@@ -363,40 +363,40 @@ Future<ActionDescriptor?> showActionPicker(
                                           fontSize: 15,
                                           fontWeight: FontWeight.w600,
                                           color: danger
-                                              ? AppColors.danger
-                                              : AppColors.text,
+                                              ? context.palette.danger
+                                              : context.palette.text,
                                         ),
                                       ),
-                                      const SizedBox(width: AppSpacing.sm),
+                                       SizedBox(width: AppSpacing.sm),
                                       Expanded(
                                         child: Text(
                                           action.group,
-                                          style: const TextStyle(
+                                          style:  TextStyle(
                                               fontSize: 12,
-                                              color: AppColors.textTertiary),
+                                              color: context.palette.textTertiary),
                                         ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 2),
+                                   SizedBox(height: 2),
                                   Text(
                                     unsupported ?? action.label,
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: unsupported != null
-                                          ? AppColors.danger
-                                          : AppColors.textSecondary,
+                                          ? context.palette.danger
+                                          : context.palette.textSecondary,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
                             if (unsupported != null)
-                              const Icon(Icons.block,
-                                  size: 20, color: AppColors.danger)
+                               Icon(Icons.block,
+                                  size: 20, color: context.palette.danger)
                             else
-                              const Icon(Icons.chevron_right,
-                                  color: AppColors.textTertiary),
+                               Icon(Icons.chevron_right,
+                                  color: context.palette.textTertiary),
                           ],
                         ),
                       ),
@@ -446,34 +446,34 @@ class _CodexPickerSheetState extends State<_CodexPickerSheet> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(
+            padding:  EdgeInsets.fromLTRB(
                 AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
             child: Row(
               children: [
-                const Expanded(
+                 Expanded(
                   child: Text(
                     '选择本局魔典',
                     style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.text),
+                        color: context.palette.text),
                   ),
                 ),
                 Tag(
                   '${chosen.length} / ${widget.requiredCount}',
-                  color: complete ? AppColors.success : AppColors.accent,
+                  color: complete ? context.palette.success : context.palette.accent,
                   background:
-                      complete ? AppColors.successSoft : AppColors.accentSoft,
+                      complete ? context.palette.successSoft : context.palette.accentSoft,
                 ),
               ],
             ),
           ),
-          const Padding(
+           Padding(
             padding: EdgeInsets.fromLTRB(
                 AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
             child: Text(
               '必须正好选择 11 名角色，开场后随机排列。',
-              style: TextStyle(fontSize: 13, color: AppColors.textTertiary),
+              style: TextStyle(fontSize: 13, color: context.palette.textTertiary),
             ),
           ),
           Expanded(
@@ -540,7 +540,7 @@ class _CodexCard extends StatelessWidget {
   Widget build(BuildContext context) => Opacity(
         opacity: disabled ? .4 : 1,
         child: Material(
-          color: AppColors.surface,
+          color: context.palette.surface,
           borderRadius: BorderRadius.circular(AppRadius.card),
           child: InkWell(
             onTap: disabled ? null : onTap,
@@ -549,7 +549,7 @@ class _CodexCard extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(AppRadius.card),
                 border: Border.all(
-                    color: picked ? AppColors.accent : AppColors.border,
+                    color: picked ? context.palette.accent : context.palette.border,
                     width: picked ? 2 : 1),
               ),
               padding: const EdgeInsets.all(AppSpacing.sm),
@@ -560,16 +560,16 @@ class _CodexCard extends StatelessWidget {
                       children: [
                         Center(child: RoleAvatar(roleId: role.id, size: 64)),
                         if (picked)
-                          const Positioned(
+                           Positioned(
                             right: 0,
                             top: 0,
                             child: Icon(Icons.check_circle,
-                                size: 20, color: AppColors.accent),
+                                size: 20, color: context.palette.accent),
                           ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.xs),
+                   SizedBox(height: AppSpacing.xs),
                   Text(
                     role.name,
                     maxLines: 1,
@@ -577,7 +577,7 @@ class _CodexCard extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: picked ? FontWeight.w600 : FontWeight.w500,
-                      color: picked ? AppColors.accent : AppColors.text,
+                      color: picked ? context.palette.accent : context.palette.text,
                     ),
                   ),
                 ],

@@ -152,18 +152,18 @@ class _RoleDetailSheet extends StatelessWidget {
                         ref.seatId != null
                             ? '${ref.seatId} 号 · ${ref.name}'
                             : ref.name,
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.text,
+                          color: context.palette.text,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                       SizedBox(height: 2),
                       Text(
                         role == null ? '公开角色未显示' : '公开身份：${role.name}',
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 13,
-                          color: AppColors.textTertiary,
+                          color: context.palette.textTertiary,
                         ),
                       ),
                     ],
@@ -171,31 +171,31 @@ class _RoleDetailSheet extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.md),
+             SizedBox(height: AppSpacing.md),
             Wrap(
               spacing: AppSpacing.sm,
               runSpacing: AppSpacing.sm,
               children: [
                 Tag(
                   ref.dead ? '已出局' : '存活',
-                  color: ref.dead ? AppColors.textSecondary : AppColors.success,
+                  color: ref.dead ? context.palette.textSecondary : context.palette.success,
                   background:
-                      ref.dead ? AppColors.surfaceMuted : AppColors.successSoft,
+                      ref.dead ? context.palette.surfaceMuted : context.palette.successSoft,
                 ),
                 if (ref.online)
-                  const Tag('在线',
-                      icon: Icons.wifi_tethering, color: AppColors.info),
+                   Tag('在线',
+                      icon: Icons.wifi_tethering, color: context.palette.info),
                 if (ref.muted)
-                  const Tag(
+                   Tag(
                     '已禁言',
-                    color: AppColors.warning,
-                    background: AppColors.warningSoft,
+                    color: context.palette.warning,
+                    background: context.palette.warningSoft,
                   ),
                 if (ref.isHost)
-                  const Tag(
+                   Tag(
                     '主持人',
-                    color: AppColors.host,
-                    background: AppColors.hostSoft,
+                    color: context.palette.host,
+                    background: context.palette.hostSoft,
                   ),
               ],
             ),
@@ -211,19 +211,19 @@ class _RoleDetailSheet extends StatelessWidget {
                 ),
               ],
             ] else if (visual != null) ...[
-              const SizedBox(height: AppSpacing.lg),
+               SizedBox(height: AppSpacing.lg),
               Text(
                 '该角色的技能说明尚未从服务器读取到（${visual.name}）。',
-                style: const TextStyle(
+                style:  TextStyle(
                   fontSize: 13,
-                  color: AppColors.textTertiary,
+                  color: context.palette.textTertiary,
                 ),
               ),
             ],
-            const SizedBox(height: AppSpacing.md),
-            const Text(
+             SizedBox(height: AppSpacing.md),
+             Text(
               '技能说明是公开规则；此人的下层牌、剩余次数等私密信息不会在这里显示。',
-              style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],
         ),
@@ -246,9 +246,9 @@ class _SkillBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(AppSpacing.md),
+        padding:  EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
-          color: danger ? AppColors.dangerSoft : AppColors.surfaceMuted,
+          color: danger ? context.palette.dangerSoft : context.palette.surfaceMuted,
           borderRadius: BorderRadius.circular(AppRadius.field),
         ),
         child: Column(
@@ -261,26 +261,26 @@ class _SkillBlock extends StatelessWidget {
                       ? Icons.local_fire_department_outlined
                       : Icons.auto_awesome_outlined,
                   size: 15,
-                  color: danger ? AppColors.danger : AppColors.accent,
+                  color: danger ? context.palette.danger : context.palette.accent,
                 ),
-                const SizedBox(width: AppSpacing.xs),
+                 SizedBox(width: AppSpacing.xs),
                 Text(
                   title,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: danger ? AppColors.danger : AppColors.accent,
+                    color: danger ? context.palette.danger : context.palette.accent,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.xs),
+             SizedBox(height: AppSpacing.xs),
             Text(
               body,
-              style: const TextStyle(
+              style:  TextStyle(
                 fontSize: 14,
                 height: 1.6,
-                color: AppColors.text,
+                color: context.palette.text,
               ),
             ),
           ],
@@ -361,10 +361,10 @@ Future<void> showAvatarMenu(
                         ref.seatId != null
                             ? '${ref.seatId} 号 · ${ref.name}'
                             : ref.name,
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.text,
+                          color: context.palette.text,
                         ),
                       ),
                       Text(
@@ -373,9 +373,9 @@ Future<void> showAvatarMenu(
                             : ref.isHost
                                 ? '主持人'
                                 : '选择要执行的操作',
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 12,
-                          color: AppColors.textTertiary,
+                          color: context.palette.textTertiary,
                         ),
                       ),
                     ],
@@ -389,13 +389,13 @@ Future<void> showAvatarMenu(
               leading: Icon(
                 entry.icon,
                 color:
-                    entry.danger ? AppColors.danger : AppColors.textSecondary,
+                    entry.danger ? context.palette.danger : context.palette.textSecondary,
               ),
               title: Text(
                 entry.label,
                 style: TextStyle(
                   fontSize: 15,
-                  color: entry.danger ? AppColors.danger : AppColors.text,
+                  color: entry.danger ? context.palette.danger : context.palette.text,
                 ),
               ),
               onTap: () {

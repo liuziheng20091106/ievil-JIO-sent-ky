@@ -84,3 +84,7 @@ class OpenJoin(Input):
 class Mute(Input):
     participant_id: str
     muted: StrictBool
+
+
+class Invite(Input):
+    account_id: str = Field(min_length=1, max_length=64)

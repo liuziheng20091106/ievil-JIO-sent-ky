@@ -63,17 +63,17 @@ Future<void> showActionPreview(BuildContext context, ActionDescriptor action) =>
                     children: [
                       Text(
                         action.label,
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.text,
+                          color: context.palette.text,
                         ),
                       ),
                       Text(
                         '短名：${action.shortLabel} · ${action.group}',
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 12,
-                          color: AppColors.textTertiary,
+                          color: context.palette.textTertiary,
                         ),
                       ),
                     ],
@@ -81,26 +81,26 @@ Future<void> showActionPreview(BuildContext context, ActionDescriptor action) =>
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.lg),
+             SizedBox(height: AppSpacing.lg),
             Text(
               action.description.isEmpty ? '此行动没有补充说明。' : action.description,
-              style: const TextStyle(
+              style:  TextStyle(
                 fontSize: 14,
                 height: 1.6,
-                color: AppColors.textSecondary,
+                color: context.palette.textSecondary,
               ),
             ),
             if (action.unsupportedReason != null) ...[
-              const SizedBox(height: AppSpacing.md),
+               SizedBox(height: AppSpacing.md),
               Text(
                 action.unsupportedReason!,
-                style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                style:  TextStyle(color: context.palette.danger, fontSize: 13),
               ),
             ],
-            const SizedBox(height: AppSpacing.lg),
-            const Text(
+             SizedBox(height: AppSpacing.lg),
+             Text(
               '预览不会提交；点击行动按钮后填写参数，确认一次即会提交。',
-              style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],
         ),
@@ -241,26 +241,26 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                                 fontSize: 20,
                                 fontWeight: FontWeight.w700,
                                 color:
-                                    danger ? AppColors.danger : AppColors.text,
+                                    danger ? context.palette.danger : context.palette.text,
                               ),
                             ),
-                            const SizedBox(width: AppSpacing.sm),
+                             SizedBox(width: AppSpacing.sm),
                             Tag(
                               action.group,
-                              color: AppColors.textSecondary,
-                              background: AppColors.surfaceMuted,
+                              color: context.palette.textSecondary,
+                              background: context.palette.surfaceMuted,
                             ),
                           ],
                         ),
-                        const SizedBox(height: 2),
+                         SizedBox(height: 2),
                         Text(
                           action.description.isEmpty
                               ? action.label
                               : action.description,
-                          style: const TextStyle(
+                          style:  TextStyle(
                             fontSize: 13,
                             height: 1.5,
-                            color: AppColors.textSecondary,
+                            color: context.palette.textSecondary,
                           ),
                         ),
                       ],
@@ -271,28 +271,28 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
             ),
             if (unsupported != null)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                padding:  EdgeInsets.symmetric(horizontal: AppSpacing.lg),
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(AppSpacing.md),
+                  padding:  EdgeInsets.all(AppSpacing.md),
                   decoration: BoxDecoration(
-                    color: AppColors.dangerSoft,
+                    color: context.palette.dangerSoft,
                     borderRadius: BorderRadius.circular(AppRadius.field),
                   ),
                   child: Row(
                     children: [
-                      const Icon(
+                       Icon(
                         Icons.block,
                         size: 18,
-                        color: AppColors.danger,
+                        color: context.palette.danger,
                       ),
-                      const SizedBox(width: AppSpacing.sm),
+                       SizedBox(width: AppSpacing.sm),
                       Expanded(
                         child: Text(
                           unsupported,
-                          style: const TextStyle(
+                          style:  TextStyle(
                             fontSize: 13,
-                            color: AppColors.danger,
+                            color: context.palette.danger,
                           ),
                         ),
                       ),
@@ -315,11 +315,11 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                     if (action.id == 'lobby.order') _orderPreview(),
                     if (error != null)
                       Padding(
-                        padding: const EdgeInsets.only(top: AppSpacing.md),
+                        padding:  EdgeInsets.only(top: AppSpacing.md),
                         child: Text(
                           error!,
-                          style: const TextStyle(
-                            color: AppColors.danger,
+                          style:  TextStyle(
+                            color: context.palette.danger,
                             fontSize: 13,
                           ),
                         ),
@@ -347,7 +347,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                         : submit,
                     style: danger
                         ? FilledButton.styleFrom(
-                            backgroundColor: AppColors.danger,
+                            backgroundColor: context.palette.danger,
                           )
                         : null,
                     icon: Icon(
@@ -356,7 +356,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                           : Icons.check_circle_outline,
                       size: 18,
                     ),
-                    label: const Text('确认提交'),
+                    label:  Text('确认提交'),
                   ),
                 ),
               ),
@@ -371,8 +371,8 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     final reason = field.unsupportedReason;
     if (reason != null) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-        child: Text(reason, style: const TextStyle(color: AppColors.danger)),
+        padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
+        child: Text(reason, style:  TextStyle(color: context.palette.danger)),
       );
     }
     if (_isPlayerField(field)) {
@@ -450,9 +450,9 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
       case 'checkbox':
         final checked = values[field.name] == true;
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+          padding:  EdgeInsets.symmetric(vertical: AppSpacing.xs),
           child: Material(
-            color: checked ? AppColors.accentSoft : AppColors.surface,
+            color: checked ? context.palette.accentSoft : context.palette.surface,
             borderRadius: BorderRadius.circular(AppRadius.field),
             child: InkWell(
               borderRadius: BorderRadius.circular(AppRadius.field),
@@ -461,11 +461,11 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 _saveDraft();
               }),
               child: Container(
-                padding: const EdgeInsets.all(AppSpacing.md),
+                padding:  EdgeInsets.all(AppSpacing.md),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(AppRadius.field),
                   border: Border.all(
-                    color: checked ? AppColors.accent : AppColors.border,
+                    color: checked ? context.palette.accent : context.palette.border,
                   ),
                 ),
                 child: Row(
@@ -473,15 +473,15 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                     Icon(
                       checked ? Icons.check_box : Icons.check_box_outline_blank,
                       color:
-                          checked ? AppColors.accent : AppColors.textTertiary,
+                          checked ? context.palette.accent : context.palette.textTertiary,
                     ),
-                    const SizedBox(width: AppSpacing.md),
+                     SizedBox(width: AppSpacing.md),
                     Expanded(
                       child: Text(
                         field.label,
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 14,
-                          color: AppColors.text,
+                          color: context.palette.text,
                         ),
                       ),
                     ),
@@ -508,26 +508,26 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               children: [
                 Row(
                   children: [
-                    const Icon(
+                     Icon(
                       Icons.brush_outlined,
                       size: 18,
-                      color: AppColors.textSecondary,
+                      color: context.palette.textSecondary,
                     ),
-                    const SizedBox(width: AppSpacing.sm),
+                     SizedBox(width: AppSpacing.sm),
                     Expanded(
                       child: Text(
                         field.label,
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 14,
-                          color: AppColors.text,
+                          color: context.palette.text,
                         ),
                       ),
                     ),
                     if (values[field.name] != null)
-                      const Tag(
+                       Tag(
                         '已保留上次草稿',
-                        color: AppColors.textSecondary,
-                        background: AppColors.surfaceMuted,
+                        color: context.palette.textSecondary,
+                        background: context.palette.surfaceMuted,
                       ),
                   ],
                 ),
@@ -545,16 +545,16 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                         state.didChange(null);
                         _saveDraft();
                       },
-                      icon: const Icon(Icons.delete_outline, size: 16),
-                      label: const Text('清除'),
+                      icon:  Icon(Icons.delete_outline, size: 16),
+                      label:  Text('清除'),
                     ),
                   ],
                 ),
                 if (state.errorText != null)
                   Text(
                     state.errorText!,
-                    style: const TextStyle(
-                      color: AppColors.danger,
+                    style:  TextStyle(
+                      color: context.palette.danger,
                       fontSize: 12,
                     ),
                   ),
@@ -582,20 +582,20 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     final picked =
         players.where((player) => selected.contains(player.id)).toList();
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             field.label,
-            style: const TextStyle(
+            style:  TextStyle(
               fontSize: 13,
-              color: AppColors.textSecondary,
+              color: context.palette.textSecondary,
             ),
           ),
-          const SizedBox(height: AppSpacing.sm),
+           SizedBox(height: AppSpacing.sm),
           Material(
-            color: AppColors.surfaceMuted,
+            color: context.palette.surfaceMuted,
             borderRadius: BorderRadius.circular(AppRadius.field),
             child: InkWell(
               borderRadius: BorderRadius.circular(AppRadius.field),
@@ -623,25 +623,25 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                     },
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.md),
+                padding:  EdgeInsets.all(AppSpacing.md),
                 child: field.options.isEmpty
-                    ? const Text(
+                    ?  Text(
                         '当前没有可选参与者',
-                        style: TextStyle(color: AppColors.textTertiary),
+                        style: TextStyle(color: context.palette.textTertiary),
                       )
                     : picked.isEmpty
                         ? Row(
                             children: [
-                              const Icon(
+                               Icon(
                                 Icons.person_add_alt,
                                 size: 18,
-                                color: AppColors.textTertiary,
+                                color: context.palette.textTertiary,
                               ),
-                              const SizedBox(width: AppSpacing.sm),
+                               SizedBox(width: AppSpacing.sm),
                               Text(
                                 multi ? '点击选择成员' : '点击选择参与者',
-                                style: const TextStyle(
-                                  color: AppColors.textTertiary,
+                                style:  TextStyle(
+                                  color: context.palette.textTertiary,
                                   fontSize: 14,
                                 ),
                               ),
@@ -680,7 +680,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     final min = field.raw['min'] is int ? field.raw['min'] as int : 11;
     final complete = selected.length == min;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -689,23 +689,23 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               Expanded(
                 child: Text(
                   field.label,
-                  style: const TextStyle(
+                  style:  TextStyle(
                     fontSize: 13,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
               ),
               Tag(
                 '${selected.length} / $min',
-                color: complete ? AppColors.success : AppColors.accent,
+                color: complete ? context.palette.success : context.palette.accent,
                 background:
-                    complete ? AppColors.successSoft : AppColors.accentSoft,
+                    complete ? context.palette.successSoft : context.palette.accentSoft,
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.sm),
+           SizedBox(height: AppSpacing.sm),
           Material(
-            color: AppColors.surfaceMuted,
+            color: context.palette.surfaceMuted,
             borderRadius: BorderRadius.circular(AppRadius.field),
             child: InkWell(
               borderRadius: BorderRadius.circular(AppRadius.field),
@@ -725,11 +725,11 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               },
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.md),
+                padding:  EdgeInsets.all(AppSpacing.md),
                 child: selected.isEmpty
-                    ? const Text(
+                    ?  Text(
                         '点击选择魔典角色',
-                        style: TextStyle(color: AppColors.textTertiary),
+                        style: TextStyle(color: context.palette.textTertiary),
                       )
                     : Wrap(
                         spacing: AppSpacing.sm,
@@ -757,20 +757,20 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
         .map((option) => option['label'].toString())
         .join();
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             field.label,
-            style: const TextStyle(
+            style:  TextStyle(
               fontSize: 13,
-              color: AppColors.textSecondary,
+              color: context.palette.textSecondary,
             ),
           ),
-          const SizedBox(height: AppSpacing.sm),
+           SizedBox(height: AppSpacing.sm),
           Material(
-            color: AppColors.surfaceMuted,
+            color: context.palette.surfaceMuted,
             borderRadius: BorderRadius.circular(AppRadius.field),
             child: InkWell(
               borderRadius: BorderRadius.circular(AppRadius.field),
@@ -792,7 +792,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               },
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.md),
+                padding:  EdgeInsets.all(AppSpacing.md),
                 child: Row(
                   children: [
                     Expanded(
@@ -801,15 +801,15 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                         style: TextStyle(
                           fontSize: 14,
                           color: label.isEmpty
-                              ? AppColors.textTertiary
-                              : AppColors.text,
+                              ? context.palette.textTertiary
+                              : context.palette.text,
                         ),
                       ),
                     ),
-                    const Icon(
+                     Icon(
                       Icons.expand_more,
                       size: 18,
-                      color: AppColors.textTertiary,
+                      color: context.palette.textTertiary,
                     ),
                   ],
                 ),
@@ -852,23 +852,23 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 Expanded(
                   child: Text(
                     field.label,
-                    style: const TextStyle(
+                    style:  TextStyle(
                       fontSize: 13,
-                      color: AppColors.textSecondary,
+                      color: context.palette.textSecondary,
                     ),
                   ),
                 ),
                 if (max is int)
                   Tag(
                     '${selected.length} / $max',
-                    color: AppColors.textSecondary,
-                    background: AppColors.surfaceMuted,
+                    color: context.palette.textSecondary,
+                    background: context.palette.surfaceMuted,
                   ),
               ],
             ),
-            const SizedBox(height: AppSpacing.sm),
+             SizedBox(height: AppSpacing.sm),
             Material(
-              color: AppColors.surfaceMuted,
+              color: context.palette.surfaceMuted,
               borderRadius: BorderRadius.circular(AppRadius.field),
               child: InkWell(
                 borderRadius: BorderRadius.circular(AppRadius.field),
@@ -892,11 +892,11 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 },
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(AppSpacing.md),
+                  padding:  EdgeInsets.all(AppSpacing.md),
                   child: labels.isEmpty
-                      ? const Text(
+                      ?  Text(
                           '点击选择',
-                          style: TextStyle(color: AppColors.textTertiary),
+                          style: TextStyle(color: context.palette.textTertiary),
                         )
                       : Wrap(
                           spacing: AppSpacing.sm,
@@ -910,11 +910,11 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
             ),
             if (state.errorText != null)
               Padding(
-                padding: const EdgeInsets.only(top: AppSpacing.xs),
+                padding:  EdgeInsets.only(top: AppSpacing.xs),
                 child: Text(
                   state.errorText!,
-                  style: const TextStyle(
-                    color: AppColors.danger,
+                  style:  TextStyle(
+                    color: context.palette.danger,
                     fontSize: 12,
                   ),
                 ),
@@ -929,7 +929,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     final top = values['top']?.toString();
     final cards = widget.store.view?.self['cards'];
     if (top == null || cards is! List) {
-      return const SizedBox.shrink();
+      return  SizedBox.shrink();
     }
     String? other;
     for (final raw in cards) {
@@ -938,39 +938,39 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
       }
     }
     return Padding(
-      padding: const EdgeInsets.only(top: AppSpacing.sm),
+      padding:  EdgeInsets.only(top: AppSpacing.sm),
       child: Container(
-        padding: const EdgeInsets.all(AppSpacing.md),
+        padding:  EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
-          color: AppColors.accentSoft,
+          color: context.palette.accentSoft,
           borderRadius: BorderRadius.circular(AppRadius.field),
         ),
         child: Row(
           children: [
             RoleAvatar(roleId: top, size: 34),
-            const SizedBox(width: AppSpacing.sm),
-            const Text(
+             SizedBox(width: AppSpacing.sm),
+             Text(
               '上层',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
             ),
-            const SizedBox(width: AppSpacing.xs),
+             SizedBox(width: AppSpacing.xs),
             Expanded(
               child: Text(
                 roleVisual(top)?.name ?? top,
-                style: const TextStyle(
+                style:  TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: AppColors.text,
+                  color: context.palette.text,
                 ),
               ),
             ),
             if (other != null) ...[
               RoleAvatar(roleId: other, size: 30),
-              const SizedBox(width: AppSpacing.xs),
+               SizedBox(width: AppSpacing.xs),
               Text(
                 '下层 ${roleVisual(other)?.name ?? other}',
-                style: const TextStyle(
+                style:  TextStyle(
                   fontSize: 12,
-                  color: AppColors.textSecondary,
+                  color: context.palette.textSecondary,
                 ),
               ),
             ],
@@ -1124,10 +1124,10 @@ class _OptionSheetState extends State<_OptionSheet> {
                 Expanded(
                   child: Text(
                     widget.title,
-                    style: const TextStyle(
+                    style:  TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.text,
+                      color: context.palette.text,
                     ),
                   ),
                 ),
@@ -1135,11 +1135,11 @@ class _OptionSheetState extends State<_OptionSheet> {
                   Tag(
                     '${chosen.length} / $max',
                     color: chosen.length > max
-                        ? AppColors.danger
-                        : AppColors.accent,
+                        ? context.palette.danger
+                        : context.palette.accent,
                     background: chosen.length > max
-                        ? AppColors.dangerSoft
-                        : AppColors.accentSoft,
+                        ? context.palette.dangerSoft
+                        : context.palette.accentSoft,
                   ),
               ],
             ),
@@ -1193,7 +1193,7 @@ class _OptionSheetState extends State<_OptionSheet> {
     return Opacity(
       opacity: blocked ? .45 : 1,
       child: Material(
-        color: picked ? AppColors.accentSoft : AppColors.surface,
+        color: picked ? context.palette.accentSoft : context.palette.surface,
         borderRadius: BorderRadius.circular(AppRadius.field),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.field),
@@ -1216,18 +1216,18 @@ class _OptionSheetState extends State<_OptionSheet> {
                   }
                 },
           child: Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
+            padding:  EdgeInsets.all(AppSpacing.md),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.field),
               border: Border.all(
-                color: picked ? AppColors.accent : AppColors.border,
+                color: picked ? context.palette.accent : context.palette.border,
               ),
             ),
             child: Row(
               children: [
                 if (role != null) ...[
                   RoleAvatar(roleId: value, size: 32),
-                  const SizedBox(width: AppSpacing.md),
+                   SizedBox(width: AppSpacing.md),
                 ],
                 Expanded(
                   child: Text(
@@ -1235,7 +1235,7 @@ class _OptionSheetState extends State<_OptionSheet> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: picked ? FontWeight.w600 : FontWeight.w500,
-                      color: picked ? AppColors.accent : AppColors.text,
+                      color: picked ? context.palette.accent : context.palette.text,
                     ),
                   ),
                 ),
@@ -1248,7 +1248,7 @@ class _OptionSheetState extends State<_OptionSheet> {
                           ? Icons.radio_button_checked
                           : Icons.radio_button_unchecked),
                   size: 20,
-                  color: picked ? AppColors.accent : AppColors.textTertiary,
+                  color: picked ? context.palette.accent : context.palette.textTertiary,
                 ),
               ],
             ),
@@ -1293,19 +1293,19 @@ class _DrawingPadState extends State<DrawingPad> {
           child: Container(
             height: 200,
             decoration: BoxDecoration(
-              color: AppColors.surface,
-              border: Border.all(color: AppColors.border),
+              color: context.palette.surface,
+              border: Border.all(color: context.palette.border),
               borderRadius: BorderRadius.circular(AppRadius.field),
             ),
             child: CustomPaint(
-              painter: _StrokePainter(widget.points, AppColors.text),
+              painter: _StrokePainter(widget.points, context.palette.text),
               child: hasDrawing
                   ? null
-                  : const Center(
+                  :  Center(
                       child: Text(
                         '在此手绘',
                         style: TextStyle(
-                          color: AppColors.textTertiary,
+                          color: context.palette.textTertiary,
                           fontSize: 13,
                         ),
                       ),

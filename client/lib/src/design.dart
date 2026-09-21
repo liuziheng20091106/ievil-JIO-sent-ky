@@ -1,37 +1,113 @@
 import 'package:flutter/material.dart';
 
-/// 浅色极简设计令牌：白底、大标题分区、充足留白、圆角卡片。
-class AppColors {
-  const AppColors._();
+/// 语义色板：浅色与深色两套，界面通过 `context.palette` 取色。
+/// 浅色值与旧 AppColors 逐字一致（golden 图依赖浅色渲染结果）。
+@immutable
+class AppPalette {
+  const AppPalette({
+    required this.background,
+    required this.surface,
+    required this.surfaceMuted,
+    required this.surfaceStrong,
+    required this.border,
+    required this.borderStrong,
+    required this.text,
+    required this.textSecondary,
+    required this.textTertiary,
+    required this.onAccent,
+    required this.accent,
+    required this.accentSoft,
+    required this.host,
+    required this.hostSoft,
+    required this.success,
+    required this.successSoft,
+    required this.warning,
+    required this.warningSoft,
+    required this.danger,
+    required this.dangerSoft,
+    required this.info,
+    required this.dead,
+  });
 
-  static const background = Color(0xFFF7F8FA);
-  static const surface = Color(0xFFFFFFFF);
-  static const surfaceMuted = Color(0xFFF2F3F7);
-  static const surfaceStrong = Color(0xFFE9EAF0);
-  static const border = Color(0xFFE7E8EF);
-  static const borderStrong = Color(0xFFD8DAE3);
+  final Color background;
+  final Color surface;
+  final Color surfaceMuted;
+  final Color surfaceStrong;
+  final Color border;
+  final Color borderStrong;
+  final Color text;
+  final Color textSecondary;
+  final Color textTertiary;
+  final Color onAccent;
+  final Color accent;
+  final Color accentSoft;
+  final Color host;
+  final Color hostSoft;
+  final Color success;
+  final Color successSoft;
+  final Color warning;
+  final Color warningSoft;
+  final Color danger;
+  final Color dangerSoft;
+  final Color info;
+  final Color dead;
 
-  static const text = Color(0xFF17181C);
-  static const textSecondary = Color(0xFF585B66);
-  static const textTertiary = Color(0xFF8E919C);
-  static const onAccent = Color(0xFFFFFFFF);
+  static const light = AppPalette(
+    background: Color(0xFFF7F8FA),
+    surface: Color(0xFFFFFFFF),
+    surfaceMuted: Color(0xFFF2F3F7),
+    surfaceStrong: Color(0xFFE9EAF0),
+    border: Color(0xFFE7E8EF),
+    borderStrong: Color(0xFFD8DAE3),
+    text: Color(0xFF17181C),
+    textSecondary: Color(0xFF585B66),
+    textTertiary: Color(0xFF8E919C),
+    onAccent: Color(0xFFFFFFFF),
+    accent: Color(0xFF6C5CE7),
+    accentSoft: Color(0xFFEDEBFD),
+    host: Color(0xFFC08A2E),
+    hostSoft: Color(0xFFFBF3E3),
+    success: Color(0xFF2E9E6B),
+    successSoft: Color(0xFFE8F6EF),
+    warning: Color(0xFFD9822B),
+    warningSoft: Color(0xFFFDF2E4),
+    danger: Color(0xFFD64550),
+    dangerSoft: Color(0xFFFCEDEE),
+    info: Color(0xFF3B7DD8),
+    dead: Color(0xFFB4B7C0),
+  );
 
-  /// 行动与强调色；魔女审判题材保留紫色。
-  static const accent = Color(0xFF6C5CE7);
-  static const accentSoft = Color(0xFFEDEBFD);
+  static const dark = AppPalette(
+    background: Color(0xFF14151A),
+    surface: Color(0xFF1D1E24),
+    surfaceMuted: Color(0xFF26272E),
+    surfaceStrong: Color(0xFF32333B),
+    border: Color(0xFF33353D),
+    borderStrong: Color(0xFF454751),
+    text: Color(0xFFECEDF2),
+    textSecondary: Color(0xFFB6B9C4),
+    textTertiary: Color(0xFF8B8E99),
+    onAccent: Color(0xFF14151A),
+    accent: Color(0xFF9A8CFF),
+    accentSoft: Color(0xFF2A2740),
+    host: Color(0xFFE0B15C),
+    hostSoft: Color(0xFF3A2F1B),
+    success: Color(0xFF4FC08D),
+    successSoft: Color(0xFF1C3A2C),
+    warning: Color(0xFFE7A24D),
+    warningSoft: Color(0xFF3A2C1A),
+    danger: Color(0xFFEF6F79),
+    dangerSoft: Color(0xFF3A2124),
+    info: Color(0xFF6FA6EA),
+    dead: Color(0xFF6C707B),
+  );
 
-  static const host = Color(0xFFC08A2E);
-  static const hostSoft = Color(0xFFFBF3E3);
+  static AppPalette of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? dark : light;
+}
 
-  static const success = Color(0xFF2E9E6B);
-  static const successSoft = Color(0xFFE8F6EF);
-  static const warning = Color(0xFFD9822B);
-  static const warningSoft = Color(0xFFFDF2E4);
-  static const danger = Color(0xFFD64550);
-  static const dangerSoft = Color(0xFFFCEDEE);
-  static const info = Color(0xFF3B7DD8);
-
-  static const dead = Color(0xFFB4B7C0);
+extension AppPaletteAccess on BuildContext {
+  AppPalette get palette => AppPalette.of(this);
 }
 
 class AppRadius {
@@ -70,27 +146,28 @@ class AppSpacing {
   static const bottomBar = 104.0;
 }
 
-/// 浅色极简主题；不再提供暗色主题，界面统一跟随这一套。
-ThemeData buildAppTheme() {
+/// 语义色主题：浅色与深色共用同一套结构，界面跟随系统深色开关。
+ThemeData buildAppTheme([Brightness brightness = Brightness.light]) {
+  final palette = brightness == Brightness.dark ? AppPalette.dark : AppPalette.light;
   final scheme = ColorScheme.fromSeed(
-    seedColor: AppColors.accent,
-    brightness: Brightness.light,
+    seedColor: palette.accent,
+    brightness: brightness,
   ).copyWith(
-    surface: AppColors.surface,
-    onSurface: AppColors.text,
-    primary: AppColors.accent,
-    onPrimary: AppColors.onAccent,
-    error: AppColors.danger,
+    surface: palette.surface,
+    onSurface: palette.text,
+    primary: palette.accent,
+    onPrimary: palette.onAccent,
+    error: palette.danger,
   );
   final base = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: AppColors.background,
+    scaffoldBackgroundColor: palette.background,
     fontFamily: kAppFontFamily,
   );
   return base.copyWith(
-    appBarTheme: const AppBarTheme(
-      backgroundColor: AppColors.background,
+    appBarTheme: AppBarTheme(
+      backgroundColor: palette.background,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
@@ -99,28 +176,28 @@ ThemeData buildAppTheme() {
         fontFamily: kAppFontFamily,
         fontSize: 20,
         fontWeight: FontWeight.w600,
-        color: AppColors.text,
+        color: palette.text,
       ),
-      iconTheme: IconThemeData(color: AppColors.text),
+      iconTheme: IconThemeData(color: palette.text),
     ),
     cardTheme: CardThemeData(
-      color: AppColors.surface,
+      color: palette.surface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.card),
-        side: const BorderSide(color: AppColors.border),
+        side: BorderSide(color: palette.border),
       ),
     ),
-    dividerTheme: const DividerThemeData(
-      color: AppColors.border,
+    dividerTheme: DividerThemeData(
+      color: palette.border,
       thickness: 1,
       space: 1,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: AppColors.surfaceMuted,
+      fillColor: palette.surfaceMuted,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadius.field),
@@ -132,15 +209,15 @@ ThemeData buildAppTheme() {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadius.field),
-        borderSide: const BorderSide(color: AppColors.accent, width: 1.6),
+        borderSide: BorderSide(color: palette.accent, width: 1.6),
       ),
-      hintStyle: const TextStyle(color: AppColors.textTertiary),
-      labelStyle: const TextStyle(color: AppColors.textSecondary),
+      hintStyle: TextStyle(color: palette.textTertiary),
+      labelStyle: TextStyle(color: palette.textSecondary),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: AppColors.accent,
-        foregroundColor: AppColors.onAccent,
+        backgroundColor: palette.accent,
+        foregroundColor: palette.onAccent,
         minimumSize: const Size(0, 48),
         padding: const EdgeInsets.symmetric(horizontal: 20),
         shape: RoundedRectangleBorder(
@@ -154,10 +231,10 @@ ThemeData buildAppTheme() {
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.text,
+        foregroundColor: palette.text,
         minimumSize: const Size(0, 48),
         padding: const EdgeInsets.symmetric(horizontal: 20),
-        side: const BorderSide(color: AppColors.borderStrong),
+        side: BorderSide(color: palette.borderStrong),
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppRadius.field)),
         textStyle: const TextStyle(
@@ -169,7 +246,7 @@ ThemeData buildAppTheme() {
     ),
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
-        foregroundColor: AppColors.accent,
+        foregroundColor: palette.accent,
         textStyle: const TextStyle(
           fontFamily: kAppFontFamily,
           fontSize: 15,
@@ -177,14 +254,14 @@ ThemeData buildAppTheme() {
         ),
       ),
     ),
-    listTileTheme: const ListTileThemeData(
-      iconColor: AppColors.textSecondary,
-      textColor: AppColors.text,
+    listTileTheme: ListTileThemeData(
+      iconColor: palette.textSecondary,
+      textColor: palette.text,
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: AppColors.surface,
+      backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,
-      indicatorColor: AppColors.accentSoft,
+      indicatorColor: palette.accentSoft,
       elevation: 0,
       height: 64,
       labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
@@ -196,21 +273,21 @@ ThemeData buildAppTheme() {
               ? FontWeight.w600
               : FontWeight.w500,
           color: states.contains(WidgetState.selected)
-              ? AppColors.accent
-              : AppColors.textTertiary,
+              ? palette.accent
+              : palette.textTertiary,
         ),
       ),
       iconTheme: WidgetStateProperty.resolveWith(
         (states) => IconThemeData(
           size: 24,
           color: states.contains(WidgetState.selected)
-              ? AppColors.accent
-              : AppColors.textTertiary,
+              ? palette.accent
+              : palette.textTertiary,
         ),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: AppColors.text,
+      backgroundColor: palette.text,
       contentTextStyle:
           const TextStyle(fontFamily: kAppFontFamily, color: Colors.white),
       behavior: SnackBarBehavior.floating,
@@ -218,25 +295,25 @@ ThemeData buildAppTheme() {
           borderRadius: BorderRadius.circular(AppRadius.field)),
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: AppColors.surface,
+      backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.sheet)),
-      titleTextStyle: const TextStyle(
+      titleTextStyle: TextStyle(
         fontFamily: kAppFontFamily,
         fontSize: 19,
         fontWeight: FontWeight.w600,
-        color: AppColors.text,
+        color: palette.text,
       ),
-      contentTextStyle: const TextStyle(
+      contentTextStyle: TextStyle(
         fontFamily: kAppFontFamily,
         fontSize: 15,
         height: 1.6,
-        color: AppColors.textSecondary,
+        color: palette.textSecondary,
       ),
     ),
-    bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: AppColors.surface,
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,
       showDragHandle: true,
       shape: RoundedRectangleBorder(
@@ -245,24 +322,24 @@ ThemeData buildAppTheme() {
       ),
     ),
     chipTheme: ChipThemeData(
-      backgroundColor: AppColors.surfaceMuted,
-      selectedColor: AppColors.accentSoft,
+      backgroundColor: palette.surfaceMuted,
+      selectedColor: palette.accentSoft,
       side: BorderSide.none,
-      labelStyle: const TextStyle(
+      labelStyle: TextStyle(
         fontFamily: kAppFontFamily,
         fontSize: 13,
         fontWeight: FontWeight.w500,
-        color: AppColors.textSecondary,
+        color: palette.textSecondary,
       ),
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.chip)),
     ),
     progressIndicatorTheme:
-        const ProgressIndicatorThemeData(color: AppColors.accent),
+        ProgressIndicatorThemeData(color: palette.accent),
     textTheme: base.textTheme.apply(
       fontFamily: kAppFontFamily,
-      bodyColor: AppColors.text,
-      displayColor: AppColors.text,
+      bodyColor: palette.text,
+      displayColor: palette.text,
     ),
   );
 }
@@ -292,18 +369,18 @@ class SectionTitle extends StatelessWidget {
                 children: [
                   Text(
                     text,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.text,
+                      color: context.palette.text,
                     ),
                   ),
                   if (subtitle != null) ...[
-                    const SizedBox(height: AppSpacing.xs),
+                     SizedBox(height: AppSpacing.xs),
                     Text(
                       subtitle!,
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.textTertiary),
+                      style: TextStyle(
+                          fontSize: 13, color: context.palette.textTertiary),
                     ),
                   ],
                 ],
@@ -317,19 +394,18 @@ class SectionTitle extends StatelessWidget {
 
 /// 小标签。
 class Tag extends StatelessWidget {
-  const Tag(this.text,
-      {super.key,
-      this.color = AppColors.accent,
-      this.background = AppColors.accentSoft,
-      this.icon});
+   Tag(this.text, {super.key, this.color, this.background, this.icon});
 
   final String text;
-  final Color color;
-  final Color background;
+  final Color? color;
+  final Color? background;
   final IconData? icon;
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    final color = this.color ?? context.palette.accent;
+    final background = this.background ?? context.palette.accentSoft;
+    return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: background,
@@ -349,7 +425,8 @@ class Tag extends StatelessWidget {
             ),
           ],
         ),
-      );
+    );
+  }
 }
 
 /// 空状态：图标 + 说明，替代空白页。
@@ -364,33 +441,36 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.xl),
+          padding:  EdgeInsets.all(AppSpacing.xl),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 width: 64,
                 height: 64,
-                decoration: const BoxDecoration(
-                    color: AppColors.surfaceMuted, shape: BoxShape.circle),
-                child: Icon(icon, size: 30, color: AppColors.textTertiary),
+                decoration: BoxDecoration(
+                    color: context.palette.surfaceMuted, shape: BoxShape.circle),
+                child: Icon(icon,
+                    size: 30, color: context.palette.textTertiary),
               ),
-              const SizedBox(height: AppSpacing.lg),
+               SizedBox(height: AppSpacing.lg),
               Text(
                 title,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.text),
+                    color: context.palette.text),
               ),
               if (detail != null) ...[
-                const SizedBox(height: AppSpacing.sm),
+                 SizedBox(height: AppSpacing.sm),
                 Text(
                   detail!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 13, height: 1.6, color: AppColors.textTertiary),
+                  style: TextStyle(
+                      fontSize: 13,
+                      height: 1.6,
+                      color: context.palette.textTertiary),
                 ),
               ],
             ],

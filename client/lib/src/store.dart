@@ -77,6 +77,10 @@ class GameStore extends ChangeNotifier {
   bool hasMoreMessages = false;
   String messageScope = 'all';
   String selectedChannelId = 'public';
+
+  /// 在线账号（不含自己的过滤在界面层做）与发给我的待处理邀请。
+  List<OnlineAccount> online = const <OnlineAccount>[];
+  List<LobbyInvite> invites = const <LobbyInvite>[];
   List<GameMessage> messages = [];
   Map<String, dynamic>? challengeInfo;
   String? pendingPhaseKey;
@@ -415,6 +419,9 @@ class GameStore extends ChangeNotifier {
       final result = await api!.lobby();
       lobbyGame =
           result['game'] == null ? null : LobbyGame.fromJson(result['game']);
+      invites = jsonArray(result['invites'] ?? const <dynamic>[], 'lobby.invites')
+          .map(LobbyInvite.fromJson)
+          .toList(growable: false);
       final participation = result['participation'];
       if (participation != null) {
         actor = Actor.fromJson(participation);
@@ -487,6 +494,83 @@ class GameStore extends ChangeNotifier {
     }
   }
 
+  /// 在线名单是辅助信息：取不到时保留上一次结果，不打断对局界面。
+  Future<void> loadOnline({String? gameId}) async {
+    if (api == null || actor == null) return;
+    try {
+      final result = await api!.online(gameId: gameId);
+      online = jsonArray(result['accounts'] ?? const <dynamic>[], 'online.accounts')
+          .map(OnlineAccount.fromJson)
+          .toList(growable: false);
+    } on ApiException {
+      // 忽略：下个轮询周期会重试。
+    } on FormatException {
+      online = const <OnlineAccount>[];
+    }
+    notifyListeners();
+  }
+
+  Future<void> inviteAccount(String accountId) async {
+    final id = view?.id ?? lobbyGame?.id;
+    if (api == null || id == null || writeBusy) return;
+    writeBusy = true;
+    error = null;
+    notifyListeners();
+    try {
+      await api!.invite(id, accountId);
+      await loadOnline(gameId: id);
+    } on ApiException catch (failure) {
+      error = failure.message;
+      rethrow;
+    } finally {
+      writeBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 接受邀请：服务端仍会校验是否已「开放加入」，被拒时按失败提示。
+  Future<void> acceptInvite(String inviteId) async {
+    if (api == null || writeBusy) return;
+    writeBusy = true;
+    error = null;
+    notifyListeners();
+    try {
+      final result = await api!.acceptInvite(inviteId);
+      actor = Actor.fromJson(result['actor']);
+      gameId = jsonString(result['game_id'], 'accept.game_id');
+      invites = const <LobbyInvite>[];
+      await preferences.setString(_actorKey, jsonEncode(actor!.raw));
+      await preferences.setString(_gameKey, gameId!);
+      await enterGame(gameId!);
+    } on ApiException catch (failure) {
+      error = failure.message;
+      rethrow;
+    } on FormatException catch (failure) {
+      error = '服务器返回了无法解析的参与信息：${failure.message}';
+      rethrow;
+    } finally {
+      writeBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> rejectInvite(String inviteId) async {
+    if (api == null || writeBusy) return;
+    writeBusy = true;
+    error = null;
+    notifyListeners();
+    try {
+      await api!.rejectInvite(inviteId);
+      await refreshLobby();
+    } on ApiException catch (failure) {
+      error = failure.message;
+      rethrow;
+    } finally {
+      writeBusy = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> enterGame(String id) async {
     if (api == null) return;
     gameId = id;
@@ -523,6 +607,8 @@ class GameStore extends ChangeNotifier {
     messages = [];
     hasMoreMessages = false;
     selectedChannelId = 'public';
+    online = const <OnlineAccount>[];
+    invites = const <LobbyInvite>[];
     messageScope = 'all';
     newActionCount = 0;
     warningCount = 0;
@@ -680,7 +766,9 @@ class GameStore extends ChangeNotifier {
     }
 
     view = next;
-    if (next.channels.every((item) => item.id != selectedChannelId)) {
+    // 频道结束或消失都要回到公屏：结束的频道不再出现在频道列表里。
+    if (next.channels.every(
+        (item) => item.id != selectedChannelId || item.status == 'ended')) {
       selectedChannelId = 'public';
     }
   }
@@ -1100,6 +1188,8 @@ class GameStore extends ChangeNotifier {
     hasMoreMessages = false;
     messageScope = 'all';
     selectedChannelId = 'public';
+    online = const <OnlineAccount>[];
+    invites = const <LobbyInvite>[];
     connectionStatus = '未连接';
   }
 

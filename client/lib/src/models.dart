@@ -141,6 +141,30 @@ class LobbyGame {
       jsonBool(raw['can_join_spectator'], 'game.can_join_spectator');
 }
 
+/// 在线账号：只用于展示与邀请，不含任何 QQ 号或令牌。
+class OnlineAccount {
+  OnlineAccount.fromJson(Object? value) : raw = jsonObject(value, 'online.account');
+
+  final Map<String, dynamic> raw;
+  String get id => jsonString(raw['id'], 'online.account.id');
+  String get name => jsonString(raw['name'], 'online.account.name');
+  bool get available =>
+      jsonBool(raw['available'], 'online.account.available', fallback: true);
+  bool get invited => jsonBool(raw['invited'], 'online.account.invited');
+}
+
+/// 别人发给我的对局邀请；game 为空表示那一局已经不存在。
+class LobbyInvite {
+  LobbyInvite.fromJson(Object? value) : raw = jsonObject(value, 'lobby.invite');
+
+  final Map<String, dynamic> raw;
+  String get id => jsonString(raw['id'], 'invite.id');
+  String get gameId => jsonString(raw['game_id'], 'invite.game_id');
+  String get fromName => jsonString(raw['from_name'], 'invite.from_name');
+  LobbyGame? get game =>
+      raw['game'] == null ? null : LobbyGame.fromJson(raw['game']);
+}
+
 class ActionField {
   ActionField.fromJson(Object? value) : raw = jsonObject(value, 'field') {
     name = jsonString(raw['name'], 'field.name');

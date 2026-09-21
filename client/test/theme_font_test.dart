@@ -35,6 +35,43 @@ void main() {
     final context = tester.element(find.text('魔法裁判'));
     expect(Theme.of(context).textTheme.bodyMedium!.fontFamily, kAppFontFamily);
     expect(Theme.of(context).textTheme.titleLarge!.fontFamily, kAppFontFamily);
-    expect(Theme.of(context).scaffoldBackgroundColor, AppColors.background);
+    expect(Theme.of(context).scaffoldBackgroundColor, AppPalette.light.background);
+  });
+
+  testWidgets('深色模式跟随系统并解析到深色调色板', (tester) async {
+    expect(buildAppTheme(Brightness.dark).scaffoldBackgroundColor,
+        AppPalette.dark.background);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        darkTheme: buildAppTheme(Brightness.dark),
+        themeMode: ThemeMode.system,
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(child: Text(context.palette == AppPalette.dark ? '深色' : '浅色')),
+          ),
+        ),
+      ),
+    );
+    // 默认平台亮度为浅色。
+    expect(find.text('浅色'), findsOneWidget);
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(platformBrightness: Brightness.dark),
+        child: MaterialApp(
+          theme: buildAppTheme(),
+          darkTheme: buildAppTheme(Brightness.dark),
+          themeMode: ThemeMode.system,
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                  child: Text(context.palette == AppPalette.dark ? '深色' : '浅色')),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('深色'), findsOneWidget);
   });
 }

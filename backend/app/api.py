@@ -222,6 +222,23 @@ async def logout(request: Request, response: Response):
         return {"ok": True}
 
 
+def lobby_game_view(game):
+    """大厅与邀请共用的对局投影。"""
+    game.setdefault("join_open", False)
+    available = sum(not seat["occupant_id"] for seat in game["seats"])
+    return {
+        "id": game["id"],
+        "status": game["status"],
+        "phase": game["phase"],
+        "join_open": bool(game["join_open"]),
+        "player_seats_available": available,
+        "can_join_player": bool(
+            game["join_open"] and game["phase"] == "lobby" and not game["cards"] and available
+        ),
+        "can_join_spectator": bool(game["join_open"]),
+    }
+
+
 @router.get("/lobby")
 async def lobby(request: Request):
     account = None
@@ -232,30 +249,72 @@ async def lobby(request: Request):
             host = auth.actor_for_token(db, auth.token_hash(request))
         if not host or host["kind"] != "host":
             raise
+    realtime.touch(account["id"] if account else "host")
     with storage.connect() as db:
         game_id = storage.current_game_id(db)
         game = storage.load_game(db, game_id) if game_id else None
+        invites = [
+            {
+                "id": row["id"],
+                "game_id": row["game_id"],
+                "from_name": row["inviter_name"],
+                "created_at": row["created_at"],
+                "game": lobby_game_view(invited_game),
+            }
+            for row in (storage.pending_invites(db, account["id"]) if account else [])
+            if (invited_game := storage.load_game(db, row["game_id"]))
+        ]
         if not game or game["status"] == "ended":
-            return {"game": None, "participation": None}
-        game.setdefault("join_open", False)
-        available = sum(not seat["occupant_id"] for seat in game["seats"])
+            return {"game": None, "participation": None, "invites": invites}
         participation = (
             auth.actor_for_token(db, auth.token_hash(request), game["id"]) if account else None
         )
         return {
-            "game": {
-                "id": game["id"],
-                "status": game["status"],
-                "phase": game["phase"],
-                "join_open": bool(game["join_open"]),
-                "player_seats_available": available,
-                "can_join_player": bool(
-                    game["join_open"] and game["phase"] == "lobby" and not game["cards"] and available
-                ),
-                "can_join_spectator": bool(game["join_open"]),
-            },
+            "game": lobby_game_view(game),
             "participation": participation,
+            "invites": invites,
         }
+
+
+@router.get("/online")
+async def online_players(
+    request: Request, game_id: str | None = Query(default=None, max_length=64)
+):
+    """在线账号名单。带 game_id 时额外给出「能否邀请 / 是否已邀请」。"""
+    with storage.connect() as db:
+        actor = auth.require_actor(db, request)
+        realtime.touch(actor["account_id"] or "host")
+        keys = realtime.online_keys()
+        available, invited = {}, set()
+        if game_id:
+            for row in db.execute(
+                "SELECT account_id, active, blocked FROM participants WHERE game_id=?",
+                (game_id,),
+            ):
+                available[row["account_id"]] = not (row["active"] or row["blocked"])
+            invited = {
+                row["account_id"]
+                for row in db.execute(
+                    """SELECT account_id FROM invites
+                       WHERE game_id=? AND status='pending' AND created_at>=?""",
+                    (game_id, storage.invite_cutoff()),
+                )
+            }
+        accounts = []
+        for key in sorted(keys - {"host"}):
+            account = auth_storage.account(key)
+            if not account:
+                continue
+            accounts.append(
+                {
+                    "id": account["id"],
+                    "name": account["nickname"],
+                    "available": available.get(account["id"], True) if game_id else True,
+                    "invited": account["id"] in invited,
+                }
+            )
+        accounts.sort(key=lambda item: item["name"])
+        return {"accounts": accounts, "host_online": "host" in keys}
 
 
 @router.post("/reset")
@@ -295,72 +354,176 @@ async def create(body: schemas.Create, request: Request):
         return current_view(game["id"], auth.token_hash(request))
 
 
+def join_game(db, game, account, kind, hashed):
+    """开放参局与接受邀请共用：校验、随机占席、写参与身份与加入公告。
+
+    返回 (actor, 公告消息行)。不提交事务，也不推送。
+    """
+    game_id = game["id"]
+    if not game.get("join_open"):
+        raise HTTPException(409, "主持人尚未开放参局")
+    previous = db.execute(
+        "SELECT * FROM participants WHERE game_id=? AND account_id=?",
+        (game_id, account["id"]),
+    ).fetchone()
+    if previous:
+        if previous["blocked"]:
+            raise HTTPException(403, "该账号已在本局拉黑")
+        if previous["kind"] != kind:
+            raise HTTPException(409, "同一账号不能更换本局参与方式")
+        if previous["active"]:
+            return auth.actor_for_token(db, hashed, game_id), None
+        if previous["kind"] == "player":
+            if game["status"] != "lobby":
+                # 开局后回席会继承角色牌与示人身份，必须由主持人走替换流程。
+                raise HTTPException(409, "对局已开始，回席需主持人安排观战者替补接管")
+            seat = seat_for(game, previous["seat_id"])
+            if seat["occupant_id"] not in (None, previous["id"]):
+                raise HTTPException(409, "原席位已由替补接管")
+            seat["occupant_id"], seat["name"] = previous["id"], previous["name"]
+        db.execute("UPDATE participants SET active=1 WHERE id=?", (previous["id"],))
+        participant_id = previous["id"]
+    else:
+        seat = None
+        if kind == "player":
+            if game["phase"] != "lobby" or game["cards"]:
+                raise HTTPException(409, "已经发牌，只能选择观战")
+            available = [seat for seat in game["seats"] if not seat["occupant_id"]]
+            if not available:
+                raise HTTPException(409, "七个席位已满，可以选择观战")
+            seat = secrets.choice(available)
+        participant_id = secrets.token_urlsafe(18)
+        db.execute(
+            """INSERT INTO participants
+               (id,game_id,account_id,kind,seat_id,name,access_ids)
+               VALUES(?,?,?,?,?,?,?)""",
+            (
+                participant_id,
+                game_id,
+                account["id"],
+                kind,
+                seat["id"] if seat else None,
+                account["nickname"],
+                storage.dumps([participant_id]),
+            ),
+        )
+        if seat:
+            seat["occupant_id"], seat["name"] = participant_id, account["nickname"]
+            seat["ready"] = False
+    game["version"] += 1
+    storage.save_game(db, game)
+    actor = auth.actor_for_token(db, hashed, game_id)
+    label = (
+        str(actor["seat_id"]) + "号玩家" if actor["kind"] == "player" else "观战者"
+    ) + "【" + actor["name"] + "】"
+    row = storage.add_message(db, game_id, text=label + "已加入对局")
+    return actor, row
+
+
 @router.post("/games/{game_id}/participations")
 async def participate(game_id: str, body: schemas.Participation, request: Request):
     account = auth.require_account(request)
     async with realtime.lock:
         with storage.transaction() as db:
             game = require_game(db, game_id, mutable=True)
-            if not game.get("join_open"):
-                raise HTTPException(409, "主持人尚未开放参局")
-            previous = db.execute(
-                "SELECT * FROM participants WHERE game_id=? AND account_id=?",
-                (game_id, account["id"]),
-            ).fetchone()
-            if previous:
-                if previous["blocked"]:
-                    raise HTTPException(403, "该账号已在本局拉黑")
-                if previous["kind"] != body.kind:
-                    raise HTTPException(409, "同一账号不能更换本局参与方式")
-                if previous["active"]:
-                    return auth.me(auth.actor_for_token(db, auth.token_hash(request), game_id))
-                if previous["kind"] == "player":
-                    if game["status"] != "lobby":
-                        # 开局后回席会继承角色牌与示人身份，必须由主持人走替换流程。
-                        raise HTTPException(409, "对局已开始，回席需主持人安排观战者替补接管")
-                    seat = seat_for(game, previous["seat_id"])
-                    if seat["occupant_id"] not in (None, previous["id"]):
-                        raise HTTPException(409, "原席位已由替补接管")
-                    seat["occupant_id"], seat["name"] = previous["id"], previous["name"]
-                db.execute("UPDATE participants SET active=1 WHERE id=?", (previous["id"],))
-                participant_id = previous["id"]
-            else:
-                seat = None
-                if body.kind == "player":
-                    if game["phase"] != "lobby" or game["cards"]:
-                        raise HTTPException(409, "已经发牌，只能选择观战")
-                    available = [seat for seat in game["seats"] if not seat["occupant_id"]]
-                    if not available:
-                        raise HTTPException(409, "七个席位已满，可以选择观战")
-                    seat = secrets.choice(available)
-                participant_id = secrets.token_urlsafe(18)
-                db.execute(
-                    """INSERT INTO participants
-                       (id,game_id,account_id,kind,seat_id,name,access_ids)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (
-                        participant_id,
-                        game_id,
-                        account["id"],
-                        body.kind,
-                        seat["id"] if seat else None,
-                        account["nickname"],
-                        storage.dumps([participant_id]),
-                    ),
-                )
-                if seat:
-                    seat["occupant_id"], seat["name"] = participant_id, account["nickname"]
-                    seat["ready"] = False
-            game["version"] += 1
-            storage.save_game(db, game)
-            actor = auth.actor_for_token(db, auth.token_hash(request), game_id)
-            label = (
-                str(actor["seat_id"]) + "号玩家" if actor["kind"] == "player" else "观战者"
-            ) + "【" + actor["name"] + "】"
-            row = storage.add_message(db, game_id, text=label + "已加入对局")
-        realtime.publish(game_id, [row])
+            actor, row = join_game(db, game, account, body.kind, auth.token_hash(request))
+        realtime.publish(game_id, [row] if row else [])
         refresh_connections()
         return auth.me(actor)
+
+
+@router.post("/games/{game_id}/invites")
+async def create_invite(game_id: str, body: schemas.Invite, request: Request):
+    async with realtime.lock:
+        with storage.transaction() as db:
+            actor = auth.require_actor(db, request, game_id)
+            if actor["kind"] == "spectator":
+                raise HTTPException(403, "观战者不能邀请玩家")
+            game = require_game(db, game_id)
+            if game["status"] == "ended":
+                raise HTTPException(409, "本局已经结束")
+            target = auth_storage.account(body.account_id)
+            if not target:
+                raise HTTPException(422, "请选择在线玩家")
+            if target["id"] == actor["account_id"]:
+                raise HTTPException(422, "不能邀请自己")
+            if target["id"] not in realtime.online_keys():
+                raise HTTPException(409, "该玩家当前不在线")
+            previous = db.execute(
+                "SELECT active,blocked FROM participants WHERE game_id=? AND account_id=?",
+                (game_id, target["id"]),
+            ).fetchone()
+            if previous and previous["active"]:
+                raise HTTPException(409, "该玩家已经在本局")
+            if previous and previous["blocked"]:
+                raise HTTPException(409, "该玩家已被本局拉黑")
+            row = db.execute(
+                "SELECT id FROM invites WHERE game_id=? AND account_id=? AND status='pending'",
+                (game_id, target["id"]),
+            ).fetchone()
+            if row:
+                # 同一局同一账号只保留一条待处理邀请，重复邀请按刷新处理。
+                db.execute(
+                    "UPDATE invites SET inviter_id=?,inviter_name=?,created_at=? WHERE id=?",
+                    (actor["id"], actor["name"], storage.now_text(), row["id"]),
+                )
+                invite_id = row["id"]
+            else:
+                invite_id = "invite:" + secrets.token_urlsafe(12)
+                db.execute(
+                    """INSERT INTO invites
+                       (id,game_id,account_id,inviter_id,inviter_name,status,created_at)
+                       VALUES(?,?,?,?,?,'pending',?)""",
+                    (
+                        invite_id,
+                        game_id,
+                        target["id"],
+                        actor["id"],
+                        actor["name"],
+                        storage.now_text(),
+                    ),
+                )
+        return {"id": invite_id, "account_id": target["id"], "status": "pending"}
+
+
+@router.post("/invites/{invite_id}/accept")
+async def accept_invite(invite_id: str, request: Request):
+    account = auth.require_account(request)
+    async with realtime.lock:
+        with storage.transaction() as db:
+            row = db.execute("SELECT * FROM invites WHERE id=?", (invite_id,)).fetchone()
+            if (
+                not row
+                or row["account_id"] != account["id"]
+                or row["status"] != "pending"
+                or row["created_at"] < storage.invite_cutoff()
+            ):
+                raise HTTPException(409, "邀请已失效，请让邀请人重新发送")
+            game = require_game(db, row["game_id"], mutable=True)
+            # 接受邀请走与主动参局完全相同的校验：未开放加入时同样被拒。
+            actor, message = join_game(db, game, account, "player", auth.token_hash(request))
+            db.execute(
+                "UPDATE invites SET status='accepted',responded_at=? WHERE id=?",
+                (storage.now_text(), invite_id),
+            )
+        realtime.publish(game["id"], [message] if message else [])
+        refresh_connections()
+        return auth.me(actor)
+
+
+@router.post("/invites/{invite_id}/reject")
+async def reject_invite(invite_id: str, request: Request):
+    account = auth.require_account(request)
+    async with realtime.lock:
+        with storage.transaction() as db:
+            row = db.execute("SELECT * FROM invites WHERE id=?", (invite_id,)).fetchone()
+            if not row or row["account_id"] != account["id"] or row["status"] != "pending":
+                raise HTTPException(409, "邀请已失效")
+            db.execute(
+                "UPDATE invites SET status='rejected',responded_at=? WHERE id=?",
+                (storage.now_text(), invite_id),
+            )
+        return {"ok": True}
 
 
 @router.get("/games/{game_id}/state")

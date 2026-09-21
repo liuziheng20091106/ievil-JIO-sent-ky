@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'src/app_icons.dart';
 import 'src/design.dart';
+import 'src/models.dart';
 import 'src/picks.dart';
 import 'src/release.dart';
 import 'src/role_visuals.dart';
@@ -36,6 +39,8 @@ class SevenDoubleApp extends StatelessWidget {
         title: kAppTitle,
         debugShowCheckedModeBanner: false,
         theme: buildAppTheme(),
+        darkTheme: buildAppTheme(Brightness.dark),
+        themeMode: ThemeMode.system,
         home: AnimatedBuilder(
           animation: store,
           builder: (context, _) => AppGate(store: store, release: release),
@@ -52,7 +57,7 @@ class AppGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final page = _page();
+    final page = _page(context);
     final release = this.release;
     if (release == null) return page;
     return AnimatedBuilder(
@@ -61,10 +66,10 @@ class AppGate extends StatelessWidget {
         final banners = <Widget>[
           if (release.updateRequired)
             MaterialBanner(
-              backgroundColor: AppColors.danger,
-              content: const Text(
+              backgroundColor: context.palette.danger,
+              content: Text(
                 '当前版本过旧，必须更新后才能继续使用，请向主持人获取最新安装包。',
-                style: TextStyle(color: Colors.white),
+                style: TextStyle(color: context.palette.onAccent),
               ),
               actions: const [SizedBox.shrink()],
             )
@@ -104,7 +109,7 @@ class AppGate extends StatelessWidget {
     );
   }
 
-  Widget _page() {
+  Widget _page(BuildContext context) {
     if (store.restoring) {
       return const Scaffold(
         body: Center(
@@ -134,17 +139,17 @@ class AppGate extends StatelessWidget {
     }
     if (store.view == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('正在进入对局')),
+        appBar: AppBar(title:  Text('正在进入对局')),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (store.error == null) const CircularProgressIndicator(),
+              if (store.error == null)  CircularProgressIndicator(),
               if (store.error != null) ...[
-                const Icon(
+                 Icon(
                   Icons.cloud_off_outlined,
                   size: 40,
-                  color: AppColors.textTertiary,
+                  color: context.palette.textTertiary,
                 ),
                 const SizedBox(height: AppSpacing.md),
                 Text(store.error!, textAlign: TextAlign.center),
@@ -194,23 +199,23 @@ class _EndpointPageState extends State<EndpointPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Center(child: AppLogo(size: 88, rounded: true)),
-                    const SizedBox(height: AppSpacing.xl),
-                    const Text(
+                     Center(child: AppLogo(size: 88, rounded: true)),
+                     SizedBox(height: AppSpacing.xl),
+                     Text(
                       kAppTitle,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.text,
+                        color: context.palette.text,
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.sm),
-                    const Text(
+                     SizedBox(height: AppSpacing.sm),
+                     Text(
                       '七人双角色 · 由真人主持人主持的魔女审判',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                          fontSize: 14, color: AppColors.textTertiary),
+                          fontSize: 14, color: context.palette.textTertiary),
                     ),
                     const SizedBox(height: AppSpacing.xxl),
                     const SectionTitle(
@@ -319,14 +324,14 @@ class _LoginPageState extends State<LoginPage>
                 builder: (_) => EndpointPage(store: widget.store),
               ),
             ),
-            icon: const Icon(Icons.dns_outlined),
+            icon:  Icon(Icons.dns_outlined),
           ),
         ],
         bottom: TabBar(
           controller: tabs,
-          indicatorColor: AppColors.accent,
-          labelColor: AppColors.accent,
-          unselectedLabelColor: AppColors.textTertiary,
+          indicatorColor: context.palette.accent,
+          labelColor: context.palette.accent,
+          unselectedLabelColor: context.palette.textTertiary,
           tabs: const [Tab(text: '玩家 / 观战'), Tab(text: '主持人')],
         ),
       ),
@@ -340,44 +345,44 @@ class _LoginPageState extends State<LoginPage>
                 constraints: const BoxConstraints(maxWidth: 460),
                 child: Column(
                   children: [
-                    const AppLogo(size: 88, rounded: true),
-                    const SizedBox(height: AppSpacing.xl),
+                     AppLogo(size: 88, rounded: true),
+                     SizedBox(height: AppSpacing.xl),
                     Text(
                       challenge == null ? '使用 QQ 群完成身份验证' : '请在指定 QQ 群发送',
-                      style: const TextStyle(
+                      style:  TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.text,
+                        color: context.palette.text,
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.md),
+                     SizedBox(height: AppSpacing.md),
                     if (challenge != null) ...[
                       Container(
-                        padding: const EdgeInsets.symmetric(
+                        padding:  EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 16,
                         ),
                         decoration: BoxDecoration(
-                          color: AppColors.accentSoft,
+                          color: context.palette.accentSoft,
                           borderRadius: BorderRadius.circular(AppRadius.card),
                         ),
                         child: Column(
                           children: [
-                            const Text(
+                             Text(
                               '活动登录',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: AppColors.textSecondary,
+                                color: context.palette.textSecondary,
                               ),
                             ),
-                            const SizedBox(height: AppSpacing.xs),
+                             SizedBox(height: AppSpacing.xs),
                             SelectableText(
                               code,
-                              style: const TextStyle(
+                              style:  TextStyle(
                                 fontSize: 34,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: 6,
-                                color: AppColors.accent,
+                                color: context.palette.accent,
                               ),
                             ),
                           ],
@@ -412,12 +417,12 @@ class _LoginPageState extends State<LoginPage>
                       ),
                     ),
                     if (widget.store.error != null) ...[
-                      const SizedBox(height: AppSpacing.md),
+                       SizedBox(height: AppSpacing.md),
                       Text(
                         widget.store.error!,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: AppColors.danger,
+                        style:  TextStyle(
+                          color: context.palette.danger,
                           fontSize: 13,
                         ),
                       ),
@@ -431,21 +436,21 @@ class _LoginPageState extends State<LoginPage>
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(AppSpacing.xl),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
+                constraints:  BoxConstraints(maxWidth: 420),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      padding:  EdgeInsets.all(AppSpacing.lg),
                       decoration: BoxDecoration(
-                        color: AppColors.hostSoft,
+                        color: context.palette.hostSoft,
                         borderRadius: BorderRadius.circular(AppRadius.card),
                       ),
-                      child: const Row(
+                      child:  Row(
                         children: [
                           Icon(
                             Icons.workspace_premium_outlined,
-                            color: AppColors.host,
+                            color: context.palette.host,
                           ),
                           SizedBox(width: AppSpacing.md),
                           Expanded(
@@ -453,7 +458,7 @@ class _LoginPageState extends State<LoginPage>
                               '主持人可以查看本局全部角色与私密信息，请勿共享登录会话。',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: AppColors.textSecondary,
+                                color: context.palette.textSecondary,
                                 height: 1.5,
                               ),
                             ),
@@ -477,11 +482,11 @@ class _LoginPageState extends State<LoginPage>
                       child: Text(hostBusy ? '登录中…' : '进入主持人工作台'),
                     ),
                     if (widget.store.error != null) ...[
-                      const SizedBox(height: AppSpacing.md),
+                       SizedBox(height: AppSpacing.md),
                       Text(
                         widget.store.error!,
-                        style: const TextStyle(
-                          color: AppColors.danger,
+                        style:  TextStyle(
+                          color: context.palette.danger,
                           fontSize: 13,
                         ),
                       ),
@@ -524,6 +529,66 @@ class LobbyPage extends StatefulWidget {
 
 class _LobbyPageState extends State<LobbyPage> {
   List<String>? codex;
+  Timer? _ticker;
+  bool _ticking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 大厅没有 WebSocket：定时刷新既是自己的在线心跳，也用来收邀请。
+    _ticker = Timer.periodic(const Duration(seconds: 5), (_) => _tick());
+    _tick();
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _tick() async {
+    final store = widget.store;
+    // 单次请求最长 25 秒：慢响应时跳过这一拍，避免轮询叠加。
+    if (!mounted || _ticking || store.writeBusy) return;
+    _ticking = true;
+    try {
+      await store.refreshLobby();
+      if (mounted) await store.loadOnline();
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  List<OnlineAccount> _others(GameStore store) => store.online
+      .where((account) => account.id != store.actor?.accountId)
+      .toList(growable: false);
+
+  Future<void> _accept(LobbyInvite invite) async {
+    try {
+      await widget.store.acceptInvite(invite.id);
+    } on ApiException catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(failure.message)));
+      }
+    } on FormatException catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(failure.message)));
+      }
+    }
+  }
+
+  Future<void> _reject(LobbyInvite invite) async {
+    try {
+      await widget.store.rejectInvite(invite.id);
+    } on ApiException catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(failure.message)));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -563,17 +628,17 @@ class _LobbyPageState extends State<LobbyPage> {
                     children: [
                       Text(
                         store.actor!.name,
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.text,
+                          color: context.palette.text,
                         ),
                       ),
                       Text(
                         store.actor!.isHost ? '主持人' : '已通过 QQ 登录',
-                        style: const TextStyle(
+                        style:  TextStyle(
                           fontSize: 13,
-                          color: AppColors.textTertiary,
+                          color: context.palette.textTertiary,
                         ),
                       ),
                     ],
@@ -581,6 +646,61 @@ class _LobbyPageState extends State<LobbyPage> {
                 ),
               ],
             ),
+            if (store.invites.isNotEmpty) ...[
+              const SectionTitle(
+                '收到的邀请',
+                subtitle: '接受后按服务器规则占席；主持人开放加入后才能入席。',
+              ),
+              for (final invite in store.invites)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${invite.fromName} 邀请你加入当前对局',
+                          style:  TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: context.palette.text,
+                          ),
+                        ),
+                         SizedBox(height: AppSpacing.sm),
+                        Text(
+                          '空席 ${invite.game?.seatsAvailable ?? 0} / 7'
+                          '${invite.game?.joinOpen == true ? '' : ' · 等待主持人开放加入'}',
+                          style:  TextStyle(
+                              fontSize: 13, color: context.palette.textTertiary),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: store.writeBusy ||
+                                        invite.game?.canJoinPlayer != true
+                                    ? null
+                                    : () => _accept(invite),
+                                child: const Text('接受邀请'),
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.md),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: store.writeBusy
+                                    ? null
+                                    : () => _reject(invite),
+                                child: const Text('拒绝'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
             if (game == null)
               Card(
                 child: Padding(
@@ -612,51 +732,51 @@ class _LobbyPageState extends State<LobbyPage> {
             else
               Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
+                  padding:  EdgeInsets.all(AppSpacing.lg),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          const Icon(
+                           Icon(
                             Icons.casino_outlined,
-                            color: AppColors.accent,
+                            color: context.palette.accent,
                           ),
-                          const SizedBox(width: AppSpacing.sm),
-                          const Text(
+                           SizedBox(width: AppSpacing.sm),
+                           Text(
                             '当前对局',
                             style: TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.text,
+                              color: context.palette.text,
                             ),
                           ),
-                          const Spacer(),
+                           Spacer(),
                           Tag(
                             game.joinOpen ? '已开放加入' : '未开放',
                             color: game.joinOpen
-                                ? AppColors.success
-                                : AppColors.textSecondary,
+                                ? context.palette.success
+                                : context.palette.textSecondary,
                             background: game.joinOpen
-                                ? AppColors.successSoft
-                                : AppColors.surfaceMuted,
+                                ? context.palette.successSoft
+                                : context.palette.surfaceMuted,
                           ),
                         ],
                       ),
-                      const SizedBox(height: AppSpacing.md),
+                       SizedBox(height: AppSpacing.md),
                       Row(
                         children: [
-                          const Icon(
+                           Icon(
                             Icons.event_seat_outlined,
                             size: 16,
-                            color: AppColors.textTertiary,
+                            color: context.palette.textTertiary,
                           ),
-                          const SizedBox(width: AppSpacing.xs),
+                           SizedBox(width: AppSpacing.xs),
                           Text(
                             '空席 ${game.seatsAvailable} / 7',
-                            style: const TextStyle(
+                            style:  TextStyle(
                               fontSize: 13,
-                              color: AppColors.textSecondary,
+                              color: context.palette.textSecondary,
                             ),
                           ),
                         ],
@@ -693,11 +813,37 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
                 ),
               ),
+            const SectionTitle('在线玩家', subtitle: '最近一分钟内有活动的已登录账号。'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_others(store).isEmpty)
+                       Padding(
+                        padding: EdgeInsets.all(AppSpacing.sm),
+                        child: Text(
+                          '当前没有其他人在线。',
+                          style: TextStyle(
+                              fontSize: 13, color: context.palette.textTertiary),
+                        ),
+                      ),
+                    for (final account in _others(store))
+                      ListTile(
+                        leading: const RoleAvatar(roleId: null, size: 40),
+                        title: Text(account.name),
+                        trailing:  Tag('在线', icon: Icons.wifi_tethering),
+                      ),
+                  ],
+                ),
+              ),
+            ),
             if (store.error != null) ...[
-              const SizedBox(height: AppSpacing.md),
+               SizedBox(height: AppSpacing.md),
               Text(
                 store.error!,
-                style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                style:  TextStyle(color: context.palette.danger, fontSize: 13),
               ),
             ],
           ],
@@ -725,9 +871,9 @@ class _LobbyPageState extends State<LobbyPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        icon: const Icon(
+        icon:  Icon(
           Icons.auto_stories_outlined,
-          color: AppColors.accent,
+          color: context.palette.accent,
         ),
         title: const Text('确认魔典并建局'),
         content: Column(
@@ -735,7 +881,7 @@ class _LobbyPageState extends State<LobbyPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('本局魔典（${chosen.length} 名）：'),
-            const SizedBox(height: AppSpacing.sm),
+             SizedBox(height: AppSpacing.sm),
             Wrap(
               spacing: AppSpacing.sm,
               runSpacing: AppSpacing.sm,
@@ -743,15 +889,15 @@ class _LobbyPageState extends State<LobbyPage> {
                 for (final id in chosen)
                   Tag(
                     roleVisual(id)?.name ?? id,
-                    color: AppColors.textSecondary,
-                    background: AppColors.surfaceMuted,
+                    color: context.palette.textSecondary,
+                    background: context.palette.surfaceMuted,
                   ),
               ],
             ),
-            const SizedBox(height: AppSpacing.md),
-            const Text(
+             SizedBox(height: AppSpacing.md),
+             Text(
               '建立七席空局。建局后请点击「开放加入」，玩家才能主动入席。',
-              style: TextStyle(fontSize: 13, color: AppColors.textTertiary),
+              style: TextStyle(fontSize: 13, color: context.palette.textTertiary),
             ),
           ],
         ),

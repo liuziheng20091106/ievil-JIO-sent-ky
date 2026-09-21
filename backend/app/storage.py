@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -84,7 +84,21 @@ def initialize():
                     ),
                 )
         db.execute("DROP TABLE IF EXISTS sessions")
-        db.execute("DROP TABLE IF EXISTS invites")
+        # 旧的 invites 是已删除的邀请码模型，形状不同；只有旧形状才重建。
+        invite_columns = {row["name"] for row in db.execute("PRAGMA table_info(invites)")}
+        if invite_columns and "account_id" not in invite_columns:
+            db.execute("DROP TABLE IF EXISTS invites")
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS invites (
+            id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id),
+            account_id TEXT NOT NULL, inviter_id TEXT NOT NULL,
+            inviter_name TEXT NOT NULL, status TEXT NOT NULL,
+            created_at TEXT NOT NULL, responded_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS invite_pending
+            ON invites(game_id,account_id) WHERE status='pending';
+        CREATE INDEX IF NOT EXISTS invite_account ON invites(account_id,status);
+        """)
 
 
 @contextmanager
@@ -137,8 +151,28 @@ def save_game(db, game):
 
 def purge(db):
     """Clear game data without touching global accounts or login tokens."""
-    for table in ("messages", "evidence", "channels", "participants", "games"):
+    for table in ("messages", "evidence", "channels", "participants", "invites", "games"):
         db.execute(f"DELETE FROM {table}")
+
+
+INVITE_MINUTES = 10
+
+
+def invite_cutoff():
+    """待处理邀请的有效下界；过期不写库，读取时按时间过滤。"""
+    return (datetime.now(timezone.utc) - timedelta(minutes=INVITE_MINUTES)).isoformat()
+
+
+def pending_invites(db, account_id):
+    """该账号的待处理邀请，附带对局状态；对局已结束的邀请直接作废。"""
+    return list(
+        db.execute(
+            """SELECT i.* FROM invites i JOIN games g ON g.id=i.game_id
+               WHERE i.account_id=? AND i.status='pending' AND i.created_at>=?
+                 AND g.status!='ended' ORDER BY i.created_at""",
+            (account_id, invite_cutoff()),
+        )
+    )
 
 def add_message(
     db,

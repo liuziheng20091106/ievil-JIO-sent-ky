@@ -53,6 +53,29 @@ class GameApi {
         ),
       );
 
+  /// 在线账号名单；带 gameId 时服务端额外给出能否邀请与是否已邀请。
+  Future<Map<String, dynamic>> online({String? gameId}) async => jsonObject(
+        await _request('GET', '/api/online', query: {'game_id': gameId}),
+      );
+
+  Future<Map<String, dynamic>> invite(String gameId, String accountId) async =>
+      jsonObject(
+        await _request(
+          'POST',
+          '/api/games/${Uri.encodeComponent(gameId)}/invites',
+          body: {'account_id': accountId},
+        ),
+      );
+
+  Future<Map<String, dynamic>> acceptInvite(String inviteId) async => jsonObject(
+        await _request(
+            'POST', '/api/invites/${Uri.encodeComponent(inviteId)}/accept'),
+      );
+
+  Future<void> rejectInvite(String inviteId) async {
+    await _request('POST', '/api/invites/${Uri.encodeComponent(inviteId)}/reject');
+  }
+
   Future<GameView> state(String gameId) async => GameView.fromJson(
         await _request(
             'GET', '/api/games/${Uri.encodeComponent(gameId)}/state'),

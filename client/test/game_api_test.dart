@@ -44,19 +44,23 @@ void main() {
   late HttpServer server;
   late ServerEndpoint endpoint;
   final requests = <HttpHeaders>[];
+  final calls = <String>[];
+  final bodies = <String>[];
   var status = 200;
   var body = stateJson();
 
   setUp(() async {
     requests.clear();
+    calls.clear();
+    bodies.clear();
     status = 200;
     body = stateJson();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       requests.add(request.headers);
+      calls.add('${request.method} ${request.uri}');
       if (request.method == 'POST') {
-        // 读空请求体，避免客户端等待写入完成。
-        await request.drain<void>();
+        bodies.add(await utf8.decoder.bind(request).join());
       }
       request.response.statusCode = status;
       request.response.headers.contentType = ContentType.json;
@@ -108,6 +112,46 @@ void main() {
     body = stateJson()..['ui_version'] = 2;
     final api = GameApi(endpoint);
     await expectLater(api.state('game-1'), throwsA(isA<FormatException>()));
+    api.close();
+  });
+
+  test('online/invite/accept/reject hit the invite endpoints', () async {
+    body = {
+      'accounts': [
+        {'id': 'a1', 'name': '阿雪', 'available': true, 'invited': false}
+      ],
+      'host_online': true,
+    };
+    final api = GameApi(endpoint, token: 'token-abc');
+    await api.online(gameId: 'g1');
+    expect(calls.single, 'GET /api/online?game_id=g1');
+
+    body = {'id': 'invite1', 'account_id': 'a1', 'status': 'pending'};
+    await api.invite('g1', 'a1');
+    expect(calls.last, 'POST /api/games/g1/invites');
+    expect(jsonDecode(bodies.last), {'account_id': 'a1'});
+
+    body = {'actor': stateJson()['self'], 'game_id': 'g1'};
+    await api.acceptInvite('invite1');
+    expect(calls.last, 'POST /api/invites/invite1/accept');
+
+    await api.rejectInvite('invite2');
+    expect(calls.last, 'POST /api/invites/invite2/reject');
+    api.close();
+  });
+
+  test('invite conflict surfaces the server detail message', () async {
+    status = 409;
+    body = {'detail': '该玩家当前不在线'};
+    final api = GameApi(endpoint, token: 'token-abc');
+    await expectLater(
+      api.invite('g1', 'a1'),
+      throwsA(
+        isA<ApiException>()
+            .having((error) => error.statusCode, 'statusCode', 409)
+            .having((error) => error.message, 'message', '该玩家当前不在线'),
+      ),
+    );
     api.close();
   });
 
