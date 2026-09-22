@@ -2,7 +2,7 @@
 
 import unittest
 
-from gateway.gateway import QQGateway, clean_members, parse_group_ids
+from gateway.gateway import LOGIN_HINT, QQGateway, clean_members, error_detail, parse_group_ids
 
 
 class GroupIds(unittest.TestCase):
@@ -47,6 +47,33 @@ class MemberMerge(unittest.TestCase):
         self.assertEqual(len(members[1]["nickname"]), 64)
 
 
+class ErrorDetail(unittest.TestCase):
+    class Response:
+        def __init__(self, status_code, payload, raises=False):
+            self.status_code = status_code
+            self.payload = payload
+            self.raises = raises
+
+        def json(self):
+            if self.raises:
+                raise ValueError("not json")
+            return self.payload
+
+    def test_uses_backend_detail(self):
+        response = self.Response(409, {"detail": "登录码无效、过期或已经使用"})
+        self.assertEqual(error_detail(response), "登录码无效、过期或已经使用")
+
+    def test_falls_back_when_body_is_not_a_string_detail(self):
+        """Pydantic 校验错误是列表；取不到文案时退回状态码，别把整坨 JSON 发进群。"""
+        self.assertEqual(
+            error_detail(self.Response(422, {"detail": [{"loc": ["body"], "msg": "bad"}]})),
+            "服务端返回 HTTP 422",
+        )
+        self.assertEqual(
+            error_detail(self.Response(502, None, raises=True)), "服务端返回 HTTP 502"
+        )
+
+
 class StubConnection:
     def __init__(self):
         self.actions = []
@@ -77,10 +104,11 @@ class EventRouting(unittest.IsolatedAsyncioTestCase):
             group_ids=(1105925736, 775621176),
         )
         self.bound = []
+        self.reason = None
 
         async def bind_login(**kwargs):
             self.bound.append(kwargs)
-            return True
+            return self.reason
 
         self.gateway.bind_login = bind_login
 
@@ -93,6 +121,36 @@ class EventRouting(unittest.IsolatedAsyncioTestCase):
             [("send_group_msg", {"group_id": 775621176, "message": "玩家，登录成功~"})],
         )
 
+    async def test_failure_reason_is_sent_back_to_source_group(self):
+        """登录码无效/过期时群成员必须看到原因，而不是静默无反应。"""
+        self.reason = "登录码无效、过期或已经使用"
+        connection = StubConnection()
+        await self.gateway.handle_event(connection, group_message(775621176))
+        self.assertEqual(
+            connection.actions,
+            [
+                (
+                    "send_group_msg",
+                    {
+                        "group_id": 775621176,
+                        "message": "玩家，登录失败：登录码无效、过期或已经使用",
+                    },
+                )
+            ],
+        )
+
+    async def test_backend_failure_still_replies_in_group(self):
+        async def boom(**kwargs):
+            raise OSError("connection refused")
+
+        self.gateway.bind_login = boom
+        connection = StubConnection()
+        await self.gateway.handle_event(connection, group_message(1105925736))
+        self.assertEqual(
+            connection.actions,
+            [("send_group_msg", {"group_id": 1105925736, "message": "玩家，登录失败：服务端暂时不可用"})],
+        )
+
     async def test_unlisted_group_is_ignored(self):
         connection = StubConnection()
         await self.gateway.handle_event(connection, group_message(867118030))
@@ -101,9 +159,19 @@ class EventRouting(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_login_text_is_ignored(self):
         connection = StubConnection()
-        await self.gateway.handle_event(connection, group_message(1105925736, "活动登录 12345"))
+        await self.gateway.handle_event(connection, group_message(1105925736, "今天天气不错"))
         self.assertEqual(self.bound, [])
         self.assertEqual(connection.actions, [])
+
+    async def test_malformed_login_attempt_gets_a_format_hint(self):
+        """位数不对、没抄全的登录尝试也要有回音，别让玩家干等。"""
+        connection = StubConnection()
+        await self.gateway.handle_event(connection, group_message(1105925736, "活动登录 12345"))
+        self.assertEqual(self.bound, [])
+        self.assertEqual(
+            connection.actions,
+            [("send_group_msg", {"group_id": 1105925736, "message": LOGIN_HINT})],
+        )
 
 
 if __name__ == "__main__":

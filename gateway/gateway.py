@@ -16,6 +16,9 @@ from websockets.exceptions import ConnectionClosed
 
 LOG = logging.getLogger("seven-double-gateway")
 LOGIN_PATTERN = re.compile(r"^\s*活动登录\s+(\d{6})\s*$")
+# 看起来在登录但码不对（位数错、抄漏前缀等）：不静默吞掉，回一句格式提示。
+ATTEMPT_PATTERN = re.compile(r"^\s*活动登录")
+LOGIN_HINT = "登录码应为 6 位数字，请照抄客户端显示的整句「活动登录 123456」"
 # 服务端 QQMemberSync.members 上限 5000；多群合并后可能超过，分批发。
 SYNC_BATCH = 4000
 
@@ -42,6 +45,18 @@ def clean_members(raw_members) -> list[dict]:
             "avatar_url": avatar_url(qq_id),
         }
     return list(merged.values())
+
+
+def error_detail(response) -> str:
+    """取后端 HTTPException 的 detail 作为回群文案；形状异常（无 JSON / Pydantic 校验列表）回退成状态码。"""
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    detail = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    return f"服务端返回 HTTP {response.status_code}"
 
 
 def parse_group_ids(value: str) -> tuple[int, ...]:
@@ -169,7 +184,8 @@ class QQGateway:
         except Exception as exc:
             LOG.warning("member sync skipped: %s", exc)
 
-    async def bind_login(self, *, code: str, qq_id: str, nickname: str, group_id: int) -> bool:
+    async def bind_login(self, *, code: str, qq_id: str, nickname: str, group_id: int) -> str | None:
+        """成功返回 None；失败返回一句可直接发回群里的原因。"""
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
                 f"{self.backend_url}/api/internal/qq/login",
@@ -183,9 +199,10 @@ class QQGateway:
                 },
             )
         if response.status_code == 200:
-            return True
-        LOG.info("login code %s from group %s rejected (%s)", code, group_id, response.text[:180])
-        return False
+            return None
+        detail = error_detail(response)
+        LOG.info("login code %s from group %s rejected (%s)", code, group_id, detail)
+        return detail
 
     async def acknowledge(self, connection: OneBotConnection, group_id: int, message: str) -> None:
         try:
@@ -203,15 +220,28 @@ class QQGateway:
             return
         match = LOGIN_PATTERN.match(str(event.get("raw_message") or ""))
         if not match:
+            # 明显的登录尝试但格式不对：同样回一句，避免玩家以为机器人没收到。
+            if ATTEMPT_PATTERN.match(str(event.get("raw_message") or "")):
+                await self.acknowledge(connection, group_id, LOGIN_HINT)
             return
         sender = event.get("sender") or {}
         qq_id = str(event.get("user_id") or sender.get("user_id") or "").strip()
         nickname = str(sender.get("card") or sender.get("nickname") or qq_id).strip()
-        if qq_id and await self.bind_login(
-            code=match.group(1), qq_id=qq_id, nickname=nickname, group_id=group_id
-        ):
-            # 回执必须发回玩家实际发言的群，否则多群时提示会落在别的群。
+        if not qq_id:
+            return
+        # 回执必须发回玩家实际发言的群，否则多群时提示会落在别的群。
+        try:
+            reason = await self.bind_login(
+                code=match.group(1), qq_id=qq_id, nickname=nickname, group_id=group_id
+            )
+        except Exception as exc:
+            # 后端不可达时也要给群里的玩家一个说法，不静默吞掉。
+            LOG.warning("login bind failed for %s in group %s: %s", qq_id, group_id, exc)
+            reason = "服务端暂时不可用"
+        if reason is None:
             await self.acknowledge(connection, group_id, f"{nickname}，登录成功~")
+        else:
+            await self.acknowledge(connection, group_id, f"{nickname}，登录失败：{reason}")
 
     async def run(self) -> None:
         delay = 2.0

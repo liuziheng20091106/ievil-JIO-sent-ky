@@ -34,6 +34,10 @@ start.cmd
 
 QQ 登录依赖 NapCat 的 OneBot WebSocket 实现，网关把群消息里的六位登录码绑定到账号：
 
+成功回一句「某某，登录成功~」；失败也在同一个群里回原因（如「某某，登录失败：登录码无效、过期或已经使用」），
+后端连不上时回「服务端暂时不可用」，「活动登录」后跟的不是 6 位数字则回格式提示。回复始终发回玩家发言的群；
+其他群消息不回应。看网关日志时 `login code ... rejected` 就是被拒的那一次。
+
 ```cmd
 copy gateway\.env.example gateway\.env
 run-gateway.cmd
