@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'keepalive.dart';
 import 'models.dart';
 
 /// Windows 下 shared_preferences 与 flutter_secure_storage 的存放目录都取自
@@ -84,6 +85,10 @@ class GameStore extends ChangeNotifier {
   List<GameMessage> messages = [];
   Map<String, dynamic>? challengeInfo;
   String? pendingPhaseKey;
+
+  /// 下层牌刚登场（下层登场、复活、换牌）时待展示的角色 id；
+  /// 由 GameShell 弹一次角色卡介绍后清空。
+  String? pendingRoleId;
   int newActionCount = 0;
   int warningCount = 0;
   int privateStateCount = 0;
@@ -92,6 +97,8 @@ class GameStore extends ChangeNotifier {
   Set<String>? _actionBaseline;
   String? _privateStateBaseline;
   String? _loadedPhaseKey;
+  String? _ownCardBaseline;
+  Set<String>? _inviteBaseline;
   int _challengeGeneration = 0;
 
   /// 仅供测试与界面预览：直接注入已经准备好的状态，不触发网络与本地存储。
@@ -422,6 +429,7 @@ class GameStore extends ChangeNotifier {
       invites = jsonArray(result['invites'] ?? const <dynamic>[], 'lobby.invites')
           .map(LobbyInvite.fromJson)
           .toList(growable: false);
+      _announceNewInvites();
       final participation = result['participation'];
       if (participation != null) {
         actor = Actor.fromJson(participation);
@@ -443,6 +451,14 @@ class GameStore extends ChangeNotifier {
     }
     notifyListeners();
     if (gameId != null && view == null) await enterGame(gameId!);
+  }
+
+  /// 新到的邀请发一次系统通知（仅 Android 生效，其他平台是空操作）。
+  void _announceNewInvites() {
+    for (final invite in freshInvites(_inviteBaseline, invites)) {
+      KeepAlive.notifyInvite(invite.fromName);
+    }
+    _inviteBaseline = invites.map((invite) => invite.id).toSet();
   }
 
   /// 建局必须由主持人先确认 11 名魔典角色。
@@ -618,6 +634,9 @@ class GameStore extends ChangeNotifier {
     _actionBaseline = null;
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
+    pendingRoleId = null;
+    _ownCardBaseline = null;
+    _inviteBaseline = null;
     error = null;
     await preferences.remove(_gameKey);
     // 本地已明确离开：接下来的会话/大厅刷新都不得用服务器的当前局
@@ -745,6 +764,28 @@ class GameStore extends ChangeNotifier {
       _privateStateBaseline = privateKey;
     } else if (_privateStateBaseline != privateKey) {
       privateStateCount = 1;
+    }
+
+    // 自己当前的下层牌换人（下层登场、复活、换牌）就弹一次角色卡介绍。
+    // 三条边界：调序阶段的上下交换也会改 current_card_id，但那时还没开局，
+    // 每换一次弹一个窗口只是噪音；发牌是「没有当前牌」到「有当前牌」，也不是登场；
+    // 基线的第一次观察同样不弹，否则恢复对局 = 重播一次介绍。
+    final ownCardId = next.self['current_card_id']?.toString();
+    final previousCardId = _ownCardBaseline;
+    _ownCardBaseline = ownCardId;
+    if (next.status == 'playing' &&
+        ownCardId != null &&
+        previousCardId != null &&
+        previousCardId != ownCardId) {
+      final cards = next.self['cards'];
+      if (cards is List) {
+        for (final card in cards) {
+          if (card is Map && card['id']?.toString() == ownCardId) {
+            pendingRoleId = card['role_id']?.toString();
+            break;
+          }
+        }
+      }
     }
 
     final phaseKey = '${next.id}:${next.day}:${next.half}:${next.phase}';
@@ -1178,6 +1219,9 @@ class GameStore extends ChangeNotifier {
     _actionBaseline = null;
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
+    pendingRoleId = null;
+    _ownCardBaseline = null;
+    _inviteBaseline = null;
     // 登出后 1.45 秒内重登不该凭空重播旧对局的阶段动画，
     // 角标计数也不该带着旧对局的残留进入新会话。
     pendingPhaseKey = null;
@@ -1200,4 +1244,18 @@ class GameStore extends ChangeNotifier {
     api?.close();
     super.dispose();
   }
+}
+
+/// 这次刷新相对上次基线新到的邀请。
+/// 基线为 null（本次会话第一次刷新）时不提醒：登录后大厅里已经堆着的
+/// 旧邀请不该在启动瞬间连着弹一串系统通知。
+List<LobbyInvite> freshInvites(
+  Set<String>? baseline,
+  List<LobbyInvite> current,
+) {
+  if (baseline == null) return const <LobbyInvite>[];
+  return [
+    for (final invite in current)
+      if (!baseline.contains(invite.id)) invite,
+  ];
 }

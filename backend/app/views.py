@@ -197,6 +197,11 @@ def runtime_actions(game, participants):
             payload={"open": not game.get("join_open", False)},
             group="房间管理",
             short_label="关闭加入" if game.get("join_open") else "开放加入",
+            description=(
+                "关闭后除了你定向邀请的账号，其他账号不能再主动参局。"
+                if game.get("join_open")
+                else "开放后在线账号可以在大厅直接加入本局；席位随机分配。"
+            ),
         ),
         action(
             "room.kick",

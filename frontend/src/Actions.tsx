@@ -179,6 +179,7 @@ export function ActionPanel({
               <button
                 className={`action-tile ${action.danger ? "danger-action" : ""}`}
                 key={`${action.id}:${index}`}
+                title={action.description || action.label}
                 onClick={() => select(action)}
               >
                 <span>{action.short_label}</span>

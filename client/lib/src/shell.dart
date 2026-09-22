@@ -42,6 +42,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     lastActions = widget.store.newActionCount;
     lastWarnings = widget.store.warningCount;
     widget.store.addListener(onStoreChanged);
+    if (widget.store.pendingRoleId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => onStoreChanged());
+    }
   }
 
   @override
@@ -66,6 +69,13 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         lifecycle == AppLifecycleState.resumed &&
         Platform.isAndroid) {
       HapticFeedback.heavyImpact();
+    }
+    final enteredRole = store.pendingRoleId;
+    if (enteredRole != null) {
+      store.pendingRoleId = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) showRoleIntro(context, store, enteredRole);
+      });
     }
     if (mounted) setState(() {});
   }

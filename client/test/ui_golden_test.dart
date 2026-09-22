@@ -753,4 +753,31 @@ void main() {
       matchesGoldenFile('goldens/role_detail.png'),
     );
   });
+
+  testWidgets('下层牌登场介绍渲染', (tester) async {
+    final store = await previewStore(host: false);
+    await pumpAt(tester, store, const Size(520, 900));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: Center(
+            child: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showRoleIntro(context, store, 'millia'),
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('goldens/role_intro.png'),
+    );
+  });
 }

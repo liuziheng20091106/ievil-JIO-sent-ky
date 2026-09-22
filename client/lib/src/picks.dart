@@ -380,7 +380,12 @@ Future<ActionDescriptor?> showActionPicker(
                                   ),
                                    SizedBox(height: 2),
                                   Text(
-                                    unsupported ?? action.label,
+                                    unsupported ??
+                                        (action.description.isEmpty
+                                            ? action.label
+                                            : action.description),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: unsupported != null

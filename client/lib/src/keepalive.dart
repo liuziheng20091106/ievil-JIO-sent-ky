@@ -34,4 +34,20 @@ class KeepAlive {
       // 非 Android 构建没有该插件。
     }
   }
+
+  /// 收到新对局邀请时发系统通知：应用可能正被切到后台，只在界面上弹横幅会漏掉。
+  /// 通知权限在启动时已申请；用户拒绝时 notify 静默失败，不做额外处理。
+  static Future<void> notifyInvite(String from) async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod<void>('notifyInvite', {
+        'title': '收到对局邀请',
+        'body': '$from 邀请你加入对局',
+      });
+    } on PlatformException {
+      // 通知被系统关闭。
+    } on MissingPluginException {
+      // 非 Android 构建没有该插件。
+    }
+  }
 }

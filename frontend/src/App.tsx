@@ -54,6 +54,23 @@ export function App() {
     };
   }, []);
   const role = catalog.roles.find((item) => item.id === roleId);
+  // 角色登场时自动弹出角色卡介绍：下层登场、复活、换牌都会改变 current_card_id。
+  // 调序阶段的上下交换同样会改它，但那时还没开局，逐次弹窗只是噪音；
+  // 首次观察（含刷新、重连）只记基线，不弹窗，否则每次恢复对局都会刷一个窗口。
+  const currentCardId = state?.self.current_card_id ?? null;
+  const seenCardId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!state) {
+      seenCardId.current = undefined;
+      return;
+    }
+    const previous = seenCardId.current;
+    seenCardId.current = currentCardId;
+    if (state.status !== "playing") return;
+    if (!currentCardId || previous === undefined || previous === currentCardId) return;
+    const entered = state.self.cards.find((card) => card.id === currentCardId);
+    if (entered) setRoleId(entered.role_id);
+  }, [currentCardId, state]);
   const exit = async () => {
     setLogoutBusy(true);
     try {

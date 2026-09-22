@@ -14,6 +14,7 @@ from .state import (
     player_seat,
     present,
     role_card,
+    seat,
     snapshot_for,
 )
 
@@ -67,6 +68,110 @@ SHORT_LABELS = {
     "player.surrender": "申请交牌",
 }
 
+# 每个行动的一句话说明：两个客户端都已有渲染位（网页表单标题下、Flutter 行动表单与长按预览），
+# 这里补齐内容，玩家点开行动时先看到「这一步在做什么、按哪条规则结算」。
+# 同一 id 在不同场景需要不同措辞的，在调用处用 description= 覆盖。
+DESCRIPTIONS = {
+    "host.start": "全员两次准备后开局：锁定上下牌，进入当日魔女化检测。",
+    "host.codex": "重新指定11名魔典角色并随机顺序；只改本局魔典，不影响已发出的牌。",
+    "host.advance": "当前阶段没有待办时推进到下一阶段；有待裁定事项会先被拒绝。",
+    "host.auto": "暂停后本阶段只由主持人手动推进；恢复后无人待办时5秒自动进入下一阶段。",
+    "host.warn": "对当前卡住的席位启动30秒倒计时，到期按未操作处理；掉线不会自动放弃行动。",
+    "host.water": "把本局唯一的13水私下交给一个席位；使用时机与互动仍由主持人裁定。",
+    "host.damage": "裁定伤害或直接出局：死亡应用庇护，无条件出局忽略庇护；夜间提交的伤害并入本夜预结算。",
+    "host.state": "直接增删角色牌状态（魔女化、中毒、庇护、负伤、投票权、傀儡、生死）；不勾选公开时只通知该席位。",
+    "host.information": "向全员或指定席位发放信息与照片；不公开时只有选中的席位能看到。",
+    "host.madness": "对某个席位的疯狂行为发起裁定，随后由主持人选择警告、符合要求或执行不利裁定。",
+    "host.codex_order": "手动指定11名角色的最终顺序，用于特殊裁定。",
+    "host.rewind": "回溯到指定快照时间点，并额外保留精神系状态；只处理非同一天同一时点的特殊裁定。",
+    "host.confirm_winner": "本半天全部同时出局与连锁都处理完后确认宣判，按已达成的条件结束对局。",
+    "host.surrender": "审阅交牌：好人交牌需全员分别私信同意，魔女交牌仅在只剩可可且本人申请时成立。",
+    "host.end": "主持人终止对局或做特殊胜负裁定；提交后本局立即结束。",
+    "host.speech": "只在顺序发言阶段可用：改起点或方向会重排本轮顺序。",
+    "hiro.rewind": "希罗回溯到前一天同一时点并重算之后的结算；其他时间点由主持人裁定。",
+    "hiro.decline": "不发动回溯，按当前预结算继续。",
+    "lobby.order": "发牌后选择哪张牌作为上层；艾玛、米莉亚、亚里沙必须放在下层。",
+    "lobby.ready": "确认准备；全员再次准备后由主持人开局。",
+    "player.profile": "设置本局的公开称呼，其他玩家和主持人都能看到。",
+    "night.clear": "清除本席位尚未确认的夜间选择；已确认的行动要改需主持人裁定。",
+    "night.confirm": "确认本席夜间选择；未确认的选择不计入结算，未选视为放弃。",
+    "day.challenge": "质疑他人的白天技能声明；质疑失败本局个人判负。",
+    "honoka.disguise": "穗乃香选择一个示人角色：只改别人看到的角色名，不获得该角色的技能。",
+    "honoka.witness": "选择本次目击名单里显示的角色；这是穗乃香的魔女化技能。",
+    "hiro.exit": "希罗主动出局：夜间提交时并入本夜预结算，白天则立即结算。",
+    "speech.done": "结束本次发言推进顺序；还没轮到你时是「本轮不发言」，轮到时自动略过。",
+    "speech.speak": "提前写下发言内容，轮到你时由系统以本人身份公开，并自动略过你的顺序。",
+    "vote.nominate": "提名一名候选人，提交即生效；提名过同一候选的玩家之后自动投同意票。",
+    "vote.pass": "放弃本次提名；提名在白天随时可以提交。",
+    "execution.shoot": "临刑开枪：命中则目标按标准结算出局，未命中则下次命中率提高1/6。",
+    "execution.confirm": "放弃临刑行动并确认，进入处决结算。",
+    "balloon.choose": "秘密提交热气球选择（制作/不制作，魔女与安安可破坏）；选择内容不公开。",
+    "balloon.agree": "同意这份热气球名单；同意人数超过存活玩家一半即自动组织。",
+    "balloon.decline": "不同意这份名单；同意人数不可能过半时提议作废。",
+    "balloon.propose": "亚里沙不在场时由玩家提议名单（至多5人），超过半数存活玩家同意即自动组织。",
+    "photo.permission": "可可赠送的信物：设置是否允许她查看你的夜间行动。",
+    "water.use": "用唯一13水指定目标；互动与时机由主持人裁定。",
+    "meruru.revive": "魔女化梅露露复活当天由自己击杀的牌；复活者是无投票权、无技能的傀儡。",
+    "evidence.submit": "提交夜间遗留证物；公开范围由主持人裁定。",
+    "player.surrender": "私信主持人申请本阵营交牌；未满足集体条件前继续游戏。",
+    # 私信与房间管理（id 只在 app/views.py 里使用，短名同样是显式给的）。
+    "channel.create": "创建私信频道；被邀请者同意后频道生效，期间成员只能在该频道发言。",
+    "channel.accept": "同意加入该私信；全部成员同意后频道转为生效。",
+    "channel.reject": "拒绝加入，本次私信邀请作废。",
+    "channel.end": "结束整个私信频道；已结束的频道只能查看历史，不能再发言。",
+    "room.open_join": "控制账号能否主动参局；关闭后仍可由你定向邀请。",
+    "room.kick": "把参与者移出本局，可选择同时在本局拉黑。",
+    "room.replace": "由观战者接管空席；接管保留该席角色牌、技能次数与裁定状态，不重抽角色。",
+    "room.mute": "设置或解除参与者禁言；禁言只影响发言，不影响规则判定。",
+}
+
+# 主持人待办的说明：标题已经写明是哪件事，这里补上「裁定后按什么结算」。
+PENDING_DESCRIPTIONS = {
+    "information": "这段裁定信息会按标题指定的范围发给当事人。",
+    "hiro": "希罗选择回溯时间点；不是前一天同一时点的回溯需要在说明里写清裁定理由。",
+    "suspects": "为夜间死者填写四名疑似凶手（真凶与汉娜优先），用于当日目击名单。",
+    "lower_entry": "裁定下层角色本阶段是否立即可行动；同半天仍最多出局一牌。",
+    "water": "13水互动裁定：毒杀仍应用庇护，无条件出局忽略庇护。",
+    "evidence": "裁定证物内容与公开范围；不公开时只发给指定席位。",
+    "codex": "魔典未按时结算时选择跳过或指定特殊转化对象。",
+    "madness": "疯狂行为裁定：警告、符合要求，或判定不够疯狂并执行不利裁定。",
+    "reaction": "确认按夜间预结算执行；有特殊互动请先退出并纠错。",
+}
+
+# 同一个 night.submit 按钮会因为角色与魔女化状态对应不同技能，说明按技能而不是按 id 给。
+NIGHT_ABILITY_DESCRIPTIONS = {
+    "knife": "魔女刀：指定一名当前牌为目标，按当夜预结算统一生效。",
+    "massacre": "全场攻击：杀死所有其他角色，与当夜其他伤害一同预结算。",
+    "extra_kill": "额外攻击：本局一次，可再杀死一名角色，之后失去该技能。",
+    "protect": "庇护一张当前牌：该牌当夜死亡改为负伤；再次受到普通伤害则出局。",
+    "rain": "下雨：本局一次，此后夜间死者会公开凶手座位号的方向线索。",
+    "scapegoat": "替罪凶手：本局一次，指定之后自己造成死亡时对外显示的凶手。",
+    "swap": "换血：必须选择一名玩家；其即将死亡时由你代替其死亡。",
+    "treasure": "寻宝：提交即清空本席其他夜间选择并锁定全夜，1/5概率触发地雷。",
+    "witch_scan": "查看全员当前魔女化状态，结果只发给你。",
+    "arisa_injure": "令环形左右邻座各以1/2概率负伤；该效果不会把已有负伤升级为死亡。",
+}
+
+# 白天技能：真实与伪装走同一条描述，伪装的说明另外点出「可被质疑」。
+DAY_ABILITY_DESCRIPTIONS = {
+    "interrupt": "立即打断指定席位的发言，每个白天一次；艾玛在下层也可使用。",
+    "brainwash": "秘密洗脑一人，该人本轮投票自动弃票；与玛格同时洗脑会互相抵消。",
+    "mass_brainwash": "洗脑全场处决一名角色；使用后失去该技能，并在下一天失去投票权且必须被处刑。",
+    "love": "宣布爱上一人或移情；此后每夜令爱人席当前牌负伤一次。",
+    "gaze": "查看本日处决名单是否含魔女，结果只发给你。",
+    "spear": "长矛令一张当前牌立即进入标准出局预结算，你同时加入本日处决名单。",
+    "photo": "赠送无图像信物；受赠者可授权你查看其夜间行动。",
+    "balloon": "组织热气球：由你直接定下参加名单（至多5人，可含自己）。",
+}
+
+
+# 提名说明要写清「提交即生效、计票去重」，两个分支（阶段内/提前）措辞相同。
+NOMINATE_DESCRIPTION = (
+    "提交即生效，无需二次确认；同一人可被多人提名，进入投票后计票去重，"
+    "每个候选人只投一轮，提名过该候选的玩家自动投同意票。"
+    "寻宝保护者在保护当天不能被提名。"
+)
+
 
 def field(name, label, kind="text", options=None, required=True, **extra):
     item = {"name": name, "label": label, "type": kind, "required": required, **extra}
@@ -79,6 +184,7 @@ def action(action_id, label, fields=(), payload=None, group="行动", short_labe
     short = short_label or SHORT_LABELS[action_id]
     if not 2 <= len(short) <= 4:
         raise ValueError(f"行动短名必须为2至4字：{action_id}")
+    extra.setdefault("description", DESCRIPTIONS.get(action_id, ""))
     return {
         "ui_version": 1,
         "id": action_id,
@@ -446,6 +552,7 @@ def pending_action(game, item):
         {"pending_id": item["id"]},
         "裁决待办",
         blocking=True,
+        description=PENDING_DESCRIPTIONS.get(kind, ""),
     )
 
 
@@ -836,6 +943,7 @@ def actions_for(game, actor):
                         {"ability": ability},
                         "夜间",
                         danger=ability == "treasure",
+                        description=NIGHT_ABILITY_DESCRIPTIONS.get(ability, ""),
                     )
                 )
             if submitted:
@@ -885,6 +993,12 @@ def actions_for(game, actor):
                     payload,
                     "私密伪装选择" if fake else "白天技能",
                     danger=ability == "spear",
+                    description=DAY_ABILITY_DESCRIPTIONS.get(ability, "")
+                    + (
+                        "这是伪装声明：不产生技能效果，技能条目已公开，其他人可质疑。"
+                        if fake
+                        else ""
+                    ),
                 )
             )
     witness = next(
@@ -933,18 +1047,16 @@ def actions_for(game, actor):
                     )
                 )
     if phase == "speech" and game["public"]["speaker"] == sid:
-        result.append(action("speech.done", "结束本次发言", group="流程", blocking=True))
+        result.append(
+            action("speech.done", "结束本次发言", group="流程", blocking=True)
+        )
     elif (
         phase == "speech"
         and sid in game["public"]["speech_order"]
         and sid not in game.get("speech_passed", [])
     ):
         result.append(
-            action(
-                "speech.done",
-                "本轮不发言（跳过我的顺序）",
-                group="流程",
-            )
+            action("speech.done", "本轮不发言（跳过我的顺序）", group="流程")
         )
     if (
         phase == "speech"
@@ -972,6 +1084,7 @@ def actions_for(game, actor):
                 [field("target", "目标", "select", nomination_options)],
                 group="投票",
                 blocking=True,
+                description=NOMINATE_DESCRIPTION,
             )
         )
         result.append(action("vote.pass", "放弃本次提名", group="投票", blocking=True))
@@ -982,14 +1095,19 @@ def actions_for(game, actor):
                 "提名候选（可提前）",
                 [field("target", "目标", "select", nomination_options)],
                 group="投票",
+                description=NOMINATE_DESCRIPTION,
             )
         )
         result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票"))
     if phase == "voting" and s in eligible_voters(game) and sid not in game["votes"]:
+        votes = game["public"]["votes"]
+        candidate = votes.get("candidate")
+        name = seat(game, candidate)["name"] if candidate else ""
+        voters = len(eligible_voters(game))
         result.append(
             action(
                 "vote.cast",
-                "提交本候选选票",
+                f"对{candidate}号 · {name}投票" if candidate else "提交本候选选票",
                 [
                     field(
                         "choice",
@@ -1000,6 +1118,14 @@ def actions_for(game, actor):
                 ],
                 group="投票",
                 blocking=True,
+                description=(
+                    f"本轮候选：{candidate}号 · {name}"
+                    f"（第{votes.get('round', 1)}/{votes.get('total', 1)}轮）。"
+                    f"同意票需严格超过有投票权存活玩家的一半，即至少{voters // 2 + 1}票，"
+                    "候选才会进入处决前响应；弃票与不同意都不会通过。"
+                    if candidate
+                    else "同意票需严格超过有投票权存活玩家的一半，候选才会进入处决前响应。"
+                ),
             )
         )
     if (
@@ -1018,6 +1144,10 @@ def actions_for(game, actor):
                     group="处决",
                     blocking=True,
                     danger=True,
+                    description=(
+                        f"本次命中率{threshold}/6；未命中则下次提高1/6，命中后重置为1/6。"
+                        f"命中后目标按标准结算出局（庇护仍然生效）。剩余子弹{card['uses'].get('bullets', 0)}发。"
+                    ),
                 )
             )
             result.append(
@@ -1043,14 +1173,27 @@ def actions_for(game, actor):
         )
     proposal = game["balloon_proposal"]
     if proposal and card and current(game, s) and sid not in proposal["votes"]:
+        alive = len(living(game))
         result.append(
             action(
                 "balloon.agree",
                 f"同意{proposal['by']}号的热气球名单",
                 group="热气球",
+                description=(
+                    f"名单：{'、'.join(f'{pid}号' for pid in proposal['participants'])}。"
+                    f"同意人数超过存活玩家的一半（当前需{alive // 2 + 1}人）即自动组织，"
+                    "无需主持人确认；名单内玩家出局会被剔除，全部出局则本次提议作废。"
+                ),
             )
         )
-        result.append(action("balloon.decline", "不同意该名单", group="热气球"))
+        result.append(
+            action(
+                "balloon.decline",
+                "不同意该名单",
+                group="热气球",
+                description="不同意即不再改变本名单的表决结果；同意人数不可能过半时提议自动作废。",
+            )
+        )
     if (
         game["half"] == "day"
         and card

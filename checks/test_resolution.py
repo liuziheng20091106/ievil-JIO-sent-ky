@@ -1277,5 +1277,50 @@ class HostTodo(unittest.TestCase):
         self.assertFalse(advance["blocking"])
 
 
+class ActionDescriptions(unittest.TestCase):
+    """行动说明由服务端下发，客户端只负责渲染：每个行动都要带非空说明。"""
+
+    def test_every_offered_action_carries_a_description(self):
+        # 玩家点开行动先看到说明；漏一个 id 就会退回「无说明」的空窗，
+        # 所以按阶段扫一遍双方实际能拿到的行动，而不是抽查。
+        for phase in ("ordering", "witch", "night", "night_results", "speech", "voting"):
+            for half in ("day", "night"):
+                game = arranged_game(phase, half)
+                game["public"]["speaker"] = "2"
+                actors = [HOST] + [player(game, s["id"]) for s in game["seats"]]
+                for actor in actors:
+                    for action in actions_for(game, actor):
+                        with self.subTest(phase=phase, half=half, action=action["id"]):
+                            self.assertTrue(action["description"].strip())
+
+    def test_the_vote_action_names_the_candidate_and_the_threshold(self):
+        game = arranged_game("nomination")
+        command(game, player(game, "2"), "vote.nominate", {"target": "3"})
+        for sid in ("4", "1", "3", "5", "6", "7"):
+            command(game, player(game, sid), "vote.pass")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["public"]["votes"]["candidate"], "3")
+        action = next(
+            item
+            for item in actions_for(game, player(game, "4"))
+            if item["id"] == "vote.cast"
+        )
+        self.assertIn("3号", action["label"])
+        self.assertIn("候选：3号", action["description"])
+        self.assertIn("至少4票", action["description"])
+
+    def test_a_disguised_skill_says_it_can_be_challenged(self):
+        game = arranged_game()
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        game["cards"]["honoka"]["states"]["disguise"] = "marg"
+        fake = next(
+            item
+            for item in actions_for(game, player(game, "7"))
+            if item["id"] == "day.skill"
+        )
+        self.assertIn("伪装声明", fake["description"])
+        self.assertIn("可质疑", fake["description"])
+
+
 if __name__ == "__main__":
     unittest.main()

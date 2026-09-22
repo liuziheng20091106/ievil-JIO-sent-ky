@@ -105,6 +105,107 @@ bool _deadOf(GameStore store, String? seatId) {
   return false;
 }
 
+/// 角色登场介绍：下层登场、复活、换牌时自动弹一次，
+/// 内容就是该角色的公开技能说明，和点头像看到的角色详情同源。
+/// 发牌不在此列——那时玩家正在「我的双牌」里自己选上下牌，不需要弹窗遮挡。
+Future<void> showRoleIntro(
+  BuildContext context,
+  GameStore store,
+  String roleId,
+) =>
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (context) => _RoleIntroSheet(store: store, roleId: roleId),
+    );
+
+class _RoleIntroSheet extends StatelessWidget {
+  const _RoleIntroSheet({required this.store, required this.roleId});
+
+  final GameStore store;
+  final String roleId;
+
+  @override
+  Widget build(BuildContext context) {
+    final role = store.roleInfo(roleId);
+    final visual = roleVisual(roleId);
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.xl,
+          0,
+          AppSpacing.xl,
+          AppSpacing.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                RoleAvatar(roleId: roleId, size: 52),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '新角色登场',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.palette.accent,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        role?.name ?? visual?.name ?? roleId,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: context.palette.text,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '关闭',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            if (role == null) ...[
+              Text(
+                '该角色的技能说明尚未从服务器读取到，可在「状态」页重新查看。',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: context.palette.textTertiary,
+                ),
+              ),
+            ] else ...[
+              _SkillBlock(title: '好人方技能', body: role.normal),
+              if (role.witch.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                _SkillBlock(title: '魔女化后', body: role.witch, danger: true),
+              ],
+            ],
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              '此刻起你使用这张牌的技能；私密信息只在本机显示。',
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 角色技能详情：公开的角色说明 + 该席位当前公开状态。
 Future<void> showRoleDetail(
   BuildContext context,
