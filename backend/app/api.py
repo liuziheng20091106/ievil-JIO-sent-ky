@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from . import auth, auth_storage, evidence, realtime, schemas, storage, views
 from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
+from .game.catalog import night_half
 from .game.state import controlled_cards, owner
 
 router = APIRouter(prefix="/api")
@@ -645,11 +646,40 @@ def channel_notice(db, game_id, row, ending=False):
     return storage.add_message(db, game_id, text=text)
 
 
-def ensure_channel_available(db, game_id, member_ids, exclude=None):
+def end_channel(db, game_id, row, *, notice=True):
+    """结束一个私信频道：解除成员限制，并撤销该频道已发图片的授权。"""
+    db.execute(
+        "UPDATE channels SET status='ended',ended_at=? WHERE id=?",
+        (storage.now_text(), row["id"]),
+    )
+    db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
+    return channel_notice(db, game_id, row, ending=True) if notice else None
+
+
+def close_night_channels(db, game_id):
+    """进入夜间：关闭全部私聊频道；夜间只允许与主持人建立私聊。"""
+    rows = []
+    closed = 0
+    for row in db.execute(
+        "SELECT * FROM channels WHERE game_id=? AND status!='ended'", (game_id,)
+    ).fetchall():
+        closed += 1
+        notice = end_channel(db, game_id, row)
+        if notice:
+            rows.append(notice)
+    if closed:
+        rows.insert(
+            0,
+            storage.add_message(db, game_id, text="天黑，全部私信频道已结束；夜间只能与主持人私聊。"),
+        )
+    return rows
+
+
+def ensure_channel_available(db, game, member_ids, exclude=None):
     for member_id in member_ids:
         if member_id == "host":
             continue
-        active = storage.active_private_channel(db, game_id, member_id)
+        active = storage.active_private_channel(db, game, member_id)
         if active and active["id"] != exclude:
             raise HTTPException(409, "所选成员正在其他私信中")
 
@@ -670,13 +700,15 @@ def channel_command(db, game, actor, action_id, payload):
         )
         if not invited or any(member not in valid for member in invited):
             raise HTTPException(422, "邀请成员必须是本局有效参与身份或主持人")
+        if actor["kind"] != "host" and night_half(game) and invited != ["host"]:
+            raise HTTPException(403, "夜间只能与主持人建立私聊")
         members = [actor["id"], *invited]
         accepted = [actor["id"]] + (["host"] if "host" in invited else [])
         immediate = actor["kind"] == "host" or set(accepted) == set(members)
         if actor["kind"] == "host":
             accepted = list(members)
         if immediate:
-            ensure_channel_available(db, game["id"], members)
+            ensure_channel_available(db, game, members)
         # 忽略自定义频道名，统一按成员生成：玩家用号位，主持人用「主持人」。
         seats = {row["participant_id"]: row["seat_id"] for row in db.execute(
             "SELECT id AS participant_id, seat_id FROM participants WHERE game_id=?", (game["id"],)
@@ -721,11 +753,11 @@ def channel_command(db, game, actor, action_id, payload):
         if action_id == "channel.accept":
             if row["status"] != "pending" or actor["id"] not in invited or actor["id"] in accepted:
                 raise HTTPException(409, "该邀请不再等待你的同意")
-            ensure_channel_available(db, game["id"], [actor["id"]])
+            ensure_channel_available(db, game, [actor["id"]])
             accepted.append(actor["id"])
             active = set(accepted) == set(members)
             if active:
-                ensure_channel_available(db, game["id"], members, row["id"])
+                ensure_channel_available(db, game, members, row["id"])
             db.execute(
                 "UPDATE channels SET accepted_ids=?,status=? WHERE id=?",
                 (storage.dumps(accepted), "active" if active else "pending", row["id"]),
@@ -738,21 +770,12 @@ def channel_command(db, game, actor, action_id, payload):
         elif action_id == "channel.reject":
             if row["status"] != "pending" or actor["id"] not in invited or actor["id"] in accepted:
                 raise HTTPException(409, "该邀请不再等待你的回应")
-            db.execute(
-                "UPDATE channels SET status='ended',ended_at=? WHERE id=?",
-                (storage.now_text(), row["id"]),
-            )
-            # 拒绝者此后不得再读频道里发过的图片：解除该频道消息的图片授权。
-            db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
+            # 拒绝者此后不得再读频道里发过的图片：结束频道时一并撤销图片授权。
+            end_channel(db, game["id"], row, notice=False)
         elif action_id == "channel.end":
             if row["status"] != "active":
                 raise HTTPException(409, "该私信尚未开始或已经结束")
-            db.execute(
-                "UPDATE channels SET status='ended',ended_at=? WHERE id=?",
-                (storage.now_text(), row["id"]),
-            )
-            db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
-            notice = channel_notice(db, game["id"], row, ending=True)
+            notice = end_channel(db, game["id"], row)
             if notice:
                 rows.append(notice)
         else:
@@ -809,6 +832,7 @@ async def command(game_id: str, body: schemas.Command, request: Request):
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
             game = copy.deepcopy(require_game(db, game_id, mutable=True))
+            was_night = night_half(game)
             controller, host_delegated, puppet_seat = actor, False, None
             if body.as_seat:
                 actor, host_delegated = authorized_as_seat(db, game, controller, body.as_seat)
@@ -824,7 +848,7 @@ async def command(game_id: str, body: schemas.Command, request: Request):
             if (
                 controller["kind"] != "host"
                 and not body.action.startswith("channel.")
-                and storage.active_private_channel(db, game_id, controller["id"])
+                and storage.active_private_channel(db, game, controller["id"])
             ):
                 raise HTTPException(403, "私信期间不能执行游戏行动")
             if puppet_seat:
@@ -844,6 +868,9 @@ async def command(game_id: str, body: schemas.Command, request: Request):
                 evidence.validate_references(db, game, actor, payload)
                 events = apply_command(game, actor, body.action, payload, by_host=host_delegated)
                 rows = storage.add_events(db, game_id, events)
+            if night_half(game) and not was_night:
+                # 进入夜间：关闭全部私聊频道，夜间只允许与主持人建立私聊。
+                rows.extend(close_night_channels(db, game_id))
             storage.save_game(db, game)
         realtime.publish(game_id, rows)
         return current_view(game_id, auth.token_hash(request))
@@ -969,8 +996,8 @@ async def upload_evidence(game_id: str, body: schemas.Evidence, request: Request
     async with realtime.lock:
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
-            require_game(db, game_id, mutable=True)
-            if actor["kind"] == "spectator" or storage.active_private_channel(db, game_id, actor["id"]):
+            game = require_game(db, game_id, mutable=True)
+            if actor["kind"] == "spectator" or storage.active_private_channel(db, game, actor["id"]):
                 raise HTTPException(403, "当前身份不能提交游戏证物")
             return {"id": evidence.create(db, game_id, actor, body.text, body.image)}
 

@@ -266,6 +266,95 @@ class BackendFlow(unittest.TestCase):
         ]
         self.assertEqual([message["id"] for message in system], [message["id"] for message in baseline])
 
+    def test_night_closes_private_channels_and_allows_only_host_chats(self):
+        self.open_join()
+        players = [self.join(str(13001 + index)) for index in range(7)]
+        first, first_actor, _ = players[0]
+        second, second_actor, _ = players[1]
+        third, third_actor, _ = players[2]
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        created = self.command(
+            first, "channel.create", {"participant_ids": [second_actor["id"]]}
+        ).json()
+        paired = next(item for item in created["channels"] if item["status"] == "pending")
+        self.command(second, "channel.accept", {"channel_id": paired["id"]})
+        host_chat = self.command(
+            self.host, "channel.create", {"participant_ids": [third_actor["id"]]}
+        ).json()
+        host_channel = next(
+            item
+            for item in host_chat["channels"]
+            if {member["id"] for member in item["members"]} == {third_actor["id"], "host"}
+        )
+
+        # 主持人开局就是第一夜：玩家私聊与主持人私聊都随天黑关闭。
+        started = self.command(self.host, "host.start").json()
+        statuses = {item["id"]: item["status"] for item in started["channels"]}
+        self.assertEqual(statuses[paired["id"]], "ended")
+        self.assertEqual(statuses[host_channel["id"]], "ended")
+        notice = self.client.get(self.root + "/messages", headers=second).json()["messages"]
+        self.assertTrue(any("夜间只能与主持人私聊" in message["text"] for message in notice))
+        ended = self.client.post(
+            self.root + "/messages", headers=first, json={"channel_id": paired["id"], "text": "x"}
+        )
+        self.assertEqual(ended.status_code, 403, ended.text)
+
+        # 夜间玩家只剩主持人一个邀请对象，邀请其他玩家一律拒绝。
+        denied = self.command(
+            first,
+            "channel.create",
+            {"participant_ids": [second_actor["id"]]},
+            status=403,
+        )
+        self.assertIn("夜间", denied.text)
+        offered = next(
+            item
+            for item in self.client.get(self.root + "/state", headers=first).json()["actions"]
+            if item["id"] == "channel.create"
+        )
+        self.assertEqual(
+            [option["label"] for option in offered["fields"][0]["options"]], ["主持人"]
+        )
+
+        # 兜底：夜间残留的不含主持人的 active 频道既不能发言，也不锁住玩家行动。
+        with storage.connect() as db:
+            db.execute(
+                "UPDATE channels SET status='active',ended_at=NULL WHERE id=?", (paired["id"],)
+            )
+            db.commit()
+        leftover = next(
+            item
+            for item in self.client.get(self.root + "/state", headers=first).json()["channels"]
+            if item["id"] == paired["id"]
+        )
+        self.assertFalse(leftover["can_send"])
+        self.assertEqual(leftover["reason"], "夜间只能与主持人私聊")
+        self.assertTrue(
+            any(
+                item["id"] == "channel.create"
+                for item in self.client.get(self.root + "/state", headers=first).json()["actions"]
+            )
+        )
+
+        # 与主持人私聊在夜间仍然可以建立；主持人的邀请对象不受限制。
+        opened = self.command(first, "channel.create", {"participant_ids": ["host"]}).json()
+        self.assertTrue(
+            any(
+                item["status"] == "active"
+                and {member["id"] for member in item["members"]} == {first_actor["id"], "host"}
+                for item in opened["channels"]
+            )
+        )
+        host_offered = next(
+            item
+            for item in self.client.get(self.root + "/state", headers=self.host).json()["actions"]
+            if item["id"] == "channel.create"
+        )
+        self.assertGreater(len(host_offered["fields"][0]["options"]), 1)
+
     def test_puppet_control_only_authorizes_its_owner_and_only_for_that_seat(self):
         self.open_join()
         players = [self.join(str(14001 + index)) for index in range(7)]

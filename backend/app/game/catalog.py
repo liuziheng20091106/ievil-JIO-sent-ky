@@ -131,6 +131,13 @@ AUTO_PHASES = {
     "execution",
 }
 AUTO_ADVANCE_DELAY = 5
+
+
+def night_half(game):
+    """是否处于开局后的夜间：魔女化检测到夜间结果同属一夜。"""
+    return game["status"] == "playing" and game["half"] == "night"
+
+
 # 自由发言结束请求：六个不同席位提交后，10 秒自动进入热气球。
 DISCUSSION_END_VOTES = 6
 DISCUSSION_END_DELAY = 10

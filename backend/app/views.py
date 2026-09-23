@@ -5,6 +5,7 @@ import json
 from . import storage
 from .game import game_view
 from .game.actions import action, field
+from .game.catalog import night_half
 from .game.views import seat_chat
 
 
@@ -230,26 +231,42 @@ def channels_for(db, game, actor, domain_view):
 
 
 def channel_create_descriptor(db, game, actor, participants):
-    if game["status"] == "ended" or storage.active_private_channel(db, game["id"], actor["id"]):
+    if game["status"] == "ended" or storage.active_private_channel(db, game, actor["id"]):
         return None
+    host = actor["kind"] == "host"
+    night = night_half(game)
     options = []
-    if actor["kind"] != "host":
+    if not host:
         options.append(("host", "主持人"))
-    options.extend(
-        (row["id"], row["name"] + ("（观战）" if row["kind"] == "spectator" else ""))
-        for row in participants
-        if row["active"] and not row["blocked"] and row["id"] != actor["id"]
-    )
+    if host or not night:
+        options.extend(
+            (row["id"], row["name"] + ("（观战）" if row["kind"] == "spectator" else ""))
+            for row in participants
+            if row["active"] and not row["blocked"] and row["id"] != actor["id"]
+        )
     if not options:
         return None
+    # 夜间只允许与主持人私聊：玩家端只剩主持人一个邀请对象，主持人不受限。
+    exclusive = night and not host
+    extra = (
+        {"description": "夜间只能与主持人建立私聊；天黑时全部私信频道已结束。"} if night else {}
+    )
     return action(
         "channel.create",
-        "创建一对一或多人私信",
+        "创建与主持人的私聊" if exclusive else "创建一对一或多人私信",
         [
-            field("participant_ids", "邀请成员", "multiselect", options, min=1, max=20),
+            field(
+                "participant_ids",
+                "邀请成员",
+                "multiselect",
+                options,
+                min=1,
+                max=1 if exclusive else 20,
+            ),
         ],
         group="私信",
         short_label="建私信",
+        **extra,
     )
 
 
@@ -351,7 +368,7 @@ def view(db, game, actor, online):
             continue
         identity = {"id": occupant, "kind": "player"}
         puppet_actions = []
-        if not ended and not storage.active_private_channel(db, game["id"], occupant):
+        if not ended and not storage.active_private_channel(db, game, occupant):
             create = channel_create_descriptor(db, game, identity, participants)
             if create:
                 puppet_actions.append(create)
@@ -385,7 +402,7 @@ def view(db, game, actor, online):
             if pid in people
         ]
     collected_channel_actions = [item for channel in result["channels"] for item in channel["actions"]]
-    active_private = storage.active_private_channel(db, game["id"], actor["id"])
+    active_private = storage.active_private_channel(db, game, actor["id"])
     if active_private and actor["kind"] != "host":
         result["actions"] = collected_channel_actions
     else:

@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .game.catalog import night_half
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("GAME_DATA_DIR", PROJECT_ROOT / "data")).resolve()
 
@@ -255,14 +257,21 @@ def message_view(row, actor):
     return result
 
 
-def active_private_channel(db, game_id, participant_id):
+def active_private_channel(db, game, participant_id):
+    """该参与身份当前生效的私聊频道；夜间只承认含主持人的私聊。"""
     if participant_id == "host":
         return None
+    clauses = [
+        "c.game_id=?",
+        "c.status='active'",
+        "EXISTS (SELECT 1 FROM json_each(c.participant_ids) WHERE value=?)",
+    ]
+    args = [game["id"], participant_id]
+    if night_half(game):
+        clauses.append("EXISTS (SELECT 1 FROM json_each(c.participant_ids) WHERE value='host')")
     return db.execute(
-        """SELECT * FROM channels c WHERE c.game_id=? AND c.status='active'
-           AND EXISTS (SELECT 1 FROM json_each(c.participant_ids) WHERE value=?)
-           ORDER BY c.rowid LIMIT 1""",
-        (game_id, participant_id),
+        "SELECT * FROM channels c WHERE " + " AND ".join(clauses) + " ORDER BY c.rowid LIMIT 1",
+        args,
     ).fetchone()
 
 
@@ -280,7 +289,12 @@ def channel_send_reason(db, game, actor, channel_id):
     participant = db.execute("SELECT muted FROM participants WHERE id=?", (actor["id"],)).fetchone()
     if participant and participant["muted"]:
         return "主持人已将你禁言"
-    active = active_private_channel(db, game["id"], actor["id"])
+    if actor["kind"] != "host" and night_half(game) and channel_id not in {"public", "information"}:
+        # 夜间只允许与主持人私聊：不含主持人的频道（旧数据或异常路径遗留）一律不能再发言。
+        row = db.execute("SELECT participant_ids FROM channels WHERE id=?", (channel_id,)).fetchone()
+        if row and "host" not in json.loads(row["participant_ids"]):
+            return "夜间只能与主持人私聊"
+    active = active_private_channel(db, game, actor["id"])
     if actor["kind"] != "host" and active and channel_id != active["id"]:
         return "私信期间只能在当前私信频道发言"
     return ""
