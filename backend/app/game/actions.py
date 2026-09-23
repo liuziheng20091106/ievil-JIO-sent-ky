@@ -22,7 +22,6 @@ from .state import (
     pending_nominators,
     owner,
     player_seat,
-    present,
     role_card,
     seat,
     seat_operable,
@@ -67,10 +66,6 @@ SHORT_LABELS = {
     "vote.cast": "投票",
     "execution.shoot": "开枪",
     "execution.confirm": "放弃",
-    "balloon.choose": "选气球",
-    "balloon.agree": "同意",
-    "balloon.decline": "拒绝",
-    "balloon.propose": "提名单",
     "photo.permission": "信物",
     "water.use": "用水",
     "meruru.revive": "复活",
@@ -114,16 +109,12 @@ DESCRIPTIONS = {
     "vote.pass": "放弃本次提名；提名在白天随时可以提交。",
     "execution.shoot": "临刑开枪：命中则目标按标准结算出局，未命中则下次命中率提高1/6。",
     "execution.confirm": "放弃临刑行动并确认，进入处决结算。",
-    "balloon.choose": "秘密提交热气球选择（制作/不制作，魔女与安安可破坏）；选择内容不公开。",
-    "balloon.agree": "同意这份热气球名单；同意人数超过存活玩家一半即自动组织。",
-    "balloon.decline": "不同意这份名单；同意人数不可能过半时提议作废。",
-    "balloon.propose": "亚里沙不在场时由玩家提议名单（至多5人），超过半数存活玩家同意即自动组织。",
     "photo.permission": "可可赠送的信物：设置是否允许她查看你的夜间行动。",
     "water.use": "用掉本夜的一瓶13水并立即指定目标，毒杀直接进入本夜预结算，无需主持人确认。",
     "meruru.revive": "魔女化梅露露复活当夜由自己击杀的牌；复活者是无投票权、无技能的傀儡，该次死亡的公告与目击一并撤销。",
     "evidence.submit": "提交夜间遗留证物；公开范围由主持人裁定。",
     "player.surrender": "私信主持人申请本阵营交牌；未满足集体条件前继续游戏。",
-    "discussion.request_end": "提交一次结束自由发言的请求；六个不同席位提交后10秒自动进入热气球。",
+    "discussion.request_end": "提交一次结束自由发言的请求；六个不同席位提交后10秒自动进入提名。",
     # 私信与房间管理（id 只在 app/views.py 里使用，短名同样是显式给的）。
     "channel.create": "创建私信频道；被邀请者同意后频道生效，期间成员只能在该频道发言。",
     "channel.accept": "同意加入该私信；全部成员同意后频道转为生效。",
@@ -168,7 +159,6 @@ DAY_ABILITY_DESCRIPTIONS = {
     "gaze": "查看本日处决名单是否含魔女，结果只发给你。",
     "spear": "长矛令一张当前牌立即进入标准出局预结算，你同时加入本日处决名单。",
     "photo": "赠送无图像信物；受赠者可授权你查看其夜间行动。",
-    "balloon": "组织热气球：由你直接定下参加名单（至多5人，可含自己）。",
 }
 
 
@@ -276,23 +266,6 @@ def outstanding_seats(game):
     result += [
         item["seat_id"] for item in game["pending"] if item["kind"] == "honoka_witness"
     ]
-    proposal = game.get("balloon_proposal")
-    if proposal:
-        # 名单表决期所有未表态的存活玩家都卡住流程，警告与自动推进都要等他们。
-        result += [
-            s["id"]
-            for s in living(game)
-            if s["id"] not in proposal["votes"]
-            and card_actionable(game, current(game, s["id"]))
-        ]
-    balloon = game["public"]["balloon"]
-    if balloon["status"] == "collecting":
-        # 收集横跨白天多个阶段，期间出局者无法再提交，按默认跳过处理、不算待办。
-        result += [
-            sid
-            for sid in balloon["participants"]
-            if sid not in game["balloon_choices"] and drivable(sid)
-        ]
     return list(dict.fromkeys(result))
 
 
@@ -314,17 +287,6 @@ def target_field(game, night=False, exclude=None, avoid_treasure=False):
 def day_fields(game, ability, exclude=None):
     if ability == "gaze":
         return []
-    if ability == "balloon":
-        return [
-            field(
-                "participants",
-                "参加者（不含自己，至多4人）",
-                "multiselect",
-                [(sid, label) for sid, label in seat_options(game) if sid != exclude],
-                min=1,
-                max=4,
-            )
-        ]
     return [target_field(game, avoid_treasure=ability == "spear")]
 
 
@@ -359,7 +321,7 @@ def can_day_ability(game, card, ability):
         )
     if ability == "gaze":
         return role == "nanoka" and phase == "execution" and card["uses"].get("gaze_day") != game["day"]
-    if phase not in {"speech", "discussion", "balloon", "nomination", "voting"}:
+    if phase not in {"speech", "discussion", "nomination", "voting"}:
         return False
     if DAY_ABILITIES[ability][0] != role:
         return False
@@ -367,8 +329,6 @@ def can_day_ability(game, card, ability):
         return card["uses"].get("love_day") != game["day"]
     if ability == "spear":
         return card["uses"].get("spear_day") != game["day"]
-    if ability == "balloon":
-        return game["public"]["balloon"]["day"] != game["day"]
     return ability == "photo"
 
 
@@ -397,7 +357,7 @@ def day_fake_allowed(game, card, ability):
         "brainwash": {"voting"},
         "mass_brainwash": {"discussion", "nomination", "voting"},
         "interrupt": {"speech", "discussion"},
-    }.get(ability, {"speech", "discussion", "balloon", "nomination", "voting"})
+    }.get(ability, {"speech", "discussion", "nomination", "voting"})
     shown = card["states"].get("disguise") if card["id"] == "honoka" else card["role_id"]
     if phase not in phases or ability not in claimable(shown):
         return False
@@ -1180,71 +1140,6 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             result.append(
                 action("execution.confirm", "放弃临刑行动并确认", group="处决", blocking=True)
             )
-    balloon = game["public"]["balloon"]
-    if (
-        balloon["status"] == "collecting"
-        and sid in balloon["participants"]
-        and sid not in game["balloon_choices"]
-    ):
-        options = [("make", "制作"), ("skip", "不制作")]
-        if card and (card["witch"] or card["role_id"] == "annan"):
-            options.append(("break", "破坏"))
-        result.append(
-            action(
-                "balloon.choose",
-                "秘密提交热气球选择",
-                [field("choice", "选择", "select", options)],
-                group="热气球",
-                blocking=True,
-            )
-        )
-    proposal = game["balloon_proposal"]
-    if proposal and card and current(game, active_seat) and sid not in proposal["votes"]:
-        alive = len(living(game))
-        result.append(
-            action(
-                "balloon.agree",
-                f"同意{proposal['by']}号的热气球名单",
-                group="热气球",
-                description=(
-                    f"名单：{'、'.join(f'{pid}号' for pid in proposal['participants'])}。"
-                    f"同意人数超过存活玩家的一半（当前需{alive // 2 + 1}人）即自动组织，"
-                    "无需主持人确认；名单内玩家出局会被剔除，全部出局则本次提议作废。"
-                ),
-            )
-        )
-        result.append(
-            action(
-                "balloon.decline",
-                "不同意该名单",
-                group="热气球",
-                description="不同意即不再改变本名单的表决结果；同意人数不可能过半时提议自动作废。",
-            )
-        )
-    if (
-        game["half"] == "day"
-        and card
-        and not present(game, "arisa")
-        and balloon["day"] != game["day"]
-        and not proposal
-    ):
-        result.append(
-            action(
-                "balloon.propose",
-                "提议热气球名单（至多5人，过半同意即组织）",
-                [
-                    field(
-                        "participants",
-                        "提议参加者（至多5人）",
-                        "multiselect",
-                        seat_options(game),
-                        min=1,
-                        max=5,
-                    )
-                ],
-                group="热气球",
-            )
-        )
     for photo in game["photos"]:
         if photo["target"] == sid:
             result.append(

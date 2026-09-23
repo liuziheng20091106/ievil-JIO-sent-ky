@@ -89,11 +89,6 @@ def host_tasks(game):
             sid = owner(game, cid)["id"]
             if sid not in game["execution_ready"]:
                 warn_task("execution", sid, f"{sid}号临刑开枪尚未确认")
-    balloon = game["public"]["balloon"]
-    if balloon["status"] == "collecting":
-        for sid in balloon["participants"]:
-            if sid not in game["balloon_choices"] and current(game, sid):
-                warn_task("balloon", sid, f"{sid}号尚未提交热气球选择")
     if phase == "night_review" and game["night"]["preview"] is not None:
         tasks.append(
             {
@@ -320,15 +315,13 @@ def game_view(game, actor):
         public.pop("witch_destiny", None)
     # 自由发言结束请求是公开进度：两端都要显示「已有几人提交」与 10 秒倒计时。
     public["discussion_end_requests"] = list(game.get("discussion_end_requests", []))
-    # 制作过程只给主持人看：对外不带制作/破坏/未提交的人头与席位明细
-    public["balloon"].pop("last", None)
     # 当日目击名单：白天到投票结束前，死者和主持人常驻可见；进入处决或隔天自动消失。
     witness = game.get("witness")
     if (
         witness
         and witness["day"] == game["day"]
         and game["half"] == "day"
-        and game["phase"] in ("speech", "balloon", "nomination", "voting")
+        and game["phase"] in ("speech", "nomination", "voting")
         and (host or own_id == witness["seat_id"])
     ):
         view_witness = {"day": witness["day"], "text": witness["text"]}
@@ -366,12 +359,6 @@ def game_view(game, actor):
                 None,
             ),
             "label": "处决前响应",
-        }
-    elif phase == "balloon":
-        public["current_actor"] = {
-            "phase": "balloon",
-            "seat_id": None,
-            "label": "秘密选择中",
         }
     view = {
         "ui_version": 1,
@@ -421,7 +408,6 @@ def game_view(game, actor):
         ]
         if own_id in game["water"]["holders"]:
             view["self"]["water"] = True
-        view["self"]["balloon_choice"] = game["balloon_choices"].get(own_id)
         view["self"]["vote"] = game["votes"].get(own_id)
         view["self"]["warning_deadline"] = game["warnings"].get(own_id)
         if game["status"] == "lobby" and game["phase"] == "ordering" and "honoka" in own["cards"]:
@@ -447,8 +433,6 @@ def game_view(game, actor):
                 for s in game["snapshots"]
             ],
             "water": deepcopy(game["water"]),
-            "balloon_choices": deepcopy(game["balloon_choices"]),
-            "balloon_proposal": deepcopy(game["balloon_proposal"]),
             "votes": deepcopy(game["votes"]),
             "brainwash": deepcopy(game["brainwash"]),
             "deaths": deepcopy(game["deaths"]),

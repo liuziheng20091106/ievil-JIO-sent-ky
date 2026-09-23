@@ -16,7 +16,6 @@ const groups: Record<string, string> = {
   pending: "待办裁决",
   vote: "提名与投票",
   voting: "提名与投票",
-  balloon: "热气球",
   information: "私密信息",
   phase: "阶段控制",
   abilities: "角色技能",

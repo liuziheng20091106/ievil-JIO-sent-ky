@@ -4,6 +4,7 @@ import unittest
 
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
 from backend.app.game.actions import actions_for
+from backend.app.game.engine import sync_declarations
 from backend.app.game.state import DEAL_EXCLUDED_PAIRS, check_winner, upgrade_game
 
 
@@ -70,6 +71,60 @@ class SetupRules(unittest.TestCase):
         self.assertEqual(game["water"], {"holders": ["1"]})
         self.assertEqual(game["pending"], [])
         self.assertFalse(upgrade_game(game))
+
+    def test_upgrade_game_moves_a_removed_balloon_phase_to_nomination(self):
+        """热气球整段移除后，停在旧阶段的存档不能因为查不到阶段名或技能名而崩溃。"""
+        game = create_game(DEFAULT_CODEX)
+        for actor in players(game):
+            apply_command(game, actor, "lobby.ready", {})
+        game["status"] = "playing"
+        game["phase"] = "balloon"
+        game["public"]["balloon"] = {
+            "progress": 4,
+            "participants": ["1"],
+            "day": 1,
+            "status": "collecting",
+        }
+        game["balloon_choices"] = {"1": "make"}
+        game["balloon_proposal"] = {"by": "1", "participants": ["2"], "votes": {"1": True}}
+        game["declarations"].append(
+            {
+                "id": "legacy-balloon",
+                "day": game["day"],
+                "seat_id": "1",
+                "card_id": "legacy-card",
+                "ability": "balloon",
+                "fake": False,
+                "by_host": False,
+                "data": {"ability": "balloon", "participants": ["2"]},
+                "status": "open",
+                "executed": True,
+            }
+        )
+        game["public"]["declarations"] = [
+            {
+                "id": "legacy-balloon",
+                "seat_id": "1",
+                "label": "组织热气球",
+                "summary": "参与席位：2号",
+                "status": "open",
+            }
+        ]
+        self.assertTrue(upgrade_game(game))
+        self.assertEqual(game["phase"], "nomination")
+        self.assertNotIn("balloon", game["public"])
+        self.assertNotIn("balloon_choices", game)
+        self.assertNotIn("balloon_proposal", game)
+        self.assertEqual(game["declarations"], [])
+        self.assertEqual(game["public"]["declarations"], [])
+        # 旧声明归档保留，而不是随玩法一起丢掉。
+        self.assertEqual(
+            [item["id"] for item in game["legacy_declarations"]], ["legacy-balloon"]
+        )
+        sync_declarations(game)
+        visible = game_view(game, players(game)[0])
+        self.assertEqual(visible["phase"], "nomination")
+        self.assertNotIn("balloon", visible["public"])
 
     def test_player_views_hide_other_cards_while_spectator_gets_read_only_board(self):
         game = create_game(DEFAULT_CODEX)

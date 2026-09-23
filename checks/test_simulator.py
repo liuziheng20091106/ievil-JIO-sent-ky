@@ -20,7 +20,7 @@ from backend.app.simulator.harness import Harness
 from backend.app.simulator.policy import option_values
 from backend.app.simulator.transport import TestClientTransport, gateway_authenticator
 
-# 一局完整对局要走完魔女化、夜间、顺序发言、热气球、提名、投票与处决，
+# 一局完整对局要走完魔女化、夜间、顺序发言、提名、投票与处决，
 # 同时等待系统自己 5 秒的自动推进，因此给足时间但保持有界。
 # 弱机器上单局可能跑到数分钟（实测最长约 400 秒），预算必须留够，
 # 否则超时会被误报成「走不到结局」。
@@ -224,24 +224,17 @@ class SimulatorCase(unittest.TestCase):
             {"target_card": target_card["id"], "cause": "host", "unconditional": True}
         ]
         game["millia_swap"] = {"seat": target_seat["id"], "day": 1}
-        from unittest.mock import patch
+        # 米莉亚的替死不掷中毒骰：与艾玛同席中毒时也必须稳定替死，重算不得漂移。
+        prepare_night_preview(game)
+        deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
+        self.assertIn("millia", deaths, "换血对象的致命攻击没有转移到米莉亚牌")
+        self.assertNotIn(target_card["id"], deaths, "换血对象仍在预结算中出局")
 
-        with patch("backend.app.game.state.SystemRandom") as random, patch(
-            "backend.app.game.resolution.SystemRandom"
-        ) as resolution_random:
-            # 中毒骰固定为生效（roll=0），否则米莉亚被艾玛毒到时替死随机失效。
-            random.return_value.randrange.return_value = 0
-            resolution_random.return_value.randrange.return_value = 0
+        for _ in range(3):
             prepare_night_preview(game)
             deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
-            self.assertIn("millia", deaths, "换血对象的致命攻击没有转移到米莉亚牌")
-            self.assertNotIn(target_card["id"], deaths, "换血对象仍在预结算中出局")
-
-            for _ in range(3):
-                prepare_night_preview(game)
-                deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
-                self.assertIn("millia", deaths, "重算后预结算漂移")
-                self.assertNotIn(target_card["id"], deaths, "重算后预结算漂移")
+            self.assertIn("millia", deaths, "重算后预结算漂移")
+            self.assertNotIn(target_card["id"], deaths, "重算后预结算漂移")
 
     def test_gateway_authenticator_sends_a_numeric_group(self):
         """网关核销的群号必须是整数：schema 是 StrictInt，命令行传进来的是字符串或群列表。"""

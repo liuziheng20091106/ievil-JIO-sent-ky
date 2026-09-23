@@ -5,10 +5,6 @@ import 'package:seven_double_client/src/role_visuals.dart';
 /// 后端 actions.py 与 views.py 声明的全部行动 id。
 /// 新增行动时必须同时补图标，否则这个检查会失败。
 const backendActionIds = <String>[
-  'balloon.agree',
-  'balloon.choose',
-  'balloon.decline',
-  'balloon.propose',
   'channel.accept',
   'channel.create',
   'channel.end',

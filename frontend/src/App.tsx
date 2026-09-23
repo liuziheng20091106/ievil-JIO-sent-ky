@@ -649,8 +649,7 @@ const phaseHints: Record<string, string> = {
   speech:
     "按发言顺序依次出声；轮到你时说完点「结束本次发言」交给下一位。未轮到的席位可以「提前发言」（提前写下内容，轮到你时自动公开）或「本轮不发言（跳过我的顺序）」。",
   discussion:
-    "自由讨论；任何可行动席位都能提交「请求结束自由发言」，六个不同席位提交后 10 秒自动进入热气球，主持人也可以直接推进。",
-  balloon: "热气球参与者私下提交「制作」或「破坏」；其他人等待。",
+    "自由讨论；任何可行动席位都能提交「请求结束自由发言」，六个不同席位提交后 10 秒自动进入提名，主持人也可以直接推进。",
   nomination:
     "各自提名一个席位或「放弃本次提名」，可提前提交；进入本阶段时先前提名自动确认。",
   voting: "对当前候选投同意／不同意／弃票；提名过该候选的人已自动投同意。",
@@ -946,8 +945,8 @@ function Room({
           <strong>
             已有 {state.public.discussion_end_requests?.length ?? 0}/6 名玩家请求结束
             {state.public.auto_advance_at
-              ? "，10 秒后自动进入热气球"
-              : "；集满六人后 10 秒自动进入热气球"}
+              ? "，10 秒后自动进入提名"
+              : "；集满六人后 10 秒自动进入提名"}
           </strong>
         </div>
       )}
@@ -1374,7 +1373,7 @@ function PublicTable({
         ))}
       {!Object.keys(state.public).length && (
         <p className="hint">
-          当前尚无公开行动记录。主持人公布的投票、热气球、声明与结算会显示在这里。
+          当前尚无公开行动记录。主持人公布的投票、声明与结算会显示在这里。
         </p>
       )}
     </>
@@ -1488,12 +1487,6 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
               <RecordView value={state.self.vote} />
             </p>
           )}
-          {state.self.balloon_choice && (
-            <p>
-              热气球选择：
-              <RecordView value={state.self.balloon_choice} />
-            </p>
-          )}
         </section>
       )}
       <div className="section-heading information-heading">
@@ -1522,7 +1515,6 @@ const taskLabels: Record<string, string> = {
   nomination: "提名",
   voting: "投票",
   execution: "处决",
-  balloon: "热气球",
   review: "阶段推进",
   advance: "阶段推进",
   winner: "胜利宣判",
@@ -1550,7 +1542,6 @@ function HostTasks({
     nomination: "前往警告",
     voting: "前往警告",
     execution: "前往警告",
-    balloon: "前往警告",
     review: "前往推进",
     advance: "前往推进",
     winner: "前往宣判",
@@ -1717,8 +1708,6 @@ function HostSources() {
   const nominations = host.nominations ?? [];
   const voteRounds = host.vote_rounds ?? [];
   const photos = host.photos ?? [];
-  const balloon = host.balloon_choices ?? {};
-  const proposal = host.balloon_proposal ?? null;
   const brainwash = host.brainwash ?? {};
   const water = host.water;
   const warnings = host.warnings ?? {};
@@ -1776,23 +1765,6 @@ function HostSources() {
             <RecordView value={votes} />
           </p>
         )}
-      </details>
-      <details className="record-section">
-        <summary>热气球</summary>
-        <p>
-          提交情况：
-          <RecordView value={balloon} />
-        </p>
-        {proposal && (
-          <p>
-            {proposal.by}号提议名单：
-            <RecordView value={proposal} />
-          </p>
-        )}
-        <p>
-          结果：
-          <RecordView value={state.public.balloon} />
-        </p>
       </details>
       <details className="record-section">
         <summary>洗脑</summary>

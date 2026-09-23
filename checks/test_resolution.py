@@ -98,6 +98,81 @@ class PoisonAndDeclarations(unittest.TestCase):
             self.assertFalse(effect_effective(game, events, game["cards"]["millia"], "测试技能"))
         self.assertEqual([entry["kind"] for entry in game["log"][-2:]], ["poison", "poison"])
 
+    def test_poisoned_witch_knife_is_not_a_skill_and_still_kills(self):
+        """魔女杀人不算技能：中毒不为魔女刀掷效果骰，刀口照常生效。"""
+        game = arranged_game(phase="night", half="night")
+        # 把可可换到席2的上层，使其成为当前牌并吃到相邻艾玛的中毒。
+        game["seats"][1]["cards"] = ["coco", "hiro"]
+        self.assertIn("艾玛毒素", poison_sources(game, game["cards"]["coco"]))
+        game["night"] = {
+            "actors": ["2"],
+            "confirmed": ["2"],
+            "locked": False,
+            "reactions": [],
+            "actions": [
+                {
+                    "seat_id": "2",
+                    "card_id": "coco",
+                    "ability": "knife",
+                    "target_card": "millia",
+                    "target_seat": "1",
+                    "confirmed": True,
+                }
+            ],
+        }
+        with patch("backend.app.game.state.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1  # 即便骰到「无效」也不该消耗
+            lock_night(game, [])
+        self.assertTrue(game["night"]["actions"][0]["effective"])
+        self.assertEqual([entry for entry in game["log"] if entry["kind"] == "poison"], [])
+        deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
+        self.assertIn("millia", deaths)
+
+    def test_only_photo_still_rolls_the_poison_die(self):
+        """效果类里只剩「赠送信物」吃中毒骰：信物仍会被判假，其他真实声明不受影响。"""
+        game = arranged_game()
+        game["seats"][1]["cards"] = ["coco", "hiro"]
+        game["cards"]["coco"]["states"]["poisoned"] = True
+        with patch("backend.app.game.state.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1  # 中毒骰值1：信物失效
+            command(game, player(game, "2"), "day.skill", {"ability": "photo", "target": "1"})
+        self.assertTrue(game["declarations"][-1]["fake"])
+        self.assertFalse(game["photos"])
+
+        other = arranged_game()
+        other["seats"][0]["cards"] = ["emma", "millia"]
+        other["cards"]["emma"]["states"]["poisoned"] = True
+        command(other, player(other, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
+        self.assertFalse(other["declarations"][-1]["fake"])
+        self.assertEqual(other["public"]["interrupted_speaker"], "2")
+        self.assertEqual([entry for entry in other["log"] if entry["kind"] == "poison"], [])
+
+    def test_poisoned_night_actions_still_resolve(self):
+        """夜间技能不再吃中毒骰：中毒的诺亚下雨照样生效，也不再写中毒日志。"""
+        game = arranged_game("night", "night")
+        game["cards"]["noah"]["states"]["poisoned"] = True
+        game["night"] = {
+            "actors": {"6": "noah"},
+            "actions": [
+                {
+                    "card_id": "noah",
+                    "seat_id": "6",
+                    "ability": "rain",
+                    "target_card": "millia",
+                    "target_seat": "1",
+                    "confirmed": True,
+                }
+            ],
+            "confirmed": ["6"],
+            "locked": False,
+            "preview": None,
+            "reactions": [],
+        }
+        lock_night(game, [])
+        self.assertTrue(game["night"]["rain"])
+        self.assertTrue(game["cards"]["noah"]["uses"]["rain"])
+        self.assertEqual([entry for entry in game["log"] if entry["kind"] == "poison"], [])
+
     def test_status_projection_hides_poison_source_and_host_secrets(self):
         game = arranged_game()
         game["cards"]["noah"]["states"]["display_killer"] = "coco"
@@ -402,7 +477,7 @@ class ResolutionEdges(unittest.TestCase):
     def test_millia_substitution_lasts_through_the_next_day_but_not_execution(self):
         # 换血目标持久保存：白天普通伤害仍由米莉亚代死，处刑不走替死。
         game = arranged_game("discussion", "day")
-        game["millia_swap"] = {"seat": "3", "day": 1, "key": f"{game['day']}:{game['half']}", "effective": True}
+        game["millia_swap"] = {"seat": "3", "day": 1}
         game["seats"][2]["avatar_role_id"] = "meruru"
         death_batch(
             game,
@@ -416,7 +491,7 @@ class ResolutionEdges(unittest.TestCase):
 
         # 处刑显式绕过替死：目标按处刑出局。
         game = arranged_game("execution", "day")
-        game["millia_swap"] = {"seat": "3", "day": 2, "key": f"{game['day']}:{game['half']}", "effective": True}
+        game["millia_swap"] = {"seat": "3", "day": 2}
         preview = damage_preview(
             game, [{"target_card": "meruru", "source_card": None, "cause": "execution"}]
         )
@@ -447,20 +522,16 @@ class ResolutionEdges(unittest.TestCase):
         ]
         game["millia_swap"] = {"seat": "3", "day": 2}
         game["cards"]["emma"]["alive"] = False
-        with patch("backend.app.game.state.SystemRandom") as random, patch(
-            "backend.app.game.resolution.SystemRandom"
-        ) as resolution_random:
-            random.return_value.randrange.return_value = 0  # 中毒骰固定生效
-            resolution_random.return_value.randrange.return_value = 0
-            prepare_night_preview(game)
+        prepare_night_preview(game)
         self.assertFalse(any(item["kind"] == "millia" for item in game["pending"]))
         deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
         self.assertEqual(deaths, {"millia"})
         self.assertTrue(game["cards"]["meruru"]["alive"])
 
-    def test_millia_does_not_substitute_when_swap_mill_roll_fails(self):
-        # 中毒骰值1：换血本半天失效，不替死。
+    def test_poisoned_millia_still_substitutes_without_poison_roll(self):
+        # 米莉亚的换血与替死不吃中毒效果骰：与艾玛同席中毒时仍然替死，也不写中毒日志。
         game = arranged_game("night_review", "night")
+        self.assertIn("艾玛毒素", poison_sources(game, game["cards"]["millia"]))
         game["night"]["reactions"] = []
         game["night"]["actions"] = [
             {
@@ -473,14 +544,12 @@ class ResolutionEdges(unittest.TestCase):
             },
         ]
         game["millia_swap"] = {"seat": "3", "day": 2}
-        with patch("backend.app.game.state.SystemRandom") as random, patch(
-            "backend.app.game.resolution.SystemRandom"
-        ) as resolution_random:
-            random.return_value.randrange.return_value = 1  # 中毒骰值1：技能失效
-            resolution_random.return_value.randrange.return_value = 1
+        with patch("backend.app.game.state.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1  # 即便骰到「无效」也不该消耗
             prepare_night_preview(game)
+        self.assertEqual([entry for entry in game["log"] if entry["kind"] == "poison"], [])
         deaths = {death["target_card"] for death in game["night"]["preview"]["deaths"]}
-        self.assertEqual(deaths, {"meruru"})
+        self.assertEqual(deaths, {"millia"})
 
     def test_protection_and_half_day_limit_prevent_extra_card_exit(self):
         game = arranged_game()
@@ -1429,152 +1498,6 @@ class SpeechOrder(unittest.TestCase):
             command(retry, HOST, "host.speech", {"start": "4", "direction": "asc"})
 
 
-class BalloonFlow(unittest.TestCase):
-    def test_arisa_starts_the_balloon_without_any_host_step(self):
-        game = arranged_game()
-        game["seats"][4].update(cards=["arisa", "leia"])
-        command(
-            game,
-            player(game, "5"),
-            "day.skill",
-            {"ability": "balloon", "participants": ["2", "3"]},
-        )
-        balloon = game["public"]["balloon"]
-        self.assertEqual(balloon["status"], "collecting")
-        self.assertEqual(balloon["participants"], ["5", "2", "3"])
-        self.assertEqual(game["pending"], [])
-        declaration = next(d for d in game["declarations"] if d["ability"] == "balloon")
-        self.assertTrue(declaration["executed"])
-        self.assertEqual(declaration["status"], "open")
-        options = next(
-            item for item in actions_for(game, player(game, "2")) if item["id"] == "balloon.choose"
-        )
-        self.assertEqual(
-            [item["value"] for item in options["fields"][0]["options"]], ["make", "skip"]
-        )
-        for sid in ("5", "2", "3"):
-            command(game, player(game, sid), "balloon.choose", {"choice": "make"})
-        self.assertEqual(game["public"]["balloon"]["status"], "complete")
-        self.assertEqual(game["public"]["balloon"]["progress"], 3)
-        self.assertEqual(
-            next(d for d in game["declarations"] if d["ability"] == "balloon")["status"],
-            "complete",
-        )
-        self.assertEqual(game["pending"], [])
-
-    def test_players_only_see_the_result_not_the_making_details(self):
-        game = arranged_game()
-        game["seats"][4].update(cards=["arisa", "leia"])
-        game["seats"][2].update(cards=["annan", "hanna"])
-        command(
-            game,
-            player(game, "5"),
-            "day.skill",
-            {"ability": "balloon", "participants": ["3", "4"]},
-        )
-        command(game, player(game, "4"), "balloon.choose", {"choice": "make"})
-        events = command(game, player(game, "5"), "balloon.choose", {"choice": "make"})
-        self.assertEqual(game["public"]["balloon"]["last"]["breakers"], ["3"])
-        self.assertEqual(game["public"]["balloon"]["progress"], 0)
-        public = "".join(event["text"] for event in events if event["audience"] is None)
-        self.assertEqual(public, "热气球制作结束：当前进度0/13。")
-        detail = game_view(game, player(game, "4"))["public"]["balloon"]
-        self.assertIsNone(detail.get("last"))
-        self.assertEqual(detail["progress"], 0)
-        self.assertEqual(
-            game_view(game, HOST)["host"]["balloon_choices"],
-            {"3": "break", "4": "make", "5": "make"},
-        )
-
-    def test_good_players_cannot_break_the_balloon(self):
-        game = arranged_game()
-        game["seats"][4].update(cards=["arisa", "leia"])
-        command(game, player(game, "5"), "day.skill", {"ability": "balloon", "participants": ["2"]})
-        with self.assertRaises(GameError):
-            command(game, player(game, "2"), "balloon.choose", {"choice": "break"})
-
-    def test_annan_breaks_the_balloon_just_by_joining(self):
-        game = arranged_game()
-        game["cards"]["arisa"]["alive"] = False
-        game["seats"][2].update(cards=["annan", "meruru"])
-        command(
-            game,
-            player(game, "1"),
-            "balloon.propose",
-            {"participants": ["3", "4"]},
-        )
-        for sid in ("2", "3", "4"):
-            command(game, player(game, sid), "balloon.agree", {})
-        balloon = game["public"]["balloon"]
-        self.assertEqual(balloon["participants"], ["3", "4"])
-        self.assertEqual(game["balloon_choices"], {"3": "break"})
-        self.assertNotIn(
-            "balloon.choose", [item["id"] for item in actions_for(game, player(game, "3"))]
-        )
-        self.assertIn(
-            "balloon.choose", [item["id"] for item in actions_for(game, player(game, "4"))]
-        )
-        command(game, player(game, "4"), "balloon.choose", {"choice": "make"})
-        settled = game["public"]["balloon"]
-        self.assertEqual(settled["status"], "complete")
-        self.assertEqual(settled["progress"], 0)
-        self.assertEqual(settled["last"]["breakers"], ["3"])
-
-    def test_proposal_needs_more_than_half_of_the_living_players(self):
-        game = arranged_game()
-        game["cards"]["arisa"]["alive"] = False
-        command(game, player(game, "1"), "balloon.propose", {"participants": ["2", "3"]})
-        self.assertEqual(game["balloon_proposal"]["votes"], {"1": True})
-        self.assertEqual(game["public"]["balloon"]["status"], "idle")
-        for sid in ("2", "3"):
-            command(game, player(game, sid), "balloon.agree", {})
-        self.assertEqual(game["public"]["balloon"]["status"], "idle")
-        command(game, player(game, "4"), "balloon.agree", {})
-        self.assertIsNone(game["balloon_proposal"])
-        balloon = game["public"]["balloon"]
-        self.assertEqual(balloon["status"], "collecting")
-        self.assertEqual(balloon["participants"], ["2", "3"])
-        self.assertEqual(balloon["organizer"], "1号提议")
-
-    def test_a_proposal_that_can_no_longer_pass_is_dropped(self):
-        game = arranged_game()
-        game["cards"]["arisa"]["alive"] = False
-        command(game, player(game, "1"), "balloon.propose", {"participants": ["2"]})
-        for sid in ("2", "3", "4", "5"):
-            command(game, player(game, sid), "balloon.decline", {})
-        self.assertIsNone(game["balloon_proposal"])
-        self.assertEqual(game["public"]["balloon"]["status"], "idle")
-
-    def test_a_listed_player_who_dies_mid_vote_is_dropped_instead_of_blocking(self):
-        """表决期间名单里的人出局：过半同意照常组织，只带存活者。"""
-        game = arranged_game()
-        game["cards"]["arisa"]["alive"] = False
-        command(game, player(game, "1"), "balloon.propose", {"participants": ["2", "3"]})
-        for card_id in game["seats"][1]["cards"]:
-            game["cards"][card_id]["alive"] = False
-        for sid in ("3", "4", "5"):
-            command(game, player(game, sid), "balloon.agree", {})
-        self.assertIsNone(game["balloon_proposal"])
-        balloon = game["public"]["balloon"]
-        self.assertEqual(balloon["status"], "collecting")
-        self.assertEqual(balloon["participants"], ["3"])
-        self.assertEqual(balloon["organizer"], "1号提议")
-
-    def test_a_proposal_whose_list_all_died_is_dropped(self):
-        game = arranged_game()
-        game["cards"]["arisa"]["alive"] = False
-        command(game, player(game, "1"), "balloon.propose", {"participants": ["2", "3"]})
-        for index in (1, 2):
-            for card_id in game["seats"][index]["cards"]:
-                game["cards"][card_id]["alive"] = False
-        command(game, player(game, "4"), "balloon.agree", {})
-        events = command(game, player(game, "5"), "balloon.agree", {})
-        self.assertIsNone(game["balloon_proposal"])
-        self.assertEqual(game["public"]["balloon"]["status"], "idle")
-        self.assertIn(
-            "作废", "".join(event["text"] for event in events if event["audience"] is None)
-        )
-
 
 class AutoAdvance(unittest.TestCase):
     """玩家行动完的阶段由系统倒计时推进；自由发言这类仍等主持人。"""
@@ -1632,13 +1555,13 @@ class AutoAdvance(unittest.TestCase):
             command(game, player(game, sid), "discussion.request_end", {})
         self.assertNotIn("auto_advance_at", game["public"])
         events = command(game, player(game, "6"), "discussion.request_end", {})
-        self.assertIn("10秒后自动进入热气球", "".join(e["text"] for e in events))
+        self.assertIn("10秒后自动进入提名", "".join(e["text"] for e in events))
         deadline = game["public"]["auto_advance_at"]
         self.assertIsNotNone(deadline)
         run_auto_advance(game, deadline - 1)
         self.assertEqual(game["phase"], "discussion")
         run_auto_advance(game, deadline + 1)
-        self.assertEqual(game["phase"], "balloon")
+        self.assertEqual(game["phase"], "nomination")
         self.assertEqual(game["discussion_end_requests"], [])
         # 同一席位不能重复提交。
         with self.assertRaises(GameError):
@@ -1651,7 +1574,6 @@ class NominationFlow(unittest.TestCase):
     def test_pre_nominations_confirm_themselves_when_the_phase_opens(self):
         game = arranged_game("discussion")
         command(game, player(game, "1"), "vote.nominate", {"target": "3"})
-        command(game, HOST, "host.advance", {})
         command(game, HOST, "host.advance", {})
         self.assertEqual(game["phase"], "nomination")
         self.assertEqual(game["nominations"][0]["by"], "1")

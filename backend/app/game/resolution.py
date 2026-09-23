@@ -145,6 +145,8 @@ def lock_night(game, events):
         action["title"] = f"{action['seat_id']}号 · {NIGHT_ABILITIES[ability][1]}"
         if action.get("resolved"):
             continue
+        # 夜间技能都不吃中毒效果骰，锁定后一律视为生效；信息类在下面的分支单独结算。
+        action["effective"] = True
         if ability == "witch_scan":
             cards = list(game["cards"].values())
             information(
@@ -155,9 +157,7 @@ def lock_night(game, events):
                 "；".join(f"{ROLES[c['role_id']]['name']}：{'魔女' if c['witch'] else '普通'}" for c in cards),
                 "；".join(f"{ROLES[c['role_id']]['name']}：{'普通' if c['witch'] else '魔女'}" for c in cards),
             )
-            action["effective"] = True
             continue
-        action["effective"] = effect_effective(game, events, card, NIGHT_ABILITIES[ability][1])
         if ability in {"extra_kill", "rain", "scapegoat"}:
             card["uses"][ability] = True
         if ability == "rain" and action["effective"]:
@@ -230,17 +230,11 @@ def damage_preview(game, attacks, protection=()):
 
 
 def millia_swap_effective(game):
-    """换血是否生效：每个半天只骰一次中毒判定，重算预结算不会重复掷骰。"""
+    """换血是否生效：米莉亚的换血与替死不吃中毒效果骰，选中即一直生效。"""
     swap = game.get("millia_swap")
     if not swap or not swap.get("seat"):
         return None
-    key = half_key(game)
-    if swap.get("key") != key:
-        swap["key"] = key
-        swap["effective"] = effect_effective(
-            game, [], role_card(game, "millia"), "代替死亡"
-        )
-    return swap if swap["effective"] else None
+    return swap
 
 
 def millia_substitute(game, attacks):
@@ -293,7 +287,7 @@ def prepare_night_preview(game):
     preview, dead = night_damage(game)
     night["preview"] = preview
     # 夜间预结算里希罗死亡时立即回溯到前一天顺序发言，不放主持人待办。
-    if "hiro" in dead and effect_effective(game, [], role_card(game, "hiro"), "时间回溯"):
+    if "hiro" in dead:
         hiro = role_card(game, "hiro")
         if not game["spiritual"]["hiro_used"]["witch" if hiro["witch"] else "normal"]:
             hiro_rewind(game, [], "night")

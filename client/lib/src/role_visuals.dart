@@ -74,13 +74,8 @@ class ActionIcons {
     'evidence.submit': Icons.attach_file_outlined,
   };
 
-  /// 自绘 SVG 的行动；覆盖 Material 表里语义不贴合的四个。
-  static const Map<String, AppSvg> svg = {
-    'balloon.choose': AppSvg.balloon,
-    'balloon.propose': AppSvg.balloon,
-    'balloon.agree': AppSvg.balloonCheck,
-    'balloon.decline': AppSvg.balloonCross,
-  };
+  /// 自绘 SVG 的行动；当前没有语义不贴合 Material 图标的行动，保留空表作为扩展位。
+  static const Map<String, AppSvg> svg = {};
 
   static const fallback = Icons.circle_outlined;
 
@@ -94,24 +89,12 @@ class ActionIcons {
 
 /// 自绘 SVG 图标。
 enum AppSvg {
-  /// 热气球。
-  balloon,
-
-  /// 热气球 + 对勾（同意名单）。
-  balloonCheck,
-
-  /// 热气球 + 叉（否决名单）。
-  balloonCross,
-
   /// 应用标志（月代雪立绘的替代图形，用于无图场景）。
   seal,
 }
 
 extension AppSvgPath on AppSvg {
   String get asset => switch (this) {
-        AppSvg.balloon => 'assets/icons/balloon.svg',
-        AppSvg.balloonCheck => 'assets/icons/balloon_check.svg',
-        AppSvg.balloonCross => 'assets/icons/balloon_cross.svg',
         AppSvg.seal => 'assets/icons/seal.svg',
       };
 }

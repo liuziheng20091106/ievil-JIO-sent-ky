@@ -977,7 +977,7 @@ class _PuppetNoticeCard extends StatelessWidget {
       );
 }
 
-/// 自由发言结束请求的公开进度；集满六个不同席位后系统 10 秒自动进入热气球。
+/// 自由发言结束请求的公开进度；集满六个不同席位后系统 10 秒自动进入提名。
 class _DiscussionProgressCard extends StatelessWidget {
   const _DiscussionProgressCard({required this.view});
   final GameView view;
@@ -995,7 +995,7 @@ class _DiscussionProgressCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   '已有 ${view.discussionEndRequests.length}/6 名玩家请求结束自由发言'
-                  '${view.autoAdvanceAt == null ? '；集满六人后 10 秒自动进入热气球' : '，将在 ${_deadlineText(view.autoAdvanceAt)} 自动进入热气球'}',
+                  '${view.autoAdvanceAt == null ? '；集满六人后 10 秒自动进入提名' : '，将在 ${_deadlineText(view.autoAdvanceAt)} 自动进入提名'}',
                   style: TextStyle(fontSize: 13, color: context.palette.text),
                 ),
               ),

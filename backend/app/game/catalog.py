@@ -47,8 +47,8 @@ CATALOG = [
         "id": "annan",
         "name": "安安",
         "avatar": "/assets/characters/夏目安安.png",
-        "normal": "投票时可秘密洗脑一人，令其必须弃票。无论阵营均可破坏热气球。只要诺亚是同席的下层牌或相邻席当前牌，这张牌中毒。",
-        "witch": "一次洗脑全场处决一人；次日失去投票权且必须被处刑。热气球胜利时无论阵营强制落败。",
+        "normal": "投票时可秘密洗脑一人，令其必须弃票。只要诺亚是同席的下层牌或相邻席当前牌，这张牌中毒。",
+        "witch": "一次洗脑全场处决一人；次日失去投票权且必须被处刑。",
     },
     {
         "id": "millia",
@@ -75,7 +75,7 @@ CATALOG = [
         "id": "arisa",
         "name": "亚里沙",
         "avatar": "/assets/characters/紫藤亚里沙.png",
-        "normal": "不能魔女化。白天可组织热气球；每夜可令环形左右邻座各以50%概率负伤一次。如果白天有对跳且没有在对跳里处决，即使你在下层也出局（主持人裁定）。",
+        "normal": "不能魔女化。每夜可令环形左右邻座各以50%概率负伤一次。如果白天有对跳且没有在对跳里处决，即使你在下层也出局（主持人裁定）。",
         "witch": "不能魔女化。",
     },
     {
@@ -112,7 +112,6 @@ PHASES = {
     "night_results": "夜间结果与证物",
     "speech": "顺序发言",
     "discussion": "自由发言",
-    "balloon": "热气球",
     "nomination": "提名",
     "voting": "投票",
     "execution": "处决前响应",
@@ -125,7 +124,6 @@ AUTO_PHASES = {
     "night",
     "night_coco",
     "speech",
-    "balloon",
     "nomination",
     "voting",
     "execution",
@@ -138,7 +136,7 @@ def night_half(game):
     return game["status"] == "playing" and game["half"] == "night"
 
 
-# 自由发言结束请求：六个不同席位提交后，10 秒自动进入热气球。
+# 自由发言结束请求：六个不同席位提交后，10 秒自动进入提名。
 DISCUSSION_END_VOTES = 6
 DISCUSSION_END_DELAY = 10
 DAY_ABILITIES = {
@@ -149,8 +147,12 @@ DAY_ABILITIES = {
     "gaze": ("nanoka", "处决幻视"),
     "spear": ("leia", "长矛"),
     "photo": ("coco", "赠送信物"),
-    "balloon": ("arisa", "组织热气球"),
 }
+# 仍会掷中毒效果骰的技能：只剩可可的「赠送信物」。
+# 其余技能一律不受中毒影响（魔女刀、全场攻击、额外攻击、庇护、下雨、替罪凶手、
+# 换血与替死、寻宝、令邻座负伤、打断发言、洗脑、爱人、长矛、临刑开枪、傀儡复活、
+# 时间回溯都不再掷骰）；信息类仍按信息骰决定真话还是假话。
+POISON_EFFECT_ABILITIES = {"photo"}
 NIGHT_ABILITIES = {
     "knife": (None, "魔女刀"),
     "massacre": ("emma", "全场攻击"),

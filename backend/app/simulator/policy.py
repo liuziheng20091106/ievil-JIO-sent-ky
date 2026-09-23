@@ -104,7 +104,6 @@ class HeuristicPolicy:
             self._nomination,
             self._voting,
             self._execution,
-            self._balloon,
             self._misc,
             self._puppet,
         ):
@@ -344,31 +343,6 @@ class HeuristicPolicy:
                 return Decision("execution.shoot", {"target": self.random.choice(options)}, "临刑开枪")
         return None
 
-    # ------------------------------------------------------------------ 热气球
-
-    def _balloon(self, client):
-        choose = client.action("balloon.choose")
-        if choose is not None:
-            options = option_values(choose, "choice")
-            pick = "make" if self.random.random() < 0.7 else "skip"
-            if pick not in options:
-                pick = options[0] if options else None
-            if pick:
-                return Decision("balloon.choose", {"choice": pick}, "热气球选择")
-        agree = client.action("balloon.agree")
-        decline = client.action("balloon.decline")
-        if agree is not None or decline is not None:
-            if self.random.random() < 0.6 and agree is not None:
-                return Decision("balloon.agree", {}, "同意名单")
-            if decline is not None:
-                return Decision("balloon.decline", {}, "拒绝名单")
-        propose = client.action("balloon.propose")
-        if propose is not None and self.random.random() < 0.3:
-            filled = self._fill(propose, {})
-            if filled is not None:
-                return Decision("balloon.propose", filled, "提议名单")
-        return None
-
     # ------------------------------------------------------------------ 傀儡
 
     def _puppet(self, client):
@@ -398,7 +372,6 @@ class HeuristicPolicy:
             self._nomination,
             self._voting,
             self._execution,
-            self._balloon,
         ):
             decision = chooser(client)
             if decision is not None:

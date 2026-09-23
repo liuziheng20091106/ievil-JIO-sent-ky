@@ -4,7 +4,7 @@ from copy import deepcopy
 from random import SystemRandom
 from uuid import uuid4
 
-from .catalog import NIGHT_ABILITIES, ROLES
+from .catalog import DAY_ABILITIES, NIGHT_ABILITIES, ROLES
 
 
 class GameError(ValueError):
@@ -322,7 +322,7 @@ def seat_operable(game, seat_id):
     """该席位的当前牌是否有人操作：傀儡需要主人仍在场代行，两张牌都出局则无人。
 
     用于「这个席位是否还值得等」的判断。比 card_actionable 宽：不检查技能与
-    no_ability，因此发言、热气球选择这类不看牌面技能的行动仍算可操作。
+    no_ability，因此发言这类不看牌面技能的行动仍算可操作。
     """
     card = current(game, seat_id)
     if card is None:
@@ -473,6 +473,33 @@ def upgrade_game(game):
         changed = True
     add(game, "millia_swap", None)
     add(game, "discussion_end_requests", [])
+    # 热气球玩法已整体移除：停在热气球阶段的旧局直接改判为提名，并清掉该玩法的
+    # 全部状态，否则旧阶段名与旧技能会在 PHASES／DAY_ABILITIES 里查表失败。
+    if game.get("phase") == "balloon":
+        game["phase"] = "nomination"
+        changed = True
+    for key in ("balloon_choices", "balloon_proposal"):
+        if key in game:
+            game.pop(key)
+            changed = True
+    if "balloon" in public:
+        public.pop("balloon")
+        changed = True
+    legacy_balloons = [
+        declaration
+        for declaration in game.get("declarations", [])
+        if declaration.get("ability") not in DAY_ABILITIES
+    ]
+    if legacy_balloons:
+        game.setdefault("legacy_declarations", []).extend(legacy_balloons)
+        dropped = {declaration["id"] for declaration in legacy_balloons}
+        game["declarations"] = [
+            declaration for declaration in game["declarations"] if declaration["id"] not in dropped
+        ]
+        public["declarations"] = [
+            item for item in public.get("declarations", []) if item.get("id") not in dropped
+        ]
+        changed = True
     # 夜间死亡的下层登场、希罗选择与13水裁定改为系统自动处理，旧待办直接作废。
     stale_kinds = {"lower_entry", "hiro", "water"}
     if any(p.get("kind") in stale_kinds for p in game.get("pending", [])):
@@ -541,14 +568,11 @@ def create_game(codex):
         "public": {
             "speaker": None,
             "speech_order": [],
-            "balloon": {"progress": 0, "participants": [], "day": 0, "status": "idle"},
             "votes": {},
             "declarations": [],
             "achievements_enabled": True,
             "rewinds": 0,
         },
-        "balloon_choices": {},
-        "balloon_proposal": None,
         "nominations": [],
         "speech_passed": [],
         "speech_queued": {},
@@ -712,10 +736,8 @@ def check_winner(game):
     )
 
 
-def finish(game, events, winner, reason, balloon=False):
+def finish(game, events, winner, reason):
     losses = list(game["spiritual"]["personal_losses"])
-    if balloon:
-        losses.extend(audience(game, [owner(game, "annan")["id"]]))
     personal = []
     if game["spiritual"]["sherry_bound"]:
         hanna_side = "witch" if role_card(game, "hanna")["witch"] else "good"

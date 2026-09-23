@@ -37,7 +37,6 @@ Color actionTint(BuildContext context, String group, {bool danger = false}) {
     '开局' || '准备' => context.palette.host,
     '私密管理' || '私密信息' => context.palette.host,
     '投票' => context.palette.accent,
-    '热气球' => context.palette.info,
     '房间管理' => context.palette.textSecondary,
     '私信' => context.palette.info,
     '流程' => context.palette.accent,

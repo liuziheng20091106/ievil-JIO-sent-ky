@@ -200,7 +200,6 @@ export interface GameView {
     night_actions?: NightAction[];
     water?: boolean;
     vote?: string | null;
-    balloon_choice?: string | null;
     warning_deadline?: number | null;
     honoka_upper?: { seat_id: string; name: string; role_id: string }[];
     statuses?: StatusCard[];
@@ -239,12 +238,6 @@ export interface GameView {
     }[];
     votes?: Record<string, string>;
     photos?: HostPhoto[];
-    balloon_choices?: Record<string, string>;
-    balloon_proposal?: {
-      by: string;
-      participants: string[];
-      votes: Record<string, boolean>;
-    } | null;
     brainwash?: Record<string, string>;
     water?: { holders: string[] };
     discussion_end_requests?: string[];
