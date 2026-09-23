@@ -1361,7 +1361,11 @@ class MessageBubble extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap:
                   onAvatar == null ? null : () => onAvatar!(message.senderId),
-              child: RoleAvatar(roleId: message.avatarRoleId, size: 38),
+              child: RoleAvatar(
+                roleId: message.avatarRoleId,
+                host: message.senderId == 'host',
+                size: 38,
+              ),
             ),
             const SizedBox(width: AppSpacing.sm),
           ],

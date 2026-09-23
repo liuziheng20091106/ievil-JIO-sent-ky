@@ -452,7 +452,12 @@ Future<void> showAvatarMenu(
             ),
             child: Row(
               children: [
-                RoleAvatar(roleId: ref.roleId, size: 44, dead: ref.dead),
+                RoleAvatar(
+                  roleId: ref.roleId,
+                  host: ref.isHost,
+                  size: 44,
+                  dead: ref.dead,
+                ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
                   child: Column(

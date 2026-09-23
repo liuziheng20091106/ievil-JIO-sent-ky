@@ -35,4 +35,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsOneWidget);
   });
+
+  // 需求：对局中主持人头像始终是月代雪，大厅则随机一个角色头像。
+  test('大厅随机头像取自真实有立绘的角色牌', () async {
+    final bytes = await rootBundle.load(hostAvatarAsset);
+    expect(bytes.lengthInBytes, greaterThan(1000), reason: '主持人立绘缺失');
+    final pool = {for (final role in roleVisuals) if (role.hasArt) role.id};
+    expect(pool, isNotEmpty);
+    expect(pool.contains(lobbyAvatarRoleId), isTrue,
+        reason: '大厅随机头像必须是真实角色，不能落到占位图');
+  });
+
+  testWidgets('主持人头像渲染月代雪立绘而不是占位', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+          home: Scaffold(
+              body: Center(
+                  child: RoleAvatar(roleId: 'host', host: true, size: 64)))),
+    );
+    await tester.pumpAndSettle();
+    final image = tester.widget<Image>(find.byType(Image));
+    expect((image.image as AssetImage).assetName, hostAvatarAsset);
+  });
 }

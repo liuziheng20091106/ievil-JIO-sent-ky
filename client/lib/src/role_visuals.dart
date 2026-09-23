@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import 'design.dart';
@@ -136,7 +138,21 @@ RoleVisual? roleVisual(String? roleId) {
   return null;
 }
 
-/// 角色圆形头像；无立绘时用名称首字占位。
+/// 对局中主持人的固定头像：月代雪立绘，与应用标志同一张图。
+const hostAvatarAsset = 'assets/logo.png';
+
+/// 大厅里主持人那一行的头像：每次启动应用从有立绘的角色牌里随机挑一张。
+///
+/// 主持人只在对局中固定成月代雪（见 [RoleAvatar.host]），大厅阶段顶一个随机
+/// 角色立绘；其他身份在大厅仍是中性占位，不借角色图暗示未公开的身份。
+final String lobbyAvatarRoleId = _pickLobbyAvatarRoleId();
+
+String _pickLobbyAvatarRoleId() {
+  final pool = [for (final role in roleVisuals) if (role.hasArt) role.id];
+  return pool[Random().nextInt(pool.length)];
+}
+
+/// 角色圆形头像；无立绘时用名称首字占位，[host] 为真时固定月代雪。
 class RoleAvatar extends StatelessWidget {
   const RoleAvatar({
     super.key,
@@ -144,6 +160,7 @@ class RoleAvatar extends StatelessWidget {
     this.size = 40,
     this.dead = false,
     this.border,
+    this.host = false,
   });
 
   final String? roleId;
@@ -151,19 +168,30 @@ class RoleAvatar extends StatelessWidget {
   final bool dead;
   final BoxBorder? border;
 
+  /// 主持人头像：对局中始终显示月代雪，与消息里的 `avatar_role_id == host` 对应。
+  final bool host;
+
   @override
   Widget build(BuildContext context) {
     final role = roleVisual(roleId);
-    final content = role == null || !role.hasArt
+    final asset = host
+        ? hostAvatarAsset
+        : role != null && role.hasArt
+            ? role.avatarAsset
+            : null;
+    final fallback = host
+        ? '月'
+        : role == null
+            ? '?'
+            : String.fromCharCodes(role.name.runes.take(1));
+    final content = asset == null
         ? Container(
             width: size,
             height: size,
             alignment: Alignment.center,
             color: context.palette.surfaceStrong,
             child: Text(
-              role == null
-                  ? '?'
-                  : String.fromCharCodes(role.name.runes.take(1)),
+              fallback,
               style: TextStyle(
                 fontSize: size * 0.4,
                 fontWeight: FontWeight.w600,
@@ -172,7 +200,7 @@ class RoleAvatar extends StatelessWidget {
             ),
           )
         : Image.asset(
-            role.avatarAsset,
+            asset,
             width: size,
             height: size,
             fit: BoxFit.cover,
@@ -182,7 +210,7 @@ class RoleAvatar extends StatelessWidget {
               color: context.palette.surfaceStrong,
               alignment: Alignment.center,
               child: Text(
-                role.name.characters.first,
+                fallback,
                 style: TextStyle(
                     fontSize: size * 0.4, color: context.palette.textSecondary),
               ),

@@ -617,10 +617,13 @@ class _LobbyPageState extends State<LobbyPage> {
           children: [
             Row(
               children: [
-                // 主持人就是月代雪，直接用应用标志那张立绘。
-                store.actor!.isHost
-                    ? const AppLogo(size: 48)
-                    : const RoleAvatar(roleId: null, size: 48),
+                // 大厅里不摆主持人的月代雪立绘：主持人先顶一张随机角色头像，
+                // 对局中才固定月代雪（见 RoleAvatar.host）。其他身份在大厅仍是
+                // 中性占位，避免用某张角色立绘暗示尚未公开的身份。
+                RoleAvatar(
+                  roleId: store.actor!.isHost ? lobbyAvatarRoleId : null,
+                  size: 48,
+                ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
                   child: Column(
