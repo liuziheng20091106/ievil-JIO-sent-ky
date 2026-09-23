@@ -392,6 +392,20 @@ def witness_suspects(game, victim_role):
     return suspects + pool[: 4 - len(suspects)]
 
 
+def false_witness(game, suspects, shown_source):
+    """中毒信息失败时发出去的假目击名单：把显示真凶换成一名未入选角色。
+
+    汉娜按规则始终在名单里，真凶就是汉娜时给不出不含真凶的名单，只能原样保留。
+    """
+    if not shown_source or shown_source == "hanna" or shown_source not in suspects:
+        return list(suspects)
+    pool = [role for role in ROLES if role not in suspects]
+    if not pool:
+        return list(suspects)
+    SystemRandom().shuffle(pool)
+    return [pool[0] if role == shown_source else role for role in suspects]
+
+
 def death_batch(game, events, preview):
     for cid, injured in preview["injured"].items():
         game["cards"][cid]["injured"] = injured
@@ -408,6 +422,13 @@ def death_batch(game, events, preview):
             "previous_role_id": fallen_upper_role(game, s),
             "alive": current(game, s) is not None,
         }
+        # 四人目击是发给死者的信息：死者中毒时同样只掷一次信息骰，各1/2生效；
+        # 必须在判定出局前掷，否则出局后艾玛邻接毒源会随当前牌变化而失效。
+        witness_truthful = True
+        if game["half"] == "night":
+            witness_truthful = effect_effective(
+                game, events, card, "夜间目击名单", reveal=False
+            )
         card["alive"] = False
         if cid in {"sherry", "hanna"} and game.get("day_binding"):
             game["day_binding"]["intact"] = False
@@ -452,21 +473,28 @@ def death_batch(game, events, preview):
             game["queued_reveals"].append(before)
             if suffixed:
                 # 未隐藏的13水死亡：直接构造并随机排序四人目击，无需主持人待办。
+                suspects = witness_suspects(game, src)
+                if not witness_truthful:
+                    suspects = false_witness(game, suspects, src)
                 publish_witness(
                     game,
                     events,
                     {"seat_id": s["id"], "victim": cid, "death_id": record["id"]},
-                    witness_suspects(game, src),
+                    suspects,
                 )
             else:
+                title = f"{s['id']}号夜间死者：填写四名疑似凶手（真凶、汉娜及额外两人）"
+                if not witness_truthful:
+                    title += "；本夜死者中毒、目击信息骰失败，发给他的名单不含真凶"
                 pending(
                     game,
                     "suspects",
-                    f"{s['id']}号夜间死者：填写四名疑似凶手（真凶、汉娜及额外两人）",
+                    title,
                     seat_id=s["id"],
                     death_id=record["id"],
                     victim=cid,
                     source_card=source,
+                    truthful=witness_truthful,
                 )
         else:
             notify(game, events, notice, alert=True)

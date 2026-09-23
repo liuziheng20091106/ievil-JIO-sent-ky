@@ -27,6 +27,7 @@ from .resolution import (
     day_damage_preview,
     death_batch,
     eliminate_seat,
+    false_witness,
     information,
     lock_night,
     prepare_night_preview,
@@ -749,6 +750,9 @@ def resolve_pending(game, events, data):
         )
         require("hanna" in suspects, "名单必须包含汉娜")
         require(not shown_source or shown_source in suspects, "名单必须包含技能处理后的真凶")
+        if not item.get("truthful", True):
+            # 死者中毒、目击信息骰失败：主持人照常填含真凶的完整名单，发出去的是假名单。
+            suspects = false_witness(game, suspects, shown_source)
         if "honoka" in suspects and game["cards"]["honoka"]["witch"]:
             pending(
                 game,

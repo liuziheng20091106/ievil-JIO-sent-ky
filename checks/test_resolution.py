@@ -355,6 +355,50 @@ class ResolutionEdges(unittest.TestCase):
         others = game_view(game, player(game, "2"))["information"]
         self.assertFalse([item for item in others if item["title"] != "魔女化命运"])
 
+    def test_poisoned_victims_witness_list_hides_the_killer_half_the_time(self):
+        """死者中毒时目击是中毒信息：信息骰失败给出不含真凶的名单，生效才含真凶。"""
+        for roll, killer_shown in ((0, True), (1, False)):
+            game = arranged_game("night_review", "night")
+            game["cards"]["noah"]["states"]["poisoned"] = True
+            preview = damage_preview(
+                game, [{"target_card": "noah", "source_card": "coco", "cause": "knife"}]
+            )
+            with patch("backend.app.game.state.SystemRandom") as random:
+                random.return_value.randrange.return_value = roll
+                death_batch(game, [], preview)
+            item = next(p for p in game["pending"] if p["kind"] == "suspects")
+            self.assertEqual(item["truthful"], killer_shown)
+            command(
+                game,
+                HOST,
+                "host.resolve",
+                {"pending_id": item["id"], "suspects": ["hanna", "coco", "emma", "leia"]},
+            )
+            text = game["witness"]["text"]
+            names = text.removeprefix("四名疑似凶手：").split("、")
+            self.assertEqual(len(names), 4)
+            self.assertEqual(len(set(names)), 4)
+            self.assertIn("汉娜", names)
+            self.assertEqual("可可" in names, killer_shown)
+            # 中毒骰只写主持人日志，不发给死者。
+            self.assertFalse(
+                [e for e in game["information"] if e["title"] == "中毒判定"]
+            )
+
+    def test_poisoned_water_victim_can_get_a_list_without_the_water_user(self):
+        game = arranged_game("night", "night")
+        game["water"]["holders"] = ["1"]
+        command(game, player(game, "1"), "water.use", {"target": "3"})
+        game["cards"]["meruru"]["states"]["poisoned"] = True
+        lock_night(game, [])
+        with patch("backend.app.game.state.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1
+            command(game, HOST, "host.advance")
+        names = game["witness"]["text"].removeprefix("四名疑似凶手：").split("、")
+        self.assertEqual(len(names), 4)
+        self.assertEqual(len(set(names)), 4)
+        self.assertNotIn("米莉亚", names)
+
     def test_millia_substitution_lasts_through_the_next_day_but_not_execution(self):
         # 换血目标持久保存：白天普通伤害仍由米莉亚代死，处刑不走替死。
         game = arranged_game("discussion", "day")
