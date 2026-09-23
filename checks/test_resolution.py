@@ -13,7 +13,7 @@ from backend.app.game import (
     game_view,
     run_auto_advance,
 )
-from backend.app.game.actions import actions_for, outstanding_seats
+from backend.app.game.actions import actions_for, challengeable, outstanding_seats
 from backend.app.game.resolution import (
     begin_night,
     damage_preview,
@@ -157,6 +157,75 @@ class PoisonAndDeclarations(unittest.TestCase):
         )
         self.assertIn("millia", game["execution"])
         self.assertNotIn("annan", game["spiritual"]["annan_penalty"])
+
+    def test_gaze_reports_whether_todays_execution_list_holds_a_witch(self):
+        game = arranged_game("execution")
+        # 默认发牌里艾玛在1号席，与7号席的奈乃香环形相邻，先移除这个毒源。
+        game["cards"]["emma"]["alive"] = False
+        game["execution"] = ["millia"]
+        events = command(game, player(game, "7"), "day.skill", {"ability": "gaze"})
+        self.assertEqual(
+            [e["text"] for e in events if e["title"] == "处决幻视"],
+            ["本日处决名单不含魔女。"],
+        )
+
+        game = arranged_game("execution")
+        game["cards"]["emma"]["alive"] = False
+        game["cards"]["millia"]["witch"] = True
+        game["execution"] = ["millia", "coco"]
+        events = command(game, player(game, "7"), "day.skill", {"ability": "gaze"})
+        self.assertEqual(
+            [e["text"] for e in events if e["title"] == "处决幻视"],
+            ["本日处决名单含有魔女。"],
+        )
+        self.assertEqual(game["cards"]["nanoka"]["uses"]["gaze_day"], game["day"])
+        # 处决名单进入新白天即清空，幻视只回答当天名单。
+        fresh = arranged_game("night_results", "night")
+        fresh["cards"]["hanna"]["witch"] = True
+        fresh["execution"] = ["hanna"]
+        apply_command(fresh, HOST, "host.advance", {})
+        self.assertEqual(fresh["execution"], [])
+
+    def test_poisoned_gaze_always_answers_and_may_lie(self):
+        for roll, expected in ((0, "本日处决名单含有魔女。"), (1, "本日处决名单不含魔女。")):
+            game = arranged_game("execution")
+            game["cards"]["nanoka"]["states"]["poisoned"] = True
+            game["cards"]["hanna"]["witch"] = True
+            game["execution"] = ["hanna"]
+            with patch("backend.app.game.state.SystemRandom") as random:
+                random.return_value.randrange.return_value = roll
+                events = command(game, player(game, "7"), "day.skill", {"ability": "gaze"})
+            # 中毒的奈乃香一定拿到一条结果、声明不算假，但不会被告知掷骰结果。
+            self.assertFalse(game["declarations"][-1]["fake"])
+            self.assertEqual([e["text"] for e in events if e["title"] == "处决幻视"], [expected])
+            self.assertFalse([e for e in events if e["title"] == "中毒判定"])
+            self.assertIn("poison", [entry["kind"] for entry in game["log"]])
+
+    def test_gaze_cannot_be_faked_or_challenged(self):
+        game = arranged_game("execution")
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        game["cards"]["honoka"]["states"]["disguise"] = "nanoka"
+        fake = player(game, "7")
+        offered = [
+            item["label"] for item in actions_for(game, fake) if item["id"] == "day.skill"
+        ]
+        self.assertNotIn("声称处决幻视", offered)
+        with self.assertRaises(GameError):
+            command(game, fake, "day.skill", {"ability": "gaze"})
+
+        real = arranged_game("execution")
+        real["execution"] = ["hanna"]
+        command(real, player(real, "7"), "day.skill", {"ability": "gaze"})
+        declaration = real["declarations"][-1]
+        self.assertFalse(declaration["fake"])
+        self.assertFalse(challengeable(real, declaration))
+        with self.assertRaises(GameError):
+            command(
+                real,
+                player(real, "1"),
+                "day.challenge",
+                {"declaration_id": declaration["id"]},
+            )
 
 
 class NewNightRules(unittest.TestCase):

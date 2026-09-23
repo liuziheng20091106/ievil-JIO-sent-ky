@@ -26,7 +26,12 @@ from .state import (
 
 def information(game, events, card, title, truth, false_text, image_id=None):
     sid = owner(game, card["id"])["id"]
-    text = truth if effect_effective(game, events, card, f"信息：{title}") else false_text
+    # 中毒只影响这条信息是真是假，不告诉本人掷骰结果（主持人日志里仍有中毒骰）。
+    text = (
+        truth
+        if effect_effective(game, events, card, f"信息：{title}", reveal=False)
+        else false_text
+    )
     notify(game, events, text, [sid], title, image_id)
 
 def witch_information(game, events):

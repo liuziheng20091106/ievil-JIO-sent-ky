@@ -662,6 +662,21 @@ def execute_declaration(game, events, declaration):
     data = declaration["data"]
     cid, sid, ability = declaration["card_id"], declaration["seat_id"], declaration["ability"]
     card = game["cards"][cid]
+    if ability == "gaze":
+        # 处决幻视在处决阶段由奈乃香本人发动，不能伪装，也不判定技能失败：
+        # 中毒时本人必定收到一条结果，由 information() 单掷一次信息骰决定真话还是假话。
+        card["uses"]["gaze_day"] = game["day"]
+        truth = any(game["cards"][target_id]["witch"] for target_id in game["execution"])
+        information(
+            game,
+            events,
+            card,
+            "处决幻视",
+            f"本日处决名单{'含有' if truth else '不含'}魔女。",
+            f"本日处决名单{'不含' if truth else '含有'}魔女。",
+        )
+        declaration["executed"] = True
+        return
     if not declaration["fake"] and not effect_effective(game, events, card, DAY_ABILITIES[ability][1]):
         declaration["fake"] = True
         declaration["executed"] = True
@@ -683,17 +698,6 @@ def execute_declaration(game, events, declaration):
     elif ability == "love":
         card["uses"]["love_day"] = game["day"]
         game["marg_love"] = {"seat_id": target, "day": game["day"]}
-    elif ability == "gaze":
-        card["uses"]["gaze_day"] = game["day"]
-        truth = any(game["cards"][target_id]["witch"] for target_id in game["execution"])
-        information(
-            game,
-            events,
-            card,
-            "处决幻视",
-            f"本日处决名单{'含有' if truth else '不含'}魔女。",
-            f"本日处决名单{'不含' if truth else '含有'}魔女。",
-        )
     elif ability == "spear":
         card["uses"]["spear_day"] = game["day"]
         apply_damage(
@@ -1242,7 +1246,9 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         game["declarations"].append(declaration)
         execute_declaration(game, events, declaration)
         sync_declarations(game)
-        suffix = "该技能不可质疑。" if ability in {"photo", "love"} else "其他玩家可质疑。"
+        suffix = (
+            "该技能不可质疑。" if ability in {"photo", "love", "gaze"} else "其他玩家可质疑。"
+        )
         notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，{suffix}", alert=True)
     elif action == "day.challenge":
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])

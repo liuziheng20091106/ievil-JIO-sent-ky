@@ -379,16 +379,21 @@ def claimable(role):
 
 
 def challengeable(game, declaration):
-    """除信物与爱以外，所有开放的白天技能声明均可质疑。"""
-    return declaration["ability"] not in {"photo", "love"}
+    """除信物、爱人选择与处决幻视以外，所有开放的白天技能声明均可质疑。
+
+    处决幻视属于处决阶段的临刑技能，不能伪装发动，因此没有可质疑的真假。
+    """
+    return declaration["ability"] not in {"photo", "love", "gaze"}
 
 def day_fake_allowed(game, card, ability):
+    # 处决幻视只能由奈乃香本人在处决阶段发动，不存在伪装声明。
+    if ability == "gaze":
+        return False
     phase = game["phase"]
     phases = {
         "brainwash": {"voting"},
         "mass_brainwash": {"discussion", "nomination", "voting"},
         "interrupt": {"speech", "discussion"},
-        "gaze": {"execution"},
     }.get(ability, {"speech", "discussion", "balloon", "nomination", "voting"})
     shown = card["states"].get("disguise") if card["id"] == "honoka" else card["role_id"]
     if phase not in phases or ability not in claimable(shown):
