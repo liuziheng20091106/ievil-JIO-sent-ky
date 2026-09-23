@@ -195,12 +195,13 @@ def status_cards(game, own):
     destiny = game["public"].get("witch_destiny")
     if destiny and game["status"] != "lobby" and int(own["id"]) <= len(destiny["seats"]):
         will = destiny["seats"][int(own["id"]) - 1]
-        add(
-            "witch_destiny",
-            "danger" if will else "info",
-            "魔女化命运",
-            "本局你会魔女化。" if will else "本局你不会魔女化。",
-        )
+        faction = list(destiny.get("first", []))
+        if own["id"] in faction:
+            # A、B 是魔女阵营：本人的那一份要说清是哪一天当值，而不是笼统的「会魔女化」。
+            text = f"你是魔女阵营：第{faction.index(own['id']) + 1}天你的当前牌会魔女化。"
+        else:
+            text = "本局你会魔女化。" if will else "本局你不会魔女化。"
+        add("witch_destiny", "danger" if will else "info", "魔女化命运", text)
     protected = next(
         (card for card in cards if card["states"].get("treasure_protected_day", -1) >= game["day"]),
         None,

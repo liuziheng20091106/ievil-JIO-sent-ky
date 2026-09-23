@@ -45,6 +45,46 @@ def present(game, role):
     return c["alive"] and current(game, owner(game, c["id"])) == c
 
 
+def witch_faction(game):
+    """开局抽定的魔女阵营：A、B 两个命运席位，A 第1天当值、B 第2天当值。
+
+    胜负只看这两个席位是否整席出局，因此这里保存的是席位号而不是牌。
+    """
+    destiny = game["public"].get("witch_destiny") or {}
+    return list(destiny.get("first", []))
+
+
+def sherry_bound_now(game):
+    """雪莉对汉娜的绑定此刻是否仍然成立；任一张牌出局即视为已经解绑。"""
+    return (
+        game["spiritual"]["sherry_bound"]
+        and role_card(game, "sherry")["alive"]
+        and role_card(game, "hanna")["alive"]
+    )
+
+
+def hanna_witch_window(game):
+    """「汉娜魔化」开关只在第三天入夜前可调；第三天当晚的检测尚未结算时仍可补开。"""
+    return game["status"] == "playing" and (
+        game["day"] < 3 or (game["day"] == 3 and game["phase"] == "witch")
+    )
+
+
+def hanna_witch_override(game):
+    """第三天夜里汉娜是否覆盖当天魔女人选。
+
+    开关为开、汉娜在场上、汉娜曾经和雪莉绑定过、当前已经解绑、艾玛不在场，
+    五条同时成立时由汉娜魔女化，顶掉魔女阵营 A、B 的补位。
+    """
+    return (
+        bool(game.get("hanna_witch"))
+        and role_card(game, "hanna")["alive"]
+        and game["spiritual"]["sherry_bound"]
+        and not sherry_bound_now(game)
+        and not role_card(game, "emma")["alive"]
+    )
+
+
 def player_seat(game, actor):
     require(
         actor.get("kind") == "player" and actor.get("game_id") == game["id"], "没有玩家操作权限"
@@ -333,9 +373,9 @@ def deal_cards(game):
     for i, s in enumerate(game["seats"]):
         s["cards"] = order[i * 2 : i * 2 + 2]
         s["ready"] = False
-    # 开局即定本局命运：前两天各一名魔女（不同席位），第三天魔女是前两天魔女
-    # 各自另一张牌（同席）。艾玛所在席位、以及另一牌是米莉亚或亚里沙的席位，
-    # 前两天都不能被魔女化，命运席位从其余席位里抽。
+    # 开局即定本局魔女阵营：A、B 两个不同的命运席位。第1天 A 的当前牌魔女化，
+    # 第2天 B 的当前牌魔女化，第3天由 A、B 中可选的一位接替。艾玛所在席位、
+    # 以及另一牌是米莉亚或亚里沙的席位不能进命运，从其余席位里抽。
     emma_seat = order.index("emma") // 2
     ineligible = {
         i
@@ -346,7 +386,8 @@ def deal_cards(game):
     first = rng.sample(eligible_seats, 2) if len(eligible_seats) >= 2 else eligible_seats
     # 艾玛席第三天必定魔女化（艾玛存活时），因此对当事人也必须预告会魔女化。
     # 这里只写入逐席布尔值：客户端只读自己那一位，不再单独下发艾玛席号，
-    # 否则调序阶段就会把「哪一席是艾玛」提前公开。
+    # 否则调序阶段就会把「哪一席是艾玛」提前公开。first 是按当值顺序排列的
+    # 魔女阵营 A、B 席位，胜负与第三天补位都读它。
     destiny = [i in first or i == emma_seat for i in range(7)]
     game["public"]["witch_destiny"] = {
         "seats": destiny,
@@ -377,6 +418,8 @@ def upgrade_game(game):
         "extra_attacks": [],
     }.items():
         add(night, key, value)
+    # 「汉娜魔化」是主持人开关，默认关闭；旧局补齐为关。
+    add(game, "hanna_witch", False)
     legacy_actions = [action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES]
     if legacy_actions:
         night.setdefault("legacy_actions", []).extend(legacy_actions)
@@ -529,12 +572,23 @@ def create_game(codex):
         "winner_candidate": None,
         "day_binding": None,
         "witch_checked_day": None,
+        # 「汉娜魔化」主持人开关，默认关闭；只在第三天入夜前可改。
+        "hanna_witch": False,
     }
 
 
 # Only mechanical time is restored; occupant identity, public persona, and received
 # information belong to real time. Seven seats make a JSON copy simpler than diffs.
-SNAPSHOT_EXCLUDED = {"id", "version", "snapshots", "information", "spiritual", "seats"}
+# 主持人的「汉娜魔化」开关属于规则设置，不随回溯被改回，因此也不进快照。
+SNAPSHOT_EXCLUDED = {
+    "id",
+    "version",
+    "snapshots",
+    "information",
+    "spiritual",
+    "seats",
+    "hanna_witch",
+}
 
 
 def fallen_upper_role(game, seat):
@@ -630,8 +684,10 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
 
 
 def check_winner(game):
-    active_witches = [c for c in game["cards"].values() if c["alive"] and c["witch"]]
-    good = bool(game["generated_witches"]) and not active_witches
+    # 好人必须在魔女阵营的两个命运席位（A、B）都整席出局时才获胜：
+    # 单张魔女牌出局不算，A、B 的另一张牌仍能按第三天规则再魔女化。
+    faction = witch_faction(game)
+    good = bool(faction) and all(current(game, seat(game, sid)) is None for sid in faction)
     evil = not role_card(game, "millia")["alive"] and not role_card(game, "arisa")["alive"]
     winner = (
         ("good" if game["half"] == "day" else "witch")
@@ -647,7 +703,7 @@ def check_winner(game):
             "winner": winner,
             "reason": "双方同一半天达成条件，白天好人优先、夜晚魔女优先"
             if good and evil
-            else "所有魔女牌出局"
+            else "魔女阵营A、B两席出局"
             if good
             else "米莉亚与亚里沙均出局",
         }

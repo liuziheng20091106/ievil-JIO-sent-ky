@@ -16,6 +16,7 @@ from .state import (
     controlled_cards,
     current,
     eligible_voters,
+    hanna_witch_window,
     living,
     lost_by_challenge,
     pending_nominators,
@@ -43,6 +44,7 @@ SHORT_LABELS = {
     "host.information": "发信息",
     "host.madness": "疯狂",
     "host.codex_order": "典序",
+    "host.hanna_witch": "汉娜化",
     "host.rewind": "回溯",
     "host.confirm_winner": "宣判",
     "host.surrender": "交牌",
@@ -91,6 +93,7 @@ DESCRIPTIONS = {
     "host.information": "向全员或指定席位发放信息与照片；不公开时只有选中的席位能看到。",
     "host.madness": "对某个席位的疯狂行为发起裁定，随后由主持人选择警告、符合要求或执行不利裁定。",
     "host.codex_order": "手动指定11名角色的最终顺序，用于特殊裁定。",
+    "host.hanna_witch": "「汉娜魔化」默认关闭：开启后第三天夜里满足条件时由汉娜覆盖当天魔女人选，只在第三天入夜前可改。",
     "host.rewind": "回溯到指定快照时间点，并额外保留精神系状态；希罗的固定回溯由系统自动处理，这里只用于其他特殊裁定。",
     "host.confirm_winner": "本半天全部同时出局与连锁都处理完后确认宣判，按已达成的条件结束对局。",
     "host.surrender": "审阅交牌：好人交牌需全员分别私信同意，魔女交牌仅在只剩可可且本人申请时成立。",
@@ -566,6 +569,25 @@ def host_actions(game):
                 action(
                     "host.auto",
                     "恢复自动推进" if paused else "暂停自动推进",
+                    group="流程",
+                )
+            )
+        if hanna_witch_window(game):
+            # 默认关闭的主持人开关：只在第三天入夜前可改，标签上直接显示当前状态。
+            enabled = bool(game.get("hanna_witch"))
+            result.append(
+                action(
+                    "host.hanna_witch",
+                    "汉娜魔化：已开启" if enabled else "汉娜魔化：已关闭",
+                    [
+                        field(
+                            "value",
+                            "开关（第三天入夜前可改）",
+                            "select",
+                            [("on", "开启"), ("off", "关闭")],
+                            default="on" if enabled else "off",
+                        )
+                    ],
                     group="流程",
                 )
             )

@@ -4,10 +4,22 @@ import unittest
 
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
 from backend.app.game.actions import actions_for
-from backend.app.game.state import DEAL_EXCLUDED_PAIRS, upgrade_game
+from backend.app.game.state import DEAL_EXCLUDED_PAIRS, check_winner, upgrade_game
 
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
+
+# 固定摆牌：1号是艾玛席（当前牌可可）、2号是另一个可转化席位，方便逐条核对
+# 「艾玛优先 / 魔女阵营 A、B 补位 / 汉娜覆盖」三种第三天人选。
+STAGED_PAIRS = [
+    ["coco", "emma"],
+    ["hiro", "millia"],
+    ["leia", "arisa"],
+    ["marg", "sherry"],
+    ["meruru", "hanna"],
+    ["noah", "annan"],
+    ["nanoka", "honoka"],
+]
 
 
 def players(game):
@@ -249,6 +261,197 @@ class SetupRules(unittest.TestCase):
         codex[-1] = codex[0]
         with self.assertRaises(GameError):
             create_game(codex)
+
+
+def staged_game(day=3, half="night", phase="witch", faction=("1", "2")):
+    """摆好一局可判定的中盘：固定牌面，并指定 A、B 两个魔女阵营席位。"""
+    game = create_game(DEFAULT_CODEX)
+    actors = players(game)
+    for actor in actors:
+        apply_command(game, actor, "lobby.ready", {})
+    for actor in actors:
+        apply_command(game, actor, "lobby.ready", {})
+    apply_command(game, HOST, "host.start", {})
+    for seat, pair in zip(game["seats"], STAGED_PAIRS):
+        seat["cards"] = list(pair)
+    for card in game["cards"].values():
+        card["alive"] = True
+        card["witch"] = False
+    game.update(day=day, half=half, phase=phase, witch_checked_day=None, pending=[])
+    game["public"]["witch_destiny"] = {
+        "seats": [s["id"] in faction or "emma" in s["cards"] for s in game["seats"]],
+        "first": list(faction),
+    }
+    return game
+
+
+class WitchFactionRules(unittest.TestCase):
+    """魔女阵营判定：开局告知、三天人选、汉娜魔化开关与好人胜利条件。"""
+
+    def test_the_deal_tells_the_two_faction_seats_their_duty_day(self):
+        game = create_game(DEFAULT_CODEX)
+        actors = players(game)
+        for actor in actors[:-1]:
+            apply_command(game, actor, "lobby.ready", {})
+        events = apply_command(game, actors[-1], "lobby.ready", {})
+        faction = game["public"]["witch_destiny"]["first"]
+        self.assertEqual(len(faction), 2)
+        self.assertEqual(len(set(faction)), 2)
+        notices = {
+            e["audience"][0]: e["text"]
+            for e in events
+            if e.get("title") == "魔女化命运" and e.get("audience")
+        }
+        for index, seat_id in enumerate(faction):
+            occupant = "participant-" + seat_id
+            self.assertEqual(notices[occupant], f"你是魔女阵营：第{index + 1}天你的当前牌会魔女化。")
+        # 非阵营席位照旧只知道自己会不会魔女化，不会看到「魔女阵营」这四个字。
+        faction_occupants = {"participant-" + seat_id for seat_id in faction}
+        others = [
+            text for occupant, text in notices.items() if occupant not in faction_occupants
+        ]
+        self.assertTrue(others)
+        self.assertTrue(all("魔女阵营" not in text for text in others))
+
+    def test_third_night_is_emma_first_then_the_faction_pair(self):
+        # 艾玛在场：以最高优先级成为当天魔女，即使 A 的当前牌也可转化。
+        game = staged_game()
+        apply_command(game, HOST, "host.advance", {})
+        self.assertTrue(game["cards"]["emma"]["witch"])
+        self.assertFalse(game["cards"]["coco"]["witch"])
+        self.assertEqual(game["phase"], "night")
+
+        # 艾玛已出局：由 A 的当前牌接替。
+        game = staged_game()
+        game["cards"]["emma"]["alive"] = False
+        apply_command(game, HOST, "host.advance", {})
+        self.assertTrue(game["cards"]["coco"]["witch"])
+        self.assertFalse(game["cards"]["hiro"]["witch"])
+
+        # A 的当前牌是不能魔女化的雪莉：轮到 B 的当前牌（B 席另一张不能是米莉亚/亚里沙）。
+        game = staged_game(faction=("1", "6"))
+        game["cards"]["emma"]["alive"] = False
+        game["seats"][0]["cards"] = ["sherry", "emma"]
+        game["seats"][3]["cards"] = ["marg", "coco"]
+        apply_command(game, HOST, "host.advance", {})
+        self.assertFalse(game["cards"]["sherry"]["witch"])
+        self.assertTrue(game["cards"]["noah"]["witch"])
+
+        # A、B 都已魔女化：不重复转化，也不报错。
+        game = staged_game()
+        game["cards"]["emma"]["alive"] = False
+        game["cards"]["coco"]["witch"] = True
+        game["cards"]["hiro"]["witch"] = True
+        apply_command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "night")
+
+    def test_the_third_night_fallback_never_witches_a_non_faction_seat(self):
+        # A、B 的当前牌都不能魔女化时，第三天宁可当夜不产生新魔女，也不能退回魔典点别人。
+        game = staged_game(faction=("1", "3"))
+        game["cards"]["emma"]["alive"] = False
+        game["seats"][0]["cards"] = ["sherry", "emma"]
+        game["seats"][3]["cards"] = ["marg", "coco"]
+        game["seats"][2]["cards"] = ["arisa", "leia"]
+        apply_command(game, HOST, "host.advance", {})
+        self.assertEqual([cid for cid, card in game["cards"].items() if card["witch"]], [])
+        self.assertEqual(game["phase"], "night")
+
+    def test_hanna_witch_switch_overrides_the_third_night_choice(self):
+        def prepared():
+            game = staged_game()
+            game["cards"]["emma"]["alive"] = False
+            game["cards"]["sherry"]["alive"] = False
+            game["spiritual"]["sherry_bound"] = True
+            game["seats"][4]["cards"] = ["hanna", "meruru"]
+            return game
+
+        # 开关关闭：按常规由 A 的当前牌魔女化。
+        game = prepared()
+        apply_command(game, HOST, "host.advance", {})
+        self.assertTrue(game["cards"]["coco"]["witch"])
+        self.assertFalse(game["cards"]["hanna"]["witch"])
+
+        # 五条全部成立：汉娜覆盖当天人选。
+        game = prepared()
+        game["hanna_witch"] = True
+        apply_command(game, HOST, "host.advance", {})
+        self.assertTrue(game["cards"]["hanna"]["witch"])
+        self.assertFalse(game["cards"]["coco"]["witch"])
+
+        # 仍然是绑定状态（雪莉还在场）：不覆盖。
+        game = prepared()
+        game["hanna_witch"] = True
+        game["cards"]["sherry"]["alive"] = True
+        apply_command(game, HOST, "host.advance", {})
+        self.assertFalse(game["cards"]["hanna"]["witch"])
+        self.assertTrue(game["cards"]["coco"]["witch"])
+
+        # 从未绑定过：不覆盖。
+        game = prepared()
+        game["hanna_witch"] = True
+        game["spiritual"]["sherry_bound"] = False
+        apply_command(game, HOST, "host.advance", {})
+        self.assertFalse(game["cards"]["hanna"]["witch"])
+        self.assertTrue(game["cards"]["coco"]["witch"])
+
+        # 艾玛在场：艾玛的最高优先级高于汉娜。
+        game = prepared()
+        game["hanna_witch"] = True
+        game["cards"]["emma"]["alive"] = True
+        apply_command(game, HOST, "host.advance", {})
+        self.assertTrue(game["cards"]["emma"]["witch"])
+        self.assertFalse(game["cards"]["hanna"]["witch"])
+
+    def test_hanna_witch_switch_is_off_by_default_host_only_and_before_night_three(self):
+        self.assertFalse(create_game(DEFAULT_CODEX)["hanna_witch"])
+
+        game = staged_game(day=2, half="day", phase="discussion")
+        for actor in players(game):
+            self.assertNotIn(
+                "host.hanna_witch", [item["id"] for item in actions_for(game, actor)]
+            )
+        toggle = next(
+            item for item in actions_for(game, HOST) if item["id"] == "host.hanna_witch"
+        )
+        self.assertEqual(toggle["label"], "汉娜魔化：已关闭")
+        self.assertEqual(toggle["fields"][0]["default"], "off")
+        events = apply_command(game, HOST, "host.hanna_witch", {"value": "on"})
+        self.assertTrue(game["hanna_witch"])
+        self.assertEqual([e["audience"] for e in events if e["title"] == "规则调整"], [[]])
+        self.assertEqual(
+            next(item for item in actions_for(game, HOST) if item["id"] == "host.hanna_witch")[
+                "label"
+            ],
+            "汉娜魔化：已开启",
+        )
+        apply_command(game, HOST, "host.hanna_witch", {"value": "off"})
+        self.assertFalse(game["hanna_witch"])
+
+        # 第三天夜里（入夜后的夜间行动）不再允许改开关。
+        game = staged_game(day=3, half="night", phase="night")
+        self.assertNotIn(
+            "host.hanna_witch", [item["id"] for item in actions_for(game, HOST)]
+        )
+        with self.assertRaises(GameError):
+            apply_command(game, HOST, "host.hanna_witch", {"value": "on"})
+
+    def test_good_wins_only_when_both_faction_seats_are_out(self):
+        game = staged_game(day=1, half="day", phase="discussion")
+        game["cards"]["coco"]["witch"] = True
+        # 魔女牌（A 的当前牌）出局但 A 席还有牌：不算好人胜利。
+        game["cards"]["coco"]["alive"] = False
+        check_winner(game)
+        self.assertIsNone(game["winner_candidate"])
+        # A 席整席出局、B 席还在：仍然不算。
+        game["cards"]["emma"]["alive"] = False
+        check_winner(game)
+        self.assertIsNone(game["winner_candidate"])
+        # A、B 两席都出局：好人胜利，理由点名魔女阵营。
+        game["cards"]["hiro"]["alive"] = False
+        game["cards"]["millia"]["alive"] = False
+        check_winner(game)
+        self.assertEqual(game["winner_candidate"]["winner"], "good")
+        self.assertEqual(game["winner_candidate"]["reason"], "魔女阵营A、B两席出局")
 
 
 if __name__ == "__main__":

@@ -52,6 +52,8 @@ from .state import (
     eligible_voters,
     effect_effective,
     finish,
+    hanna_witch_override,
+    hanna_witch_window,
     hiro_rewind,
     living,
     log_event,
@@ -69,6 +71,7 @@ from .state import (
     seat,
     seat_operable,
     uid,
+    witch_faction,
 )
 
 
@@ -167,13 +170,25 @@ def convert_daily(game, events):
 
     converted = False
     if day == 3:
-        # 第三天定死为艾玛：存活则无论层数与当前牌状态都强制转化；
-        # 艾玛已出局则当夜不产生新魔女，也不回退到旧的两席命运或魔典。
-        emma = game["cards"]["emma"]
-        if emma["alive"]:
-            if not emma["witch"]:
+        # 第三天：艾玛在场则以最高优先级成为当天魔女；「汉娜魔化」五条全部成立时
+        # 由汉娜覆盖该人选（条件里已含艾玛不在场）；艾玛已出局且汉娜不覆盖时，
+        # 改由魔女阵营 A、B 中仍可转化的一位接替，不再退回魔典。
+        if hanna_witch_override(game):
+            if not game["cards"]["hanna"]["witch"]:
+                set_witch(game, events, "hanna")
+                log_event(game, "system", "「汉娜魔化」生效：第三天夜的魔女人选由汉娜承担。")
+            converted = True
+        elif game["cards"]["emma"]["alive"]:
+            if not game["cards"]["emma"]["witch"]:
                 set_witch(game, events, "emma", forced=True)
             converted = True
+        else:
+            for sid in sorted(witch_faction(game), key=int):
+                card = current(game, seat(game, sid))
+                if card and legal(card["id"]):
+                    set_witch(game, events, card["id"])
+                    converted = True
+                    break
     elif destiny and day < 3:
         if day - 1 < len(destiny["first"]):
             s = seat(game, destiny["first"][day - 1])
@@ -191,7 +206,7 @@ def convert_daily(game, events):
                 break
     if not converted:
         if day == 3:
-            log_event(game, "system", "第三天艾玛已出局，本夜不产生新的魔女。")
+            log_event(game, "system", "第三天艾玛已出局且魔女阵营无可转化目标，本夜不产生新的魔女。")
         else:
             pending(game, "codex", "本日无合法魔女化目标：主持人裁定转化或耗尽处理")
             return
@@ -898,6 +913,20 @@ def host_command(game, events, action, data):
             if paused
             else "已恢复自动推进，无人待办时 5 秒后自动进入下一阶段。",
         )
+    elif action == "host.hanna_witch":
+        require(hanna_witch_window(game), "「汉娜魔化」只能在第三天入夜前调整")
+        value = data["value"] == "on"
+        if bool(game.get("hanna_witch")) != value:
+            game["hanna_witch"] = value
+            notify(
+                game,
+                events,
+                "已开启「汉娜魔化」：第三天夜里满足条件时由汉娜覆盖当天魔女人选。"
+                if value
+                else "已关闭「汉娜魔化」：第三天夜按艾玛与魔女阵营的常规人选结算。",
+                [],
+                "规则调整",
+            )
     elif action == "host.resolve":
         resolve_pending(game, events, data)
     elif action == "host.codex":
@@ -1113,15 +1142,18 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         ):
             deal_cards(game)
             notify(game, events, "全员首次准备完成，已私下发牌；请调整上下牌并再次准备。")
-            destiny = game["public"]["witch_destiny"]["seats"]
+            destiny = game["public"]["witch_destiny"]
+            faction = list(destiny.get("first", []))
             for i, s in enumerate(game["seats"]):
-                notify(
-                    game,
-                    events,
-                    "本局你会魔女化。" if destiny[i] else "本局你不会魔女化。",
-                    [s["id"]],
-                    "魔女化命运",
-                )
+                sid = s["id"]
+                if sid in faction:
+                    # A、B 是魔女阵营：第1天 A、第2天 B 的当前牌魔女化。
+                    text = f"你是魔女阵营：第{faction.index(sid) + 1}天你的当前牌会魔女化。"
+                elif destiny["seats"][i]:
+                    text = "本局你会魔女化。"
+                else:
+                    text = "本局你不会魔女化。"
+                notify(game, events, text, [sid], "魔女化命运")
     elif action == "player.profile":
         require(1 <= len(data["name"].strip()) <= 30, "公开称呼需为1至30字")
         s["name"] = data["name"].strip()
@@ -1625,6 +1657,8 @@ def command_log_text(game, actor, action, data, *, by_host=False):
         return None  # 阶段推进由 advance() 自己记录，避免重复行
     if action == "host.resolve":
         return None  # 裁定内容由各 resolve 分支单独记录
+    if action == "host.hanna_witch":
+        return f"主持人{'开启' if data.get('value') == 'on' else '关闭'}「汉娜魔化」"
     if action == "host.water":
         return f"主持人调整13水持有者为{data.get('seat_id', '?')}号"
     if action == "host.damage":
