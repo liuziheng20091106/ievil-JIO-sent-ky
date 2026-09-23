@@ -38,33 +38,56 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       reason: state?.chat_reason,
     },
   ];
-  const sendable = channels.filter((item) => item.can_send);
-  const channel =
-    channels.find((item) => item.id === target && item.can_send) ??
+  // 受控傀儡席的频道并入发送目标：同一真实频道 id 用 asSeat 区分身份。
+  const targets = [
+    ...channels.map((item) => ({ key: item.id, channel: item, asSeat: null as string | null })),
+    ...(state?.self.puppet_controls ?? []).flatMap((panel) =>
+      (panel.channels ?? []).map((item) => ({
+        key: `${panel.seat_id}:${item.id}`,
+        channel: item,
+        asSeat: panel.seat_id,
+      })),
+    ),
+  ];
+  const sendable = targets.filter((item) => item.channel.can_send);
+  const target_item =
+    targets.find((item) => item.key === target && item.channel.can_send) ??
     sendable[0] ??
-    channels[0];
-  const activeId = channel?.id ?? "public";
-  // 所选私密频道失效时静默回落会把私密草稿带进公屏：失效即清掉该频道草稿并提示。
-  const invalidated = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    for (const item of channels) {
-      if (item.id === "public" || item.can_send || invalidated.current.has(item.id))
-        continue;
-      invalidated.current.add(item.id);
-      clearDraftKey(
-        draftKey(state?.id ?? null, session.actor?.id ?? null, "chat", item.id),
-      );
-      setError(`频道「${item.label}」已不可发言，其中的私密草稿已清除。`);
-    }
-  }, [channels, state?.id, session.actor?.id]);
-  const feed = useRef<string | null>(null);
-  feed.current = state?.id ?? null;
-  const draftScope = draftKey(
+    targets[0];
+  const channel = target_item?.channel;
+  const activeId = target_item?.key ?? "public";
+  const activeAsSeat = target_item?.asSeat ?? null;
+  const identityScope = draftKey(
     state?.id ?? null,
     session.actor?.id ?? null,
     "chat",
-    activeId,
+    activeAsSeat ?? "self",
   );
+  // 所选私密频道失效时静默回落会把私密草稿带进公屏：失效即清掉该频道草稿并提示。
+  const invalidated = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const item of targets) {
+      if (
+        item.channel.id === "public" ||
+        item.channel.can_send ||
+        invalidated.current.has(item.key)
+      )
+        continue;
+      invalidated.current.add(item.key);
+      clearDraftKey(
+        draftKey(
+          state?.id ?? null,
+          session.actor?.id ?? null,
+          "chat",
+          item.asSeat ?? "self",
+        ),
+      );
+      setError(`频道「${item.channel.label}」已不可发言，其中的私密草稿已清除。`);
+    }
+  }, [targets, state?.id, session.actor?.id]);
+  const feed = useRef<string | null>(null);
+  feed.current = state?.id ?? null;
+  const draftScope = identityScope;
   const [draft, setDraft, clearDraft, draftError] = useDraft(draftScope, "");
   const rows = messages.filter((message) => {
     if (messageScope === "all") return true;
@@ -177,10 +200,10 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     event.preventDefault();
     if (!state || sending || !draft.trim()) return;
     // 发送前按最新频道列表复核，绝不把私密内容发进已回落的公屏。
-    const current = channels.find((item) => item.id === activeId);
-    if (!current?.can_send) {
+    const current = targets.find((item) => item.key === activeId);
+    if (!current?.channel.can_send) {
       setError(
-        current?.reason ||
+        current?.channel.reason ||
           state.chat_reason ||
           "所选频道当前不可发言；内容未发送，请重新选择频道。",
       );
@@ -200,8 +223,9 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
     setError("");
     try {
       const message = await api<Message>(`/games/${state.id}/messages`, {
-        channel_id: recipient,
+        channel_id: channel.id,
         text: submitted,
+        ...(activeAsSeat ? { as_seat: activeAsSeat } : {}),
       });
       mergeMessages([message]);
       clearDraft();
@@ -359,8 +383,10 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
               onChange={(event) => setTarget(event.target.value)}
             >
               {sendable.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.id === "public" ? "公共讨论" : item.label}
+                <option key={item.key} value={item.key}>
+                  {item.channel.id === "public" && !item.asSeat
+                    ? "公共讨论"
+                    : item.channel.label}
                 </option>
               ))}
               {!sendable.length && <option value="public">暂无可用频道</option>}

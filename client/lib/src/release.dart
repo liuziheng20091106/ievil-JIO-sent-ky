@@ -42,7 +42,7 @@ int? compareVersionTags(String? a, String? b) {
 /// 发布检查：拉取服务端版本标签并与内置版本比较，同时把安卓保活
 /// 需要的「忽略电池优化」状态一并查回。任何一步失败都静默降级为不提示。
 class ReleaseMonitor extends ChangeNotifier {
-  ReleaseMonitor({this.currentVersion = '1.0.2'});
+  ReleaseMonitor({this.currentVersion = '1.0.3'});
 
   /// 客户端内置版本号，与 client/pubspec.yaml 的 version 名称保持一致；
   /// 故意不用 package_info_plus：不为三行比较代码引依赖（不发版不用改这里）。

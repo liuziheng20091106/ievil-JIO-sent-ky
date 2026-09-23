@@ -5,15 +5,14 @@ from random import SystemRandom
 
 from .catalog import NIGHT_ABILITIES, ROLES
 from .state import (
-    can_use_card,
+    card_actionable,
     fallen_upper_role,
     check_winner,
     current,
     effect_effective,
     half_key,
-    hiro_pending,
+    hiro_rewind,
     log_event,
-    move_hanna,
     notify,
     owner,
     pending,
@@ -54,12 +53,35 @@ def night_text(game, actions):
     )
 
 
-def begin_night(game, events):
+def sync_night_confirmations(game, events):
+    """把「本夜没有任何可提交行动」的席位补进已确认集合。
+
+    傀儡化、失去技能或出局都可能在一夜之间发生（主持人裁定、魔女化、复活的
+    傀儡牌），这些席位既不会拿到行动也不该留下阻塞待办，因此统一在这里对齐。
+    """
+    if game["status"] != "playing" or game["phase"] not in {"night", "night_coco"}:
+        return
     # actions imports this module; the ability list stays a local import to avoid a cycle.
     from .actions import night_abilities
 
+    night = game["night"]
+
+    def drivable(cid):
+        card = game["cards"].get(cid)
+        return bool(card) and card_actionable(game, card) and night_abilities(game, card)
+
+    for sid, cid in night["actors"].items():
+        if sid in night["confirmed"] or drivable(cid):
+            continue
+        night["confirmed"].append(sid)
+        notify(game, events, "本夜你没有可执行的技能，已自动确认（未操作视为放弃）。", [sid])
+
+
+def begin_night(game, events):
     game["half"] = "night"
     game["phase"] = "night"
+    # 上一夜未使用的13水过期收回；米莉亚的换血目标单独持久保存，直到下次有效换血覆盖。
+    game["water"] = {"holders": []}
     game["night"] = {
         "actors": {s["id"]: current(game, s)["id"] for s in game["seats"] if current(game, s)},
         "actions": [],
@@ -68,15 +90,8 @@ def begin_night(game, events):
         "preview": None,
         "reactions": [],
     }
-    for sid, cid in game["night"]["actors"].items():
-        if not can_use_card(game, game["cards"][cid]) or not night_abilities(game, game["cards"][cid]):
-            game["night"]["confirmed"].append(sid)
-            notify(
-                game,
-                events,
-                "本夜你没有可执行的技能，已自动确认（未操作视为放弃）。",
-                [sid],
-            )
+    # 用 card_actionable：傀儡牌由控制它的梅露露代行，不能当「本夜无事可做」自动确认掉。
+    sync_night_confirmations(game, events)
     witch_information(game, events)
     notify(game, events, "夜间行动开始，请选择行动后确认；也可放弃并确认。")
     # Everyone else auto-confirming can leave Coco as the only pending actor; nobody
@@ -108,6 +123,11 @@ def unlock_coco(game, events):
 
 def target_allowed(game, target_card_id):
     return True
+
+
+def treasure_protected(game, target_card_id):
+    """这张牌当天是否受寻宝保护：魔女刀、蕾雅长矛与提名都不能选中它。"""
+    return game["cards"][target_card_id]["states"].get("treasure_protected_day") == game["day"]
 
 def lock_night(game, events):
     night = game["night"]
@@ -161,7 +181,6 @@ def lock_night(game, events):
     game["phase"] = "night_review"
     prepare_night_preview(game)
 
-
 def damage_preview(game, attacks, protection=()):
     injured = {c["id"]: c["injured"] for c in game["cards"].values()}
     dead = {}
@@ -205,30 +224,37 @@ def damage_preview(game, attacks, protection=()):
     return {"deaths": list(dead.values()), "injured": injured, "attacks": deepcopy(attacks)}
 
 
-def millia_substitute(game, attacks):
-    """新版米莉亚：每晚必须换血一名玩家；其即将死亡时米莉亚牌代替其死亡。
+def millia_swap_effective(game):
+    """换血是否生效：每个半天只骰一次中毒判定，重算预结算不会重复掷骰。"""
+    swap = game.get("millia_swap")
+    if not swap or not swap.get("seat"):
+        return None
+    key = half_key(game)
+    if swap.get("key") != key:
+        swap["key"] = key
+        swap["effective"] = effect_effective(
+            game, [], role_card(game, "millia"), "代替死亡"
+        )
+    return swap if swap["effective"] else None
 
-    在攻击列表层面把指向换血对象当前牌的攻击改写为指向米莉亚牌，随后一次
-    预结算即可；米莉亚牌同夜已死或技能被毒掉时不替死。
+
+def millia_substitute(game, attacks):
+    """米莉亚替死：指向当前换血目标的普通死亡改由米莉亚牌承担。
+
+    换血目标存在状态里并一直生效（跨白天），直到下一次有效换血覆盖它；
+    处刑、殉情与质疑整席出局显式不走替死。
     """
+    at_night = game["phase"] in {"night", "night_coco", "night_review"}
     night = game["night"]
-    action = next(
-        (
-            selected
-            for selected in night["actions"]
-            if selected["ability"] == "swap" and selected.get("effective")
-        ),
-        None,
-    )
+    swap = millia_swap_effective(game)
     millia_card = role_card(game, "millia")
     if (
-        not action
-        or "millia" in night["reactions"]
+        swap is None
         or not millia_card["alive"]
-        or not effect_effective(game, [], millia_card, "代替死亡")
+        or (at_night and "millia" in night["reactions"])
     ):
         return attacks
-    target = current(game, seat(game, action["target_seat"]))
+    target = current(game, seat(game, swap["seat"]))
     if not target:
         return attacks
     substituted = False
@@ -238,14 +264,22 @@ def millia_substitute(game, attacks):
             attack["target_card"] == target["id"]
             and not substituted
             and not attack.get("once_injury")
-            and attack.get("cause") != "devotion"
+            and attack.get("cause") not in {"devotion", "execution", "shoot", "challenge"}
         ):
             attack = {**attack, "target_card": "millia"}
             substituted = True
         rewritten.append(attack)
-    if substituted:
+    if substituted and at_night:
         night["reactions"].append("millia")
     return rewritten
+
+
+def day_damage_preview(game, attacks, protection=()):
+    """白天的非处刑伤害：先让米莉亚替死，再按标准规则预结算。
+
+    处刑与质疑整席出局不走这里，因此显式绕过替死。
+    """
+    return damage_preview(game, millia_substitute(game, attacks), protection)
 
 
 def prepare_night_preview(game):
@@ -253,15 +287,11 @@ def prepare_night_preview(game):
     night["reactions"] = [r for r in night["reactions"] if r != "millia"]
     preview, dead = night_damage(game)
     night["preview"] = preview
-    if (
-        "hiro" in dead
-        and "hiro" not in night["reactions"]
-        and effect_effective(game, [], role_card(game, "hiro"), "时间回溯")
-    ):
-        mode = "witch" if role_card(game, "hiro")["witch"] else "normal"
-        if not game["spiritual"]["hiro_used"][mode]:
-            hiro_pending(game, [], mode, phase="night")
-            night["reactions"].append("hiro")
+    # 夜间预结算里希罗死亡时立即回溯到前一天顺序发言，不放主持人待办。
+    if "hiro" in dead and effect_effective(game, [], role_card(game, "hiro"), "时间回溯"):
+        hiro = role_card(game, "hiro")
+        if not game["spiritual"]["hiro_used"]["witch" if hiro["witch"] else "normal"]:
+            hiro_rewind(game, [], "night")
 
 
 def night_damage(game):
@@ -327,6 +357,36 @@ def eliminate_seat(game, events, seat, notice):
     check_winner(game)
 
 
+def publish_witness(game, events, item, suspects, honoka_role="honoka"):
+    """向死者发送四人疑似凶手名单，并记录本夜已发目击供复活撤销。"""
+    shown = [honoka_role if role == "honoka" else role for role in suspects]
+    text = "四名疑似凶手：" + "、".join(ROLES[role]["name"] for role in shown)
+    notify(game, events, text, [item["seat_id"]], "夜间目击名单")
+    game["witness"] = {
+        "day": game["day"],
+        "seat_id": item["seat_id"],
+        "death_id": item.get("death_id"),
+        "text": text,
+    }
+    victim_seat = seat(game, item["seat_id"])
+    if not current(game, victim_seat):
+        game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
+
+
+def witness_suspects(game, victim_role):
+    """固定的四人目击名单：真凶、在场的梅露露、在场的汉娜，余位随机补齐。"""
+    fixed = []
+    if victim_role:
+        fixed.append(victim_role)
+    for role in ("meruru", "hanna"):
+        if present(game, role):
+            fixed.append(role)
+    suspects = list(dict.fromkeys(fixed))[:4]
+    pool = [role for role in ROLES if role not in suspects]
+    SystemRandom().shuffle(pool)
+    return suspects + pool[: 4 - len(suspects)]
+
+
 def death_batch(game, events, preview):
     for cid, injured in preview["injured"].items():
         game["cards"][cid]["injured"] = injured
@@ -368,12 +428,14 @@ def death_batch(game, events, preview):
                     f"雨夜脚印：凶手座位号{'大于' if greater else '小于'}死者座位号。",
                     title="雨夜脚印",
                 )
-        if cid == "sherry" and game["spiritual"]["sherry_bound"]:
-            move_hanna(game, -3)
-        suffix = (
-            "，死于13水" if death.get("cause") == "water" and not death.get("hide_cause") else ""
+        hidden = bool(death.get("hide_cause"))
+        suffixed = death.get("cause") == "water" and not hidden
+        notice = (
+            f"{s['id']}号玩家被13水毒杀。"
+            if suffixed
+            else f"{s['id']}号玩家一张角色牌出局。"
         )
-        notice = f"{s['id']}号玩家一张角色牌出局{suffix}。"
+        record["notice"] = notice
         cause_label = NIGHT_ABILITIES.get(death.get("cause"), (None, death.get("cause") or ""))[1]
         src = death.get("source_card")
         src_label = ROLES.get(src, {}).get("name", src) if src else ""
@@ -383,35 +445,68 @@ def death_batch(game, events, preview):
             # 夜间出局连同头像一起压到第二天白天再公示，夜间阶段不泄露
             game["queued_notices"].append(notice)
             game["queued_reveals"].append(before)
+            if suffixed:
+                # 未隐藏的13水死亡：直接构造并随机排序四人目击，无需主持人待办。
+                publish_witness(
+                    game,
+                    events,
+                    {"seat_id": s["id"], "victim": cid, "death_id": record["id"]},
+                    witness_suspects(game, src),
+                )
+            else:
+                pending(
+                    game,
+                    "suspects",
+                    f"{s['id']}号夜间死者：填写四名疑似凶手（真凶、汉娜及额外两人）",
+                    seat_id=s["id"],
+                    death_id=record["id"],
+                    victim=cid,
+                    source_card=source,
+                )
         else:
             notify(game, events, notice, alert=True)
-        lower = current(game, s)
-        if lower:
-            s["avatar_role_id"] = lower["role_id"]
-            text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
-            if lower["id"] == "honoka":
-                text += "你可以选择一次示人角色。"
-            notify(game, events, text, [s["id"]], "下层登场")
-            pending(
-                game,
-                "lower_entry",
-                f"{s['id']}号下层登场：裁定本阶段是否立即可行动",
-                seat_id=s["id"],
-                card_id=lower["id"],
-            )
-        if game["half"] == "night":
-            pending(
-                game,
-                "suspects",
-                f"{s['id']}号夜间死者：填写四名疑似凶手（真凶、汉娜及额外两人）",
-                seat_id=s["id"],
-                death_id=record["id"],
-                victim=cid,
-                source_card=source,
-            )
+            # 白天死亡当场公示，下层牌立即登场并取得本阶段的行动。
+            lower = current(game, s)
+            if lower:
+                s["avatar_role_id"] = lower["role_id"]
+                text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
+                if lower["id"] == "honoka":
+                    text += "你可以选择一次示人角色。"
+                notify(game, events, text, [s["id"]], "下层登场")
+        if card["states"].pop("puppet", None):
+            # 傀儡当前牌出局：控制关系解除；该席下层牌仍存活则本人重新回到游戏。
+            card["states"].pop("no_ability", None)
+            if current(game, s):
+                notify(
+                    game,
+                    events,
+                    "你已重新回到游戏，恢复普通玩家权限。",
+                    [s["id"]],
+                    "傀儡解除",
+                )
     if killed:
         check_winner(game)
     return killed
+
+
+def revoke_death(game, events, death):
+    """梅露露复活：撤销该次死亡在公共记录、待办与已发目击里的全部痕迹。"""
+    cid, sid = death["target_card"], death["seat_id"]
+    game["deaths"] = [item for item in game["deaths"] if item["id"] != death["id"]]
+    game["queued_notices"] = [
+        notice for notice in game["queued_notices"] if notice != death.get("notice")
+    ]
+    game["queued_reveals"] = [item for item in game["queued_reveals"] if item["seat_id"] != sid]
+    game["pending"] = [
+        item
+        for item in game["pending"]
+        if item.get("death_id") != death["id"] and not (item["kind"] == "suspects" and item.get("victim") == cid)
+    ]
+    if game.get("witness") and game["witness"].get("death_id") == death["id"]:
+        game["witness"] = None
+    if game["half_exits"].get(sid) == half_key(game):
+        del game["half_exits"][sid]
+    check_winner(game)
 
 
 def revive(game, events, card_id, puppet=None):
@@ -422,8 +517,6 @@ def revive(game, events, card_id, puppet=None):
     if puppet:
         card["states"]["puppet"] = puppet
         card["states"]["no_ability"] = True
-    if card_id == "sherry" and game["spiritual"]["sherry_bound"]:
-        move_hanna(game, 2)
     owner_seat = owner(game, card_id)
     now = current(game, owner_seat)
     if now:

@@ -648,7 +648,8 @@ const phaseHints: Record<string, string> = {
   night_results: "主持人公布死亡与证物；本夜出局者可在此阶段提交遗留证物。",
   speech:
     "按发言顺序依次出声；轮到你时说完点「结束本次发言」交给下一位。未轮到的席位可以「提前发言」（提前写下内容，轮到你时自动公开）或「本轮不发言（跳过我的顺序）」。",
-  discussion: "自由讨论；主持人认为讨论充分后推进到热气球。",
+  discussion:
+    "自由讨论；任何可行动席位都能提交「请求结束自由发言」，六个不同席位提交后 10 秒自动进入热气球，主持人也可以直接推进。",
   balloon: "热气球参与者私下提交「制作」或「破坏」；其他人等待。",
   nomination:
     "各自提名一个席位或「放弃本次提名」，可提前提交；进入本阶段时先前提名自动确认。",
@@ -675,6 +676,32 @@ function Room({
   const [flash, setFlash] = useState("");
   const [alerts, setAlerts] = useState<Message[]>([]);
   const seenMessage = useRef<number | null>(null);
+  const [puppetTutorial, setPuppetTutorial] = useState(false);
+  const [newInfo, setNewInfo] = useState(0);
+  const seenInfoCount = useRef<number | null>(null);
+  const puppetKey = `puppet-tutorial:${state?.id}:${session.actor?.id ?? "anon"}`;
+  const controlledSeats = state?.self.puppet_controls ?? [];
+  useEffect(() => {
+    // 首次出现傀儡控制关系时只弹一次教程，按对局与身份隔离。
+    if (!controlledSeats.length) return;
+    if (sessionStorage.getItem(puppetKey)) return;
+    sessionStorage.setItem(puppetKey, "1");
+    setPuppetTutorial(true);
+  }, [controlledSeats.length, puppetKey]);
+  useEffect(() => {
+    // 首次同步不闪烁；此后每新增一条私密信息就累加提示，切到面板即清除。
+    if (!state) return;
+    if (seenInfoCount.current === null) {
+      seenInfoCount.current = state.information.length;
+      return;
+    }
+    const added = state.information.length - seenInfoCount.current;
+    if (added > 0) setNewInfo((previous) => previous + added);
+    seenInfoCount.current = state.information.length;
+  }, [state?.information.length]);
+  useEffect(() => {
+    if (tab === "cards" || center === "table") setNewInfo(0);
+  }, [tab, center]);
   useEffect(() => {
     if (!messages.length) return;
     const latest = messages[messages.length - 1].id;
@@ -777,6 +804,13 @@ function Room({
           urgent: urgent.length > 0,
         },
   ];
+  if (!isHost) {
+    const cardsTab = tabs.find((item) => item.id === "cards");
+    if (cardsTab) {
+      cardsTab.count = newInfo || undefined;
+      cardsTab.urgent = newInfo > 0;
+    }
+  }
   return (
     <main
       className={`room ${isHost ? "host-room" : ""}`}
@@ -830,10 +864,17 @@ function Room({
                   : "离线 · 正在恢复"}
           </span>
           <Countdown deadline={state.deadline} label="阶段计时" />
-          <Countdown
-            deadline={state.public.auto_advance_at ?? null}
-            label="自动推进"
-          />
+          {state.phase === "discussion" ? (
+            <Countdown
+              deadline={state.public.auto_advance_at ?? null}
+              label="结束请求自动推进"
+            />
+          ) : (
+            <Countdown
+              deadline={state.public.auto_advance_at ?? null}
+              label="自动推进"
+            />
+          )}
           {isHost && advanceAction && (
             <button
               className="primary advance-button"
@@ -897,6 +938,17 @@ function Room({
         <div className="phase-flash" role="status">
           <span className="eyebrow">阶段已推进</span>
           <strong>{flash}</strong>
+        </div>
+      )}
+      {state.phase === "discussion" && (
+        <div className="phase-flash" role="status" aria-live="polite">
+          <span className="eyebrow">结束自由发言</span>
+          <strong>
+            已有 {state.public.discussion_end_requests?.length ?? 0}/6 名玩家请求结束
+            {state.public.auto_advance_at
+              ? "，10 秒后自动进入热气球"
+              : "；集满六人后 10 秒自动进入热气球"}
+          </strong>
         </div>
       )}
       {alerts.length > 0 && (
@@ -1031,6 +1083,19 @@ function Room({
                 actionFormOpen.current = open;
               }}
             />
+            {state.self.puppet_controls?.map((panel) => (
+              <ActionPanel
+                key={panel.seat_id}
+                actions={panel.actions}
+                title={`傀儡代操作（${panel.seat_id}号 ${panel.name}）`}
+                asSeat={panel.seat_id}
+                request={request}
+                onRequestHandled={() => setRequest(null)}
+                onOpenChange={(open) => {
+                  actionFormOpen.current = open;
+                }}
+              />
+            ))}
           </div>
           <div className="cards-surface">
             <PrivatePanel onRole={onRole} />
@@ -1079,6 +1144,20 @@ function Room({
           wide
         >
           <SeatInspector seatId={inspecting} />
+        </Modal>
+      )}
+      {puppetTutorial && (
+        <Modal title="你控制了一个傀儡席位" onClose={() => setPuppetTutorial(false)}>
+          <p>
+            你的梅露露牌复活了一名由你击杀的玩家：该席位的角色现在是
+            <strong>无投票权、无技能的傀儡</strong>，由你代为行动。
+          </p>
+          <ul className="hint-list">
+            <li>傀儡视角下的行动标签都以 <strong>*</strong> 开头，副标题写明是哪一号席位。</li>
+            <li>你可以用这些动作代该席位投票、提名、发言、使用技能、提交证物与建立私信。</li>
+            <li>聊天发送频道里会出现带 <strong>*</strong> 的傀儡公共频道与它已有的私信。</li>
+            <li>傀儡出局或控制关系解除后，原玩家会收到通知并自行恢复操作。</li>
+          </ul>
         </Modal>
       )}
     </main>
@@ -1389,7 +1468,10 @@ function PrivatePanel({ onRole }: { onRole: (id: string) => void }) {
       {session.actor?.kind === "player" && (
         <section className="public-record">
           <h3>我的行动状态 · 仅自己可见</h3>
-          {state.self.water && <p className="tag gold">持有本局唯一13水</p>}
+          {state.self.water && <p className="tag gold">持有本夜13水（本夜未用会过期）</p>}
+          {state.self.puppet_spectator && (
+            <p className="tag warning">你当前是傀儡，由魔女梅露露代为行动</p>
+          )}
           {state.half === "night" && (
             <>
               <p>
@@ -1719,8 +1801,10 @@ function HostSources() {
       <details className="record-section">
         <summary>13水与警告</summary>
         <p>
-          13水持有人：{water?.holder ? seatLabel(state, water.holder) : "无"}
-          {water?.used ? "（已使用）" : ""}
+          本夜13水持有人：
+          {water?.holders?.length
+            ? water.holders.map((id) => seatLabel(state, id)).join("、")
+            : "无"}
         </p>
         {Object.keys(warnings).length ? (
           <ul className="source-list">

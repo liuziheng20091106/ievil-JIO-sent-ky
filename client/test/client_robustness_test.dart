@@ -255,6 +255,127 @@ void main() {
     });
   });
 
+  // 傀儡代发：频道 id 与自己完全相同，身份只能靠 as_seat 区分。
+  // 这条隔离一旦失效，写给傀儡私信的内容就会以梅露露本人的身份发出去。
+  group('傀儡身份隔离', () {
+    const puppetViewJson = {
+      'ui_version': 1,
+      'id': 'game-1',
+      'version': 3,
+      'status': 'playing',
+      'day': 1,
+      'half': 'day',
+      'phase': 'discussion',
+      'phase_label': '自由发言',
+      'deadline': null,
+      'ready_count': 0,
+      'actions': <dynamic>[],
+      'channels': [
+        {
+          'id': 'public',
+          'label': '公开讨论',
+          'status': 'active',
+          'can_send': true,
+          'reason': '',
+          'actions': <dynamic>[],
+        },
+        {
+          'id': 'private:abc',
+          'label': '私密 · 与主持人',
+          'status': 'active',
+          'can_send': true,
+          'reason': '',
+          'actions': <dynamic>[],
+        },
+      ],
+      'seats': <dynamic>[],
+      'self': {
+        'cards': <dynamic>[],
+        'current_card_id': null,
+        'puppet_controls': [
+          {
+            'seat_id': '2',
+            'name': 'kiwi',
+            'actions': <dynamic>[],
+            'channels': [
+              {
+                'id': 'private:abc',
+                'label': '*私密 · 与主持人',
+                'status': 'active',
+                'can_send': true,
+                'reason': '',
+                'as_seat': '2',
+                'actions': <dynamic>[],
+              },
+            ],
+          },
+        ],
+      },
+      'public': {
+        'discussion_end_requests': ['1', '2'],
+        'auto_advance_at': 1771234567.89,
+      },
+    };
+
+    ActionDescriptor channelAction() => ActionDescriptor.fromJson({
+          'id': 'channel.end',
+          'ui_version': 1,
+          'short_label': '结束',
+          'label': '结束整个私信频道',
+          'payload': <String, dynamic>{},
+          'fields': <dynamic>[],
+        });
+
+    Future<GameStore> puppetStore() async {
+      SharedPreferences.setMockInitialValues({});
+      return GameStore.forPreview(
+        preferences: await SharedPreferences.getInstance(),
+        endpoint: ServerEndpoint.parse(endpoint),
+        actor: playerActor(),
+        view: GameView.fromJson(puppetViewJson),
+        gameId: 'game-1',
+      );
+    }
+
+    test('同一频道 id 的两条身份草稿与发送目标互不串用', () async {
+      final store = await puppetStore();
+      final action = channelAction();
+
+      store.selectChannel('private:abc');
+      await store.saveDraft(action, {'text': '梅露露本人的私信'});
+      final ownKey = store.draftKey(action);
+
+      // 傀儡席选中的频道 id 与自己相同，但身份不同。
+      store.selectChannel('private:abc', asSeat: '2');
+      expect(store.activeAsSeat, '2');
+      expect(store.selectedChannel?.label, '*私密 · 与主持人');
+      expect(store.draftFor(action, asSeat: '2'), isEmpty);
+      expect(store.draftKey(action, asSeat: '2'), isNot(ownKey));
+
+      await store.saveDraft(action, {'text': '替傀儡发言'}, asSeat: '2');
+      expect(store.draftFor(action, asSeat: '2'), {'text': '替傀儡发言'});
+      expect(store.draftFor(action), {'text': '梅露露本人的私信'});
+    });
+
+    test('控制关系解除后旧 as_seat 自动失效，回落到自己的身份', () async {
+      final store = await puppetStore();
+      store.selectChannel('private:abc', asSeat: '2');
+      expect(store.activeAsSeat, '2');
+
+      store.applyView(GameView.fromJson({
+        ...puppetViewJson,
+        'self': {
+          'cards': <dynamic>[],
+          'current_card_id': null,
+          'puppet_controls': <dynamic>[],
+        },
+      }));
+
+      expect(store.activeAsSeat, isNull);
+      expect(store.activeChannelId, 'public');
+    });
+  });
+
   group('实时连接终态', () {
     test('服务端以 4401 关闭（身份失效/被移出/换新局）时停止重连', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

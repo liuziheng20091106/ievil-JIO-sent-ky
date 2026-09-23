@@ -161,6 +161,12 @@ small,
 .hint {
   margin: 10px 0;
 }
+.hint-list {
+  margin: 10px 0 10px 18px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.8;
+}
 .muted {
   color: var(--muted);
 }

@@ -6,21 +6,26 @@
 """
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 
 @dataclass
 class Decision:
-    """一次决策：行动 id 与载荷；``note`` 只用于日志。"""
+    """一次决策：行动 id 与载荷；``note`` 只用于日志。
+
+    ``as_seat`` 用于傀儡代操作：控制者以该席位身份提交，与人类客户端一致。
+    """
 
     action: str
     payload: dict = field(default_factory=dict)
     note: str = ""
+    as_seat: str | None = None
 
     def __repr__(self):
         detail = ",".join(f"{k}={v}" for k, v in self.payload.items())
-        return f"{self.action}({detail})"
+        target = f"@{self.as_seat}" if self.as_seat else ""
+        return f"{self.action}{target}({detail})"
 
 
 def option_values(descriptor, name):
@@ -40,6 +45,28 @@ def field_default(descriptor, name, fallback=None):
 
 def field_spec(descriptor, name):
     return next((item for item in descriptor["fields"] if item["name"] == name), None)
+
+
+def puppet_view(view, panel):
+    """把控制者视图裁剪成「以傀儡席位身份看到的视图」。
+
+    傀儡面板里的 ``actions`` 已经是该席此刻仍可提交的全部行动（服务端已剔除
+    已用掉的夜间技能与已提交的阶段行动），因此这里只替换行动与自身身份，
+    让同一套决策逻辑原样复用；``public`` 等公共信息保持不变。
+    """
+    if "self" not in view:
+        return view
+    return {
+        **view,
+        "actions": panel["actions"],
+        "self": {
+            **view["self"],
+            "seat_id": panel["seat_id"],
+            # 夜间已确认与否不参与判断：面板有 night.confirm 才会被选中。
+            "night_confirmed": False,
+            "night_actions": [],
+        },
+    }
 
 
 class HeuristicPolicy:
@@ -71,7 +98,6 @@ class HeuristicPolicy:
             return None
         for chooser in (
             self._lobby,
-            self._hiro,
             self._night,
             self._day_skill,
             self._speech,
@@ -80,6 +106,7 @@ class HeuristicPolicy:
             self._execution,
             self._balloon,
             self._misc,
+            self._puppet,
         ):
             decision = chooser(client)
             if decision is not None:
@@ -116,13 +143,6 @@ class HeuristicPolicy:
             # 也会让真人对局永远凑不齐「全员准备」（``ordering`` 阶段的该行动才是单向的）。
             return None
         return Decision("lobby.ready", {}, "准备")
-
-    def _hiro(self, client):
-        """希罗回溯：默认按预结算继续，避免把模拟器卡在人为判定点上。"""
-        decline = client.action("hiro.decline")
-        if decline is not None:
-            return Decision("hiro.decline", {}, "不回溯")
-        return None
 
     # ------------------------------------------------------------------ 夜间
 
@@ -199,13 +219,6 @@ class HeuristicPolicy:
             if not speaker or speaker == view["self"]["seat_id"]:
                 return None
             payload["target"] = speaker
-        elif ability == "photo":
-            # 赠照片：不能送给自己，且必须有真实内容或画面，否则服务端拒收。
-            mine = client.view["self"]["seat_id"]
-            target = payload.get("target")
-            if target == mine:
-                return None
-            payload.setdefault("text", "这是给你的照片。")
         return payload
 
     def _fill(self, descriptor, payload):
@@ -354,6 +367,42 @@ class HeuristicPolicy:
             filled = self._fill(propose, {})
             if filled is not None:
                 return Decision("balloon.propose", filled, "提议名单")
+        return None
+
+    # ------------------------------------------------------------------ 傀儡
+
+    def _puppet(self, client):
+        """按控制者身份代操作傀儡席。
+
+        傀儡席自己没有行动（服务端只把行动放进控制者的 ``puppet_controls``），
+        因此模拟器必须像真人控制者那样代提交，否则整局会卡在该席的待办上。
+        傀儡面板里的行动列表本来就是「该席此刻仍可提交的部分」，所以直接复用
+        同一个决策流程，只需把身份换成傀儡席位并在提交时带上 ``as_seat``。
+        """
+        for panel in client.view["self"].get("puppet_controls", []):
+            real = client.view
+            try:
+                client.view = puppet_view(real, panel)
+                decision = self._puppet_decision(client)
+            finally:
+                client.view = real
+            if decision is not None:
+                return replace(decision, as_seat=panel["seat_id"], note=f"傀儡{panel['seat_id']}号 {decision.note}")
+        return None
+
+    def _puppet_decision(self, client):
+        for chooser in (
+            self._night,
+            self._day_skill,
+            self._speech,
+            self._nomination,
+            self._voting,
+            self._execution,
+            self._balloon,
+        ):
+            decision = chooser(client)
+            if decision is not None:
+                return decision
         return None
 
     # ------------------------------------------------------------------ 其它

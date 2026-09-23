@@ -286,9 +286,14 @@ def channel_send_reason(db, game, actor, channel_id):
     return ""
 
 
-def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, scope="all"):
+def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, scope="all", channel_ids=None):
     clauses, args = ["m.game_id=?"], [game_id]
-    if actor["kind"] != "host":
+    if channel_ids is not None:
+        # 傀儡代读：只放行该席位所在的聊天频道历史，不放行面向个人的系统情报。
+        placeholders = ",".join("?" for _ in channel_ids)
+        clauses.append(f"m.kind='chat' AND m.channel_id IN ({placeholders})")
+        args.extend(channel_ids)
+    elif actor["kind"] != "host":
         ids = actor["access_ids"]
         placeholders = ",".join("?" for _ in ids)
         clauses.append(

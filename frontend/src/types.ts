@@ -72,6 +72,15 @@ export interface UIAction {
   blocking?: boolean;
   payload?: Record<string, unknown>;
   fields: Field[];
+  /** 傀儡代操作：动作所属的受控席位。 */
+  as_seat?: string | null;
+}
+export interface PuppetPanel {
+  seat_id: string;
+  name: string;
+  actions: UIAction[];
+  /** 该受控席位可见的频道（公开讨论与本人已有私信）。 */
+  channels?: Channel[];
 }
 export interface StatusCard {
   id: string;
@@ -150,6 +159,8 @@ export interface Channel {
   can_send: boolean;
   reason?: string;
   actions?: UIAction[];
+  /** 傀儡视角频道：该频道代表受控席位，发送时回传 as_seat。 */
+  as_seat?: string | null;
 }
 export interface NightAction {
   id: string;
@@ -193,6 +204,10 @@ export interface GameView {
     warning_deadline?: number | null;
     honoka_upper?: { seat_id: string; name: string; role_id: string }[];
     statuses?: StatusCard[];
+    /** 傀儡席的原玩家：只读旁观，由魔女梅露露代为行动。 */
+    puppet_spectator?: boolean;
+    /** 控制傀儡的魔女梅露露：按受控席位分组的带星号动作。 */
+    puppet_controls?: PuppetPanel[];
   };
   actions: UIAction[];
   information: Information[];
@@ -201,6 +216,8 @@ export interface GameView {
     auto_advance_at?: number | null;
     auto_advance_off?: boolean;
     declarations?: PublicDeclaration[];
+    /** 自由发言结束请求：已提交的席位号。 */
+    discussion_end_requests?: string[];
   } & Record<string, unknown>;
   host?: {
     codex: string[];
@@ -229,7 +246,8 @@ export interface GameView {
       votes: Record<string, boolean>;
     } | null;
     brainwash?: Record<string, string>;
-    water?: { holder: string | null; used: boolean };
+    water?: { holders: string[] };
+    discussion_end_requests?: string[];
     warnings?: Record<string, number>;
     winner_candidate?: { winner: string; reason: string } | null;
     surrenders?: string[];

@@ -50,6 +50,7 @@ class Command(Input):
 class Chat(Input):
     channel_id: str = Field(min_length=1, max_length=100)
     text: str = Field(min_length=1, max_length=2000)
+    as_seat: str | None = Field(default=None, max_length=4)
 
 
 class Evidence(Input):

@@ -426,7 +426,7 @@ class Simulation:
             self.steps += 1
             self.note(f"{actor.seat_id}号：{decision.action} {decision.payload}")
             try:
-                client.submit(decision.action, decision.payload)
+                client.submit(decision.action, decision.payload, as_seat=decision.as_seat)
                 return True
             except VersionConflict:
                 continue

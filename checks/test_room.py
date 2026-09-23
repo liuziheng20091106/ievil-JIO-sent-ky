@@ -266,6 +266,186 @@ class BackendFlow(unittest.TestCase):
         ]
         self.assertEqual([message["id"] for message in system], [message["id"] for message in baseline])
 
+    def test_puppet_control_only_authorizes_its_owner_and_only_for_that_seat(self):
+        self.open_join()
+        players = [self.join(str(14001 + index)) for index in range(7)]
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        self.command(self.host, "host.start")
+        state = self.client.get(self.root + "/state", headers=self.host).json()
+        seats = {seat["id"]: seat for seat in state["seats"]}
+        # 控制者席位必须持有一张可魔女化的当前牌；被控席位取另一席。
+        controller, controller_actor, _ = next(
+            player
+            for player in players
+            if seats[player[1]["seat_id"]]["current_card_id"] not in {"sherry", "arisa", "emma"}
+        )
+        victim, victim_actor, _ = next(
+            player for player in players if player[1]["seat_id"] != controller_actor["seat_id"]
+        )
+        stranger, _, _ = next(
+            player
+            for player in players
+            if player[1]["seat_id"] not in {controller_actor["seat_id"], victim_actor["seat_id"]}
+        )
+        master_card = seats[controller_actor["seat_id"]]["current_card_id"]
+        puppet_card = seats[victim_actor["seat_id"]]["current_card_id"]
+        self.command(self.host, "host.state", {"card_id": master_card, "state": "witch", "value": True, "reason": "测试"})
+        self.command(
+            self.host,
+            "host.state",
+            {
+                "card_id": puppet_card,
+                "state": "puppet",
+                "value": True,
+                "master": master_card,
+                "public": True,
+                "reason": "测试傀儡控制",
+            },
+        )
+        controlled = self.client.get(self.root + "/state", headers=controller).json()
+        panels = controlled["self"]["puppet_controls"]
+        self.assertEqual([panel["seat_id"] for panel in panels], [victim_actor["seat_id"]])
+        self.assertTrue(
+            all(item["as_seat"] == victim_actor["seat_id"] for item in panels[0]["actions"])
+        )
+        self.assertTrue(panels[0]["channels"][0]["label"].startswith("*"))
+        for channel in panels[0]["channels"]:
+            for item in channel["actions"]:
+                self.assertTrue(2 <= len(item["short_label"]) <= 4, item["short_label"])
+                self.assertTrue(item["label"].startswith("*"), item["label"])
+        # 傀儡视角只能执行服务端按该席生成的动作：主持人的动作即使指定 as_seat 也被拒绝。
+        state_view = self.client.get(self.root + "/state", headers=controller).json()
+        refused_action = self.client.post(
+            self.root + "/commands",
+            headers=controller,
+            json={
+                "expected_version": state_view["version"],
+                "action": "host.advance",
+                "payload": {},
+                "as_seat": victim_actor["seat_id"],
+            },
+        )
+        self.assertEqual(refused_action.status_code, 403, refused_action.text)
+        self.assertIn("傀儡席", refused_action.text)
+        # 控制者不能借 as_seat 操作自己不在控制中的第三席。
+        uninvolved = next(
+            actor
+            for _, actor, _ in players
+            if actor["seat_id"] not in {controller_actor["seat_id"], victim_actor["seat_id"]}
+        )
+        self.assertEqual(
+            self.client.post(
+                self.root + "/commands",
+                headers=controller,
+                json={
+                    "expected_version": state_view["version"],
+                    "action": "lobby.ready",
+                    "payload": {},
+                    "as_seat": uninvolved["seat_id"],
+                },
+            ).status_code,
+            403,
+        )
+        # 傀儡席原玩家：只能只读旁观，既没有行动也不能发言。
+        victim_view = self.client.get(self.root + "/state", headers=victim).json()
+        self.assertTrue(victim_view["self"]["puppet_spectator"])
+        self.assertEqual(victim_view["actions"], [])
+        self.assertFalse(victim_view["can_chat"])
+        refused = self.client.post(
+            self.root + "/messages",
+            headers=victim,
+            json={"channel_id": "public", "text": "还在玩"},
+        )
+        self.assertEqual(refused.status_code, 403, refused.text)
+        # 无关玩家不能借用 as_seat 代表傀儡席说话。
+        stolen = self.client.post(
+            self.root + "/messages",
+            headers=next(
+                player[0]
+                for player in players
+                if player[1]["seat_id"]
+                not in {controller_actor["seat_id"], victim_actor["seat_id"]}
+            ),
+            json={"channel_id": "public", "text": "越权", "as_seat": victim_actor["seat_id"]},
+        )
+        self.assertEqual(stolen.status_code, 403, stolen.text)
+        # 控制者不能借 as_seat 代表傀儡席公开发言：夜间规则禁止公开发言，
+        # 但拒绝原因必须是阶段规则（说明授权已通过），而不是权限不足。
+        night_public = self.client.post(
+            self.root + "/messages",
+            headers=controller,
+            json={"channel_id": "public", "text": "代为发言", "as_seat": victim_actor["seat_id"]},
+        )
+        self.assertEqual(night_public.status_code, 403, night_public.text)
+        self.assertIn("夜间", night_public.text)
+        # 傀儡席自己的私信频道：控制者可以按该席身份读和发。
+        created = self.command(
+            self.host,
+            "channel.create",
+            {"name": "傀儡私信", "participant_ids": [victim_actor["id"]]},
+        ).json()
+        private = next(
+            item
+            for item in created["channels"]
+            if {member["id"] for member in item["members"]} == {victim_actor["id"], "host"}
+        )
+        self.assertEqual(private["status"], "active")
+        puppet_message = self.client.post(
+            self.root + "/messages",
+            headers=controller,
+            json={
+                "channel_id": private["id"],
+                "text": "代为私信",
+                "as_seat": victim_actor["seat_id"],
+            },
+        )
+        puppet_message.raise_for_status()
+        self.assertEqual(puppet_message.json()["sender_name"], victim_actor["name"])
+        # 代读只放行该席参与的聊天频道，不泄露其面向个人的系统情报。
+        allowed = self.client.get(
+            self.root + f"/messages?as_seat={victim_actor['seat_id']}&scope=all", headers=controller
+        )
+        allowed.raise_for_status()
+        self.assertTrue(all(message["kind"] == "chat" for message in allowed.json()["messages"]))
+        self.assertIn(
+            puppet_message.json()["id"], [message["id"] for message in allowed.json()["messages"]]
+        )
+        # 主持人自行代操作仍走主持人授权路径。
+        self.command(self.host, "host.state", {"card_id": puppet_card, "state": "injured", "value": True, "reason": "测试"})
+        # 傀儡当前牌出局且该席下层仍存活：控制解除，原玩家收到恢复通知并能自己行动。
+        self.command(
+            self.host,
+            "host.damage",
+            {
+                "targets": [puppet_card],
+                "effect": "death",
+                "source": master_card,
+                "reason": "测试傀儡出局",
+            },
+        )
+        restored = self.client.get(self.root + "/state", headers=victim).json()
+        self.assertFalse(restored["self"]["puppet_spectator"])
+        self.assertTrue(restored["actions"])
+        back = self.client.post(
+            self.root + "/messages",
+            headers=victim,
+            json={"channel_id": private["id"], "text": "我回来了"},
+        )
+        back.raise_for_status()
+        self.assertEqual(back.json()["sender_name"], victim_actor["name"])
+        notices = self.client.get(
+            self.root + "/messages?scope=all", headers=victim
+        ).json()["messages"]
+        self.assertTrue(
+            any("重新回到游戏" in message["text"] for message in notices), notices
+        )
+        # 控制关系已解除：控制者不再拿到该席的傀儡面板。
+        after_death = self.client.get(self.root + "/state", headers=controller).json()
+        self.assertEqual(after_death["self"]["puppet_controls"], [])
+
     def test_reset_preserves_accounts_and_tokens(self):
         self.open_join()
         player, _, _ = self.join("13001")

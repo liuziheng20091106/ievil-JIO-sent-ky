@@ -41,17 +41,22 @@ class SetupRules(unittest.TestCase):
                 roles = {card["role_id"] for card in seat["cards"]}
                 self.assertTrue(all(not {left, right}.issubset(roles) for left, right in DEAL_EXCLUDED_PAIRS))
 
-    def test_upgrade_game_adds_revision_two_fields_without_replacing_history(self):
+    def test_upgrade_game_adds_the_new_rule_fields_without_replacing_history(self):
         game = create_game(DEFAULT_CODEX)
         game.pop("rules_revision")
         game["night"].pop("reactions")
         game.pop("marg_love")
+        game["water"] = {"holder": "1", "used": False}
+        game["pending"].append({"id": "stale", "kind": "lower_entry", "card_id": "honoka"})
         game["information"].append({"id": "kept"})
         self.assertTrue(upgrade_game(game))
-        self.assertEqual(game["rules_revision"], 2)
+        self.assertEqual(game["rules_revision"], 3)
         self.assertEqual(game["night"]["reactions"], [])
         self.assertIsNone(game["marg_love"])
         self.assertEqual(game["information"], [{"id": "kept"}])
+        # 旧局的单瓶13水迁为一个未使用的持有席位；旧待办直接作废。
+        self.assertEqual(game["water"], {"holders": ["1"]})
+        self.assertEqual(game["pending"], [])
         self.assertFalse(upgrade_game(game))
 
     def test_player_views_hide_other_cards_while_spectator_gets_read_only_board(self):
@@ -63,6 +68,24 @@ class SetupRules(unittest.TestCase):
         visible = game_view(game, actor)
         self.assertEqual(len(visible["self"]["cards"]), 2)
         self.assertFalse(visible.get("host"))
+        # 魔女化命运只私下告知本人：公开视图里不能出现逐席布尔值，否则一眼看穿谁会魔女化。
+        self.assertNotIn("witch_destiny", visible["public"])
+        game["status"] = "playing"
+        actor = actors[0]
+        privately = game_view(game, actor)
+        self.assertNotIn("witch_destiny", privately["public"])
+        self.assertEqual(
+            [s["id"] for s in privately["self"]["statuses"] if s["id"] == "witch_destiny"],
+            ["witch_destiny"],
+        )
+        # 主持人仍看得到完整的命运表，才能核对与纠错。
+        self.assertIn(
+            "witch_destiny",
+            game_view(game, {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]})[
+                "public"
+            ],
+        )
+        game["status"] = "lobby"
         for seat in visible["seats"]:
             if seat["id"] != "1":
                 self.assertFalse(seat.get("cards"))

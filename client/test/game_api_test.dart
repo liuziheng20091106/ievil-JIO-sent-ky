@@ -115,6 +115,36 @@ void main() {
     api.close();
   });
 
+  test('傀儡身份只在带 asSeat 时进入请求体', () async {
+    final api = GameApi(endpoint, token: 'token-abc');
+    // 梅露露代操作傀儡席：命令与消息都必须带上目标席位，服务端按它校验控制权。
+    await api.command('g1',
+        expectedVersion: 3,
+        action: 'vote.cast',
+        payload: {'target': '2'},
+        asSeat: '2');
+    expect(jsonDecode(bodies.last),
+        {'expected_version': 3, 'action': 'vote.cast', 'payload': {'target': '2'}, 'as_seat': '2'});
+
+    body = {
+      'id': 7,
+      'kind': 'chat',
+      'text': '替傀儡发言',
+      'channel_id': 'private:abc',
+      'sender_id': 'p2',
+      'sender_name': 'kiwi',
+      'created_at': '2026-09-15T12:00:00Z',
+    };
+    await api.sendMessage('g1', 'private:abc', '替傀儡发言', asSeat: '2');
+    expect(jsonDecode(bodies.last),
+        {'channel_id': 'private:abc', 'text': '替傀儡发言', 'as_seat': '2'});
+
+    // 自己的行动与发言不带 as_seat：服务端会把它当成代理请求拒绝。
+    await api.sendMessage('g1', 'public', '我自己发言');
+    expect(jsonDecode(bodies.last), {'channel_id': 'public', 'text': '我自己发言'});
+    api.close();
+  });
+
   test('online/invite/accept/reject hit the invite endpoints', () async {
     body = {
       'accounts': [

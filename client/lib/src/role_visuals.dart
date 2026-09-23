@@ -17,6 +17,7 @@ class ActionIcons {
     'host.speech': Icons.record_voice_over_outlined,
     'speech.speak': Icons.edit_note_outlined,
     'speech.done': Icons.skip_next_outlined,
+    'discussion.request_end': Icons.how_to_vote_outlined,
     'host.warn': Icons.timer_outlined,
     'host.resolve': Icons.gavel_outlined,
     'host.confirm_winner': Icons.emoji_events_outlined,
@@ -57,8 +58,6 @@ class ActionIcons {
     'host.madness': Icons.psychology_alt_outlined,
     'host.rewind': Icons.history_outlined,
     'host.water': Icons.opacity_outlined,
-    'hiro.rewind': Icons.settings_backup_restore_outlined,
-    'hiro.decline': Icons.arrow_forward_outlined,
     'hiro.exit': Icons.logout_outlined,
 
     // 房间与私信

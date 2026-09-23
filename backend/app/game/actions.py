@@ -1,12 +1,21 @@
 """Privacy-safe action descriptors, also used as authoritative input grammar."""
 
-from .catalog import AUTO_PHASES, DAY_ABILITIES, NIGHT_ABILITIES, ROLES
-from .resolution import coco_seat, target_allowed
+from copy import deepcopy
+
+from .catalog import (
+    AUTO_PHASES,
+    DAY_ABILITIES,
+    DISCUSSION_END_VOTES,
+    NIGHT_ABILITIES,
+    ROLES,
+)
+from .resolution import coco_seat, target_allowed, treasure_protected
 from .state import (
     can_use_card,
+    card_actionable,
+    controlled_cards,
     current,
     eligible_voters,
-    hiro_dilemma,
     living,
     lost_by_challenge,
     pending_nominators,
@@ -15,7 +24,7 @@ from .state import (
     present,
     role_card,
     seat,
-    snapshot_for,
+    seat_operable,
 )
 
 
@@ -37,8 +46,6 @@ SHORT_LABELS = {
     "host.rewind": "回溯",
     "host.confirm_winner": "宣判",
     "host.surrender": "交牌",
-    "hiro.rewind": "回溯",
-    "hiro.decline": "继续",
     "lobby.order": "排牌",
     "lobby.ready": "准备",
     "player.profile": "称呼",
@@ -52,6 +59,7 @@ SHORT_LABELS = {
     "hiro.exit": "出局",
     "speech.done": "结束发言",
     "speech.speak": "写发言",
+    "discussion.request_end": "求结束",
     "vote.nominate": "提名",
     "vote.pass": "弃提名",
     "vote.cast": "投票",
@@ -77,19 +85,17 @@ DESCRIPTIONS = {
     "host.advance": "当前阶段没有待办时推进到下一阶段；有待裁定事项会先被拒绝。",
     "host.auto": "暂停后本阶段只由主持人手动推进；恢复后无人待办时5秒自动进入下一阶段。",
     "host.warn": "对当前卡住的席位启动30秒倒计时，到期按未操作处理；掉线不会自动放弃行动。",
-    "host.water": "把本局唯一的13水私下交给一个席位；使用时机与互动仍由主持人裁定。",
+    "host.water": "在夜间或预结算阶段把一瓶13水私下交给一个存活席位；同夜可发多瓶，各自使用，夜末未用会过期收回。",
     "host.damage": "裁定伤害或直接出局：死亡应用庇护，无条件出局忽略庇护；夜间提交的伤害并入本夜预结算。",
     "host.state": "直接增删角色牌状态（魔女化、中毒、庇护、负伤、投票权、傀儡、生死）；不勾选公开时只通知该席位。",
     "host.information": "向全员或指定席位发放信息与照片；不公开时只有选中的席位能看到。",
     "host.madness": "对某个席位的疯狂行为发起裁定，随后由主持人选择警告、符合要求或执行不利裁定。",
     "host.codex_order": "手动指定11名角色的最终顺序，用于特殊裁定。",
-    "host.rewind": "回溯到指定快照时间点，并额外保留精神系状态；只处理非同一天同一时点的特殊裁定。",
+    "host.rewind": "回溯到指定快照时间点，并额外保留精神系状态；希罗的固定回溯由系统自动处理，这里只用于其他特殊裁定。",
     "host.confirm_winner": "本半天全部同时出局与连锁都处理完后确认宣判，按已达成的条件结束对局。",
     "host.surrender": "审阅交牌：好人交牌需全员分别私信同意，魔女交牌仅在只剩可可且本人申请时成立。",
     "host.end": "主持人终止对局或做特殊胜负裁定；提交后本局立即结束。",
     "host.speech": "只在顺序发言阶段可用：改起点或方向会重排本轮顺序。",
-    "hiro.rewind": "希罗回溯到前一天同一时点并重算之后的结算；其他时间点由主持人裁定。",
-    "hiro.decline": "不发动回溯，按当前预结算继续。",
     "lobby.order": "发牌后选择哪张牌作为上层；艾玛、米莉亚、亚里沙必须放在下层。",
     "lobby.ready": "确认准备；全员再次准备后由主持人开局。",
     "player.profile": "设置本局的公开称呼，其他玩家和主持人都能看到。",
@@ -110,10 +116,11 @@ DESCRIPTIONS = {
     "balloon.decline": "不同意这份名单；同意人数不可能过半时提议作废。",
     "balloon.propose": "亚里沙不在场时由玩家提议名单（至多5人），超过半数存活玩家同意即自动组织。",
     "photo.permission": "可可赠送的信物：设置是否允许她查看你的夜间行动。",
-    "water.use": "用唯一13水指定目标；互动与时机由主持人裁定。",
-    "meruru.revive": "魔女化梅露露复活当天由自己击杀的牌；复活者是无投票权、无技能的傀儡。",
+    "water.use": "用掉本夜的一瓶13水并立即指定目标，毒杀直接进入本夜预结算，无需主持人确认。",
+    "meruru.revive": "魔女化梅露露复活当夜由自己击杀的牌；复活者是无投票权、无技能的傀儡，该次死亡的公告与目击一并撤销。",
     "evidence.submit": "提交夜间遗留证物；公开范围由主持人裁定。",
     "player.surrender": "私信主持人申请本阵营交牌；未满足集体条件前继续游戏。",
+    "discussion.request_end": "提交一次结束自由发言的请求；六个不同席位提交后10秒自动进入热气球。",
     # 私信与房间管理（id 只在 app/views.py 里使用，短名同样是显式给的）。
     "channel.create": "创建私信频道；被邀请者同意后频道生效，期间成员只能在该频道发言。",
     "channel.accept": "同意加入该私信；全部成员同意后频道转为生效。",
@@ -128,10 +135,7 @@ DESCRIPTIONS = {
 # 主持人待办的说明：标题已经写明是哪件事，这里补上「裁定后按什么结算」。
 PENDING_DESCRIPTIONS = {
     "information": "这段裁定信息会按标题指定的范围发给当事人。",
-    "hiro": "希罗选择回溯时间点；不是前一天同一时点的回溯需要在说明里写清裁定理由。",
     "suspects": "为夜间死者填写四名疑似凶手（真凶与汉娜优先），用于当日目击名单。",
-    "lower_entry": "裁定下层角色本阶段是否立即可行动；同半天仍最多出局一牌。",
-    "water": "13水互动裁定：毒杀仍应用庇护，无条件出局忽略庇护。",
     "evidence": "裁定证物内容与公开范围；不公开时只发给指定席位。",
     "codex": "魔典未按时结算时选择跳过或指定特殊转化对象。",
     "madness": "疯狂行为裁定：警告、符合要求，或判定不够疯狂并执行不利裁定。",
@@ -230,14 +234,28 @@ def outstanding_seats(game):
         return []
     phase = game["phase"]
     result = []
+    # 只有「有人能操作」的席位才算待办：傀儡当前牌在主人出局后无人可代，
+    # 排它就会既等不到提交、又挡住自动推进与主持人的阻塞待办。
+    def drivable(sid):
+        """该席能否提交本阶段行动（含傀儡须有在场主人）。"""
+        return seat_operable(game, sid)
+
+    def night_drivable(sid):
+        """该席能否代行夜间行动：夜间行动取决于技能，用 card_actionable 判。"""
+        return card_actionable(game, game["cards"][game["night"]["actors"][sid]])
+
     if phase in {"night", "night_coco"}:
         coco = coco_seat(game)
         for sid in game["night"]["actors"]:
             if sid in game["night"]["confirmed"] or (phase == "night" and sid == coco):
                 continue
-            result.append(sid)
+            if night_drivable(sid):
+                result.append(sid)
     elif phase == "speech" and game["public"]["speaker"]:
-        result.append(game["public"]["speaker"])
+        # sync_speaker 保证 speaker 一定有人可操作：这里照常登记即可，
+        # 但再挡一道，避免状态被绕过命令改写后让自动推进空等一个等不到的确认。
+        if seat_operable(game, game["public"]["speaker"]):
+            result.append(game["public"]["speaker"])
     elif phase == "nomination":
         result = pending_nominators(game)
     elif phase == "voting":
@@ -250,6 +268,7 @@ def outstanding_seats(game):
             and game["cards"][cid]["alive"]
             and role_card(game, cid)["uses"].get("bullets", 0) > 0
             and owner(game, cid)["id"] not in game["execution_ready"]
+            and card_actionable(game, game["cards"][cid])
         ]
     result += [
         item["seat_id"] for item in game["pending"] if item["kind"] == "honoka_witness"
@@ -257,14 +276,19 @@ def outstanding_seats(game):
     proposal = game.get("balloon_proposal")
     if proposal:
         # 名单表决期所有未表态的存活玩家都卡住流程，警告与自动推进都要等他们。
-        result += [s["id"] for s in living(game) if s["id"] not in proposal["votes"]]
+        result += [
+            s["id"]
+            for s in living(game)
+            if s["id"] not in proposal["votes"]
+            and card_actionable(game, current(game, s["id"]))
+        ]
     balloon = game["public"]["balloon"]
     if balloon["status"] == "collecting":
         # 收集横跨白天多个阶段，期间出局者无法再提交，按默认跳过处理、不算待办。
         result += [
             sid
             for sid in balloon["participants"]
-            if sid not in game["balloon_choices"] and current(game, sid)
+            if sid not in game["balloon_choices"] and drivable(sid)
         ]
     return list(dict.fromkeys(result))
 
@@ -279,10 +303,7 @@ def target_field(game, night=False, exclude=None, avoid_treasure=False):
             for sid, label in seat_options(game)
             if sid != exclude
             and (not night or target_allowed(game, current(game, sid)["id"]))
-            and (
-                not avoid_treasure
-                or current(game, sid)["states"].get("treasure_protected_day") != game["day"]
-            )
+            and (not avoid_treasure or not treasure_protected(game, current(game, sid)["id"]))
         ],
     )
 
@@ -416,30 +437,6 @@ def pending_action(game, item):
     fields = []
     if kind == "information":
         fields = [field("text", "发给当事人的裁定信息", "textarea", default=item.get("text", ""))]
-    elif kind == "hiro":
-        choices = [("decline", "不发动回溯")] + [
-            (s["id"], f"{s['label']}（日{s['day']}）") for s in game["snapshots"]
-        ]
-        preferred = next(
-            (snap for snap in reversed(game["snapshots"]) if snap["half"] == game["half"]), None
-        ) or (game["snapshots"][-1] if game["snapshots"] else None)
-        fields = [
-            field(
-                "snapshot",
-                "回溯时间点（优先前一天同阶段；其他须裁定）",
-                "select",
-                choices,
-                default=preferred["id"] if preferred else None,
-            ),
-            field(
-                "keep_states",
-                "额外保留的状态归属（精神系自动保留）",
-                "multiselect",
-                role_options(),
-                required=False,
-            ),
-            field("reason", "特殊时间点的裁定说明", "textarea", required=False),
-        ]
     elif kind == "suspects":
         source = item.get("source_card")
         killer = game["cards"][source]["states"].get("display_killer", source) if source else None
@@ -458,32 +455,6 @@ def pending_action(game, item):
         ]
         if not item.get("source_card"):
             fields.append(field("true_source", "补充裁定实际真凶", "select", role_options()))
-    elif kind == "lower_entry":
-        fields = [
-            field(
-                "allow",
-                "允许下层本阶段行动（同半天仍最多出局一牌）",
-                "checkbox",
-                required=False,
-                default=True,
-            )
-        ]
-    elif kind == "water":
-        fields = [
-            field(
-                "outcome",
-                "13水互动裁定",
-                "select",
-                [
-                    ("kill", "毒杀，仍应用现有庇护"),
-                    ("unconditional", "裁定无条件出局"),
-                    ("injure", "裁定只负伤"),
-                    ("cancel", "本次时机不合法，退回13水"),
-                ],
-                default="kill",
-            ),
-            field("reason", "互动与时机裁定", "textarea", default="13水：按现有庇护结算"),
-        ]
     elif kind == "evidence":
         fields = [
             field("public", "向全员公开", "checkbox", required=False, default=True),
@@ -830,7 +801,30 @@ def host_actions(game):
     return result
 
 
-def actions_for(game, actor):
+def puppet_action_panels(game, controller):
+    """控制傀儡的魔女梅露露可见的代操作面板：标签与短名前缀星号，逐条携带目标席位。"""
+    own = player_seat(game, controller)
+    panels = []
+    for card in controlled_cards(game, own["id"]):
+        target = owner(game, card["id"])
+        actions = []
+        for descriptor in actions_for(game, controller, puppet_controlled=True, as_seat=target["id"]):
+            item = deepcopy(descriptor)
+            # 星号只加在 label 上：short_label 受动作协议 2—4 字约束，
+            # 加了前缀会让两个客户端都判定协议不符并整体禁用傀儡面板。
+            item["label"] = f"*{item['label']}"
+            item["as_seat"] = target["id"]
+            item["description"] = (
+                f"傀儡视角 · {target['id']}号 · {target['name']}；"
+                "由你代为执行，仍按该席位的角色与状态结算。"
+            )
+            actions.append(item)
+        panels.append({"seat_id": target["id"], "name": target["name"], "actions": actions})
+    return panels
+
+
+def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
+    """玩家可见行动；puppet_controlled 时生成受控傀儡席的动作并统一加星号前缀。"""
     if game["status"] == "ended":
         return []
     if actor.get("kind") == "host":
@@ -838,24 +832,12 @@ def actions_for(game, actor):
     if actor.get("kind") != "player":
         return []
     s = player_seat(game, actor)
-    sid = s["id"]
-    card = current(game, s)
+    sid = as_seat or s["id"]
+    active_seat = seat(game, sid)
+    card = current(game, active_seat)
     result = []
-    dilemma = hiro_dilemma(game, sid)
-    if dilemma:
-        snap = snapshot_for(game, dilemma)
-        if snap:
-            result.append(
-                action(
-                    "hiro.rewind",
-                    f"回溯到前一天同一时点（{snap['label']}）",
-                    group="流程",
-                    blocking=True,
-                )
-            )
-        result.append(action("hiro.decline", "按预结算继续（不回溯）", group="流程", blocking=True))
     if game["status"] == "lobby":
-        if game["phase"] == "ordering" and not s["ready"]:
+        if game["phase"] == "ordering" and not active_seat["ready"]:
             result.append(
                 action(
                     "lobby.order",
@@ -867,25 +849,25 @@ def actions_for(game, actor):
                             "select",
                             [
                                 (cid, ROLES[game["cards"][cid]["role_id"]]["name"])
-                                for cid in s["cards"]
+                                for cid in active_seat["cards"]
                             ],
                         )
                     ],
                     group="准备",
                 )
             )
-        if game["phase"] == "lobby" or not s["ready"]:
+        if game["phase"] == "lobby" or not active_seat["ready"]:
             result.append(
                 action(
                     "lobby.ready",
                     "取消准备"
-                    if s["ready"]
+                    if active_seat["ready"]
                     else ("确认上下牌并再次准备" if game["phase"] == "ordering" else "准备发牌"),
                     group="准备",
-                    blocking=not s["ready"],
+                    blocking=not active_seat["ready"],
                 )
             )
-        if "honoka" in s["cards"]:
+        if "honoka" in active_seat["cards"]:
             result.append(
                 action(
                     "honoka.disguise",
@@ -898,21 +880,28 @@ def actions_for(game, actor):
             action(
                 "player.profile",
                 "设置公开称呼",
-                [field("name", "公开称呼", default=s["name"])],
+                [field("name", "公开称呼", default=active_seat["name"])],
                 group="准备",
             )
         )
         return result
     phase = game["phase"]
-    if not can_use_card(game, card):
+    if not can_use_card(game, card, puppet_controlled):
         card = None
+    # 傀儡席的原玩家一律看不到游戏行动，由控制它的魔女梅露露代为操作。
+    if (
+        not puppet_controlled
+        and current(game, active_seat)
+        and current(game, active_seat)["states"].get("puppet")
+    ):
+        return []
     if phase in {"night", "night_coco"}:
         night = game["night"]
         cid = night["actors"].get(sid)
         cs = coco_seat(game)
         if (
             cid
-            and can_use_card(game, game["cards"][cid])
+            and can_use_card(game, game["cards"][cid], puppet_controlled)
             and sid not in night["confirmed"]
             and ((phase == "night" and sid != cs) or (phase == "night_coco" and sid == cs))
         ):
@@ -1031,7 +1020,7 @@ def actions_for(game, actor):
         )
     if card and card["role_id"] == "hiro" and card["witch"]:
         result.append(action("hiro.exit", "主动出局", danger=True))
-    if game["half"] == "day" and not lost_by_challenge(game, s):
+    if game["half"] == "day" and not lost_by_challenge(game, active_seat):
         for declaration in game["declarations"]:
             if (
                 declaration["status"] == "open"
@@ -1071,10 +1060,21 @@ def actions_for(game, actor):
                 group="流程",
             )
         )
+    if phase == "discussion" and card_actionable(game, card) and sid not in game.get(
+        "discussion_end_requests", []
+    ):
+        submitted = len(game.get("discussion_end_requests", []))
+        result.append(
+            action(
+                "discussion.request_end",
+                f"请求结束自由发言（已有{submitted}/{DISCUSSION_END_VOTES}人提交）",
+                group="流程",
+            )
+        )
     nomination_options = [
         option
         for option in seat_options(game)
-        if current(game, option[0])["states"].get("treasure_protected_day") != game["day"]
+        if not treasure_protected(game, current(game, option[0])["id"])
     ]
     if phase == "nomination" and card and sid not in game.get("nomination_done", []):
         result.append(
@@ -1099,7 +1099,7 @@ def actions_for(game, actor):
             )
         )
         result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票"))
-    if phase == "voting" and s in eligible_voters(game) and sid not in game["votes"]:
+    if phase == "voting" and active_seat in eligible_voters(game) and sid not in game["votes"]:
         votes = game["public"]["votes"]
         candidate = votes.get("candidate")
         name = seat(game, candidate)["name"] if candidate else ""
@@ -1172,7 +1172,7 @@ def actions_for(game, actor):
             )
         )
     proposal = game["balloon_proposal"]
-    if proposal and card and current(game, s) and sid not in proposal["votes"]:
+    if proposal and card and current(game, active_seat) and sid not in proposal["votes"]:
         alive = len(living(game))
         result.append(
             action(
@@ -1237,14 +1237,12 @@ def actions_for(game, actor):
                     "私密信息",
                 )
             )
-    if game["water"]["holder"] == sid and not game["water"]["used"]:
+    if sid in game["water"]["holders"]:
         fields = [target_field(game)]
         if card and card["role_id"] == "meruru" and card["witch"]:
             fields.append(field("hide_cause", "不公开13水死因", "checkbox", required=False))
         result.append(
-            action(
-                "water.use", "使用唯一13水（主持人裁定互动）", fields, group="私密行动", danger=True
-            )
+            action("water.use", "使用本夜13水（立即进入预结算）", fields, group="私密行动", danger=True)
         )
     meruru = role_card(game, "meruru")
     if card and card["id"] == "meruru" and card["witch"] and not card["uses"].get("revive"):
@@ -1252,6 +1250,7 @@ def actions_for(game, actor):
             death
             for death in game["deaths"]
             if death["day"] == game["day"]
+            and death["half"] == "night"
             and death.get("source_card") == meruru["id"]
             and not game["cards"][death["target_card"]]["alive"]
         ]
@@ -1259,18 +1258,18 @@ def actions_for(game, actor):
             result.append(
                 action(
                     "meruru.revive",
-                    "复活当日所杀者为无投票权、无技能傀儡",
+                    "复活当夜所杀者为无投票权、无技能傀儡",
                     [
                         field(
                             "death_id",
                             "复活对象",
                             "select",
-                            [(death["id"], f"{death['seat_id']}号当天出局的角色牌") for death in deaths],
+                            [(death["id"], f"{death['seat_id']}号当夜出局的角色牌") for death in deaths],
                         )
                     ],
                 )
             )
-    for cid in s["cards"]:
+    for cid in active_seat["cards"]:
         dead = game["cards"][cid]
         if dead["states"].get("evidence_allowed") and not dead["states"].get("evidence_used"):
             fields = [

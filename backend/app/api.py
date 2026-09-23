@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from . import auth, auth_storage, evidence, realtime, schemas, storage, views
 from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
+from .game.state import controlled_cards, owner
 
 router = APIRouter(prefix="/api")
 
@@ -51,6 +52,25 @@ def impersonated_actor(db, game, seat_id):
         "name": row["name"],
         "access_ids": json.loads(row["access_ids"]),
     }
+
+
+def authorized_as_seat(db, game, actor, seat_id):
+    """把 as_seat 限定在主持人代操作或当前实际控制傀儡席的魔女梅露露。
+
+    返回 (代操作 actor, 是否主持人代操作)；非主持人只能指定自己控制的傀儡席。
+    """
+    if actor["kind"] == "host":
+        return impersonated_actor(db, game, seat_id), True
+    if actor["kind"] != "player":
+        raise HTTPException(403, "当前身份不能代理席位操作")
+    own_seat = seat_for(game, actor["seat_id"])
+    if own_seat["occupant_id"] != actor["id"]:
+        raise HTTPException(403, "你不能代理该席位操作")
+    if not any(
+        owner(game, card["id"])["id"] == seat_id for card in controlled_cards(game, own_seat["id"])
+    ):
+        raise HTTPException(403, "你当前没有该傀儡席位的控制权")
+    return {**impersonated_actor(db, game, seat_id), "puppet_controlled": True}, False
 
 
 def current_view(game_id, hashed):
@@ -741,8 +761,13 @@ def channel_command(db, game, actor, action_id, payload):
     return rows
 
 
-def require_listed_action(db, game, actor, action_id, payload):
-    projection = views.view(db, game, actor, realtime.online(game["id"]))
+def descriptor_fields(descriptor):
+    return set(descriptor["payload"]) | {item["name"] for item in descriptor["fields"]}
+
+
+def require_listed_action(db, game, actor, action_id, payload, projection=None):
+    if projection is None:
+        projection = views.view(db, game, actor, realtime.online(game["id"]))
     candidates = [
         descriptor
         for descriptor in projection["actions"]
@@ -752,10 +777,28 @@ def require_listed_action(db, game, actor, action_id, payload):
     if not candidates:
         raise HTTPException(422, "此操作不可用，请刷新当前状态")
     descriptor = candidates[0]
-    allowed = set(descriptor["payload"]) | {item["name"] for item in descriptor["fields"]}
+    allowed = descriptor_fields(descriptor)
     # channel.create 的自定义频道名已被忽略（服务端统一按成员命名），但旧客户端仍会带上。
     if action_id == "channel.create":
         allowed.add("name")
+    if set(payload) - allowed:
+        raise HTTPException(422, "操作包含未允许的字段")
+
+
+def require_puppet_action(db, game, controller, seat_id, action_id, payload):
+    """梅露露代操作傀儡席：只认她自己视图里带 as_seat 的傀儡行动。"""
+    projection = views.view(db, game, controller, realtime.online(game["id"]))
+    candidates = [
+        descriptor
+        for panel in projection["self"].get("puppet_controls", [])
+        for descriptor in panel["actions"]
+        if panel["seat_id"] == seat_id
+        and descriptor["id"] == action_id
+        and all(payload.get(key) == value for key, value in descriptor["payload"].items())
+    ]
+    if not candidates:
+        raise HTTPException(403, "你当前不能以该傀儡席位执行此操作")
+    allowed = descriptor_fields(candidates[0]) | {"as_seat"}
     if set(payload) - allowed:
         raise HTTPException(422, "操作包含未允许的字段")
 
@@ -766,35 +809,40 @@ async def command(game_id: str, body: schemas.Command, request: Request):
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
             game = copy.deepcopy(require_game(db, game_id, mutable=True))
+            controller, host_delegated, puppet_seat = actor, False, None
             if body.as_seat:
-                if actor["kind"] != "host":
-                    raise HTTPException(403, "仅主持人可以代玩家操作")
-                actor = impersonated_actor(db, game, body.as_seat)
+                actor, host_delegated = authorized_as_seat(db, game, controller, body.as_seat)
+                if not host_delegated:
+                    puppet_seat = body.as_seat
             if body.expected_version != game["version"]:
                 raise HTTPException(409, "状态已变化，请刷新后检查并重新确认操作")
             payload = copy.deepcopy(body.payload)
-            if actor["kind"] == "spectator" and not body.action.startswith("channel."):
+            if controller["kind"] == "spectator" and not body.action.startswith("channel."):
                 raise HTTPException(403, "观战者不能执行游戏或管理行动")
-            if actor["kind"] != "host" and body.action.startswith("room."):
+            if controller["kind"] != "host" and body.action.startswith("room."):
                 raise HTTPException(403, "仅主持人可以管理房间")
             if (
-                actor["kind"] != "host"
+                controller["kind"] != "host"
                 and not body.action.startswith("channel.")
-                and storage.active_private_channel(db, game_id, actor["id"])
+                and storage.active_private_channel(db, game_id, controller["id"])
             ):
                 raise HTTPException(403, "私信期间不能执行游戏行动")
-            require_listed_action(db, game, actor, body.action, payload)
+            if puppet_seat:
+                # 只能执行她自己视图里那份带星号的傀儡行动，避免绕过按席生成的动作表。
+                require_puppet_action(db, game, controller, puppet_seat, body.action, payload)
+            else:
+                require_listed_action(db, game, controller, body.action, payload)
             if body.action.startswith("channel."):
                 rows = channel_command(db, game, actor, body.action, payload)
             elif body.action.startswith("room."):
-                rows = room_command(db, game, actor, body.action, payload)
+                rows = room_command(db, game, controller, body.action, payload)
             else:
                 if "image" in payload:
                     image = payload.pop("image")
                     if image:
                         payload["image_id"] = evidence.create(db, game_id, actor, image=image)
                 evidence.validate_references(db, game, actor, payload)
-                events = apply_command(game, actor, body.action, payload, by_host=bool(body.as_seat))
+                events = apply_command(game, actor, body.action, payload, by_host=host_delegated)
                 rows = storage.add_events(db, game_id, events)
             storage.save_game(db, game)
         realtime.publish(game_id, rows)
@@ -823,13 +871,39 @@ async def get_messages(
     after: int | None = Query(default=None, ge=0),
     channel_id: str | None = Query(default=None, max_length=100),
     scope: Literal["all", "public", "private", "system", "host"] = "all",
+    as_seat: str | None = Query(default=None, max_length=4),
 ):
     if before is not None and after is not None:
         raise HTTPException(422, "不能同时使用前向和后向游标")
     async with realtime.lock:
         with storage.connect() as db:
-            actor = auth.require_actor(db, request, game_id)
-            require_game(db, game_id)
+            controller = auth.require_actor(db, request, game_id)
+            game = require_game(db, game_id)
+            if as_seat:
+                actor, host_delegated = authorized_as_seat(db, game, controller, as_seat)
+                if not host_delegated:
+                    # 傀儡代读：只放行该席位所在的聊天频道历史，不放行其系统情报与证物。
+                    ids = [
+                        row["id"]
+                        for row in db.execute(
+                            """SELECT id FROM channels
+                               WHERE game_id=? AND EXISTS (
+                                   SELECT 1 FROM json_each(participant_ids) WHERE value=?)""",
+                            (game_id, actor["id"]),
+                        )
+                    ]
+                    return storage.messages(
+                        db,
+                        game_id,
+                        actor,
+                        before=before,
+                        after=after,
+                        channel_id=channel_id,
+                        scope=scope,
+                        channel_ids=["public", *ids],
+                    )
+            else:
+                actor = controller
             return storage.messages(
                 db,
                 game_id,
@@ -845,10 +919,21 @@ async def get_messages(
 async def send_message(game_id: str, body: schemas.Chat, request: Request):
     async with realtime.lock:
         with storage.transaction() as db:
-            actor = auth.require_actor(db, request, game_id)
+            controller = auth.require_actor(db, request, game_id)
             game = require_game(db, game_id, mutable=True)
-            permitted = views.view(db, game, actor, realtime.online(game_id))
-            channel = next((item for item in permitted["channels"] if item["id"] == body.channel_id), None)
+            actor, host_delegated = controller, False
+            if body.as_seat:
+                actor, host_delegated = authorized_as_seat(db, game, controller, body.as_seat)
+                if actor["kind"] == "player" and not host_delegated:
+                    # 梅露露代发：按受控傀儡席的公开身份落库，不借用她自己的称呼。
+                    actor = {**actor, "chat_as_puppet": True}
+            if actor.get("chat_as_puppet"):
+                # 傀儡席的发言权限按该席自身判断，不受控制者的私信占用与状态影响。
+                seat = seat_for(game, actor["seat_id"])
+                channels = views.puppet_channel_view(db, game, seat)
+            else:
+                channels = views.view(db, game, actor, realtime.online(game_id))["channels"]
+            channel = next((item for item in channels if item["id"] == body.channel_id), None)
             if not channel:
                 raise HTTPException(403, "你不能访问该频道")
             if not channel["can_send"]:
@@ -876,7 +961,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 audience=audience,
             )
         realtime.publish(game_id, [row], state=False)
-        return storage.message_view(row, actor)
+        return storage.message_view(row, controller)
 
 
 @router.post("/games/{game_id}/evidence")

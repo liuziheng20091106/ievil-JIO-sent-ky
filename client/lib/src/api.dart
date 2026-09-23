@@ -133,11 +133,19 @@ class GameApi {
   }
 
   Future<GameMessage> sendMessage(
-          String gameId, String channelId, String text) async =>
+    String gameId,
+    String channelId,
+    String text, {
+    String? asSeat,
+  }) async =>
       GameMessage.fromJson(await _request(
         'POST',
         '/api/games/${Uri.encodeComponent(gameId)}/messages',
-        body: {'channel_id': channelId, 'text': text},
+        body: {
+          'channel_id': channelId,
+          'text': text,
+          if (asSeat != null) 'as_seat': asSeat,
+        },
       ));
 
   Future<String> uploadEvidence(String gameId,

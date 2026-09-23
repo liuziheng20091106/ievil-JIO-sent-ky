@@ -5,6 +5,7 @@ import json
 from . import storage
 from .game import game_view
 from .game.actions import action, field
+from .game.views import seat_chat
 
 
 def participant_rows(db, game_id):
@@ -55,6 +56,84 @@ def channel_actions(row, actor, invitation, current):
             )
         )
     return actions
+
+
+def puppet_channel_view(db, game, seat):
+    """受控傀儡席的频道视角：公开讨论与本人已有私信，标签带 *，条目携带 as_seat。
+
+    频道 id 仍是真实 id（发送时用 as_seat 区分身份），草稿隔离由客户端的 asSeat 承担。
+    禁言与私信占用按傀儡席自身身份判定，不因控制者是梅露露而放宽。
+    """
+    occupant = seat["occupant_id"]
+    identity = {"id": occupant, "kind": "player"} if occupant else None
+    result = []
+    can_send, chat_reason = seat_chat(game, seat)
+    blocked = (
+        storage.channel_send_reason(db, game, identity, "public") if identity else "该席位当前无人操作"
+    ) or chat_reason
+    result.append(
+        {
+            "id": "public",
+            "as_seat": seat["id"],
+            "label": f"*公开讨论（{seat['id']}号）",
+            "status": "active",
+            "creator_id": "host",
+            "members": [],
+            "invited_ids": [],
+            "accepted_ids": [],
+            "invitation": "none",
+            "can_send": not blocked and can_send,
+            "reason": blocked,
+            "actions": [],
+        }
+    )
+    if not occupant:
+        return result
+    for row in db.execute("SELECT * FROM channels WHERE game_id=? ORDER BY rowid", (game["id"],)):
+        members = json.loads(row["participant_ids"])
+        if occupant not in members:
+            continue
+        reason = storage.channel_send_reason(db, game, identity, row["id"])
+        if row["status"] != "active":
+            reason = "等待全部成员同意" if row["status"] == "pending" else "私信已经结束"
+        accepted = json.loads(row["accepted_ids"])
+        result.append(
+            {
+                "id": row["id"],
+                "as_seat": seat["id"],
+                "label": f"*私密 · {puppet_channel_title(db, members)}",
+                "status": row["status"],
+                "creator_id": row["creator_id"],
+                "members": [
+                    {"id": member, "name": channel_names(db, [member]).get(member, "参与者"), "kind": "player"}
+                    for member in members
+                ],
+                "invited_ids": json.loads(row["invited_ids"]),
+                "accepted_ids": accepted,
+                "invitation": "accepted" if occupant in accepted else "none",
+                "can_send": not reason and row["status"] == "active",
+                "reason": reason,
+                "actions": [],
+            }
+        )
+    return result
+
+
+def channel_names(db, member_ids):
+    """频道显示用的参与者称呼（views 自己的实现，避免与 api 层循环依赖）。"""
+    names = {"host": "主持人"}
+    if member_ids:
+        placeholders = ",".join("?" for _ in member_ids)
+        for row in db.execute(
+            f"SELECT id,name FROM participants WHERE id IN ({placeholders})", member_ids
+        ):
+            names[row["id"]] = row["name"]
+    return names
+
+
+def puppet_channel_title(db, members):
+    names = channel_names(db, [member for member in members if member != "host"])
+    return "、".join("主持人" if member == "host" else names.get(member, "参与者") for member in members)
 
 
 def channels_for(db, game, actor, domain_view):
@@ -258,6 +337,43 @@ def view(db, game, actor, online):
     result["channels"] = channels_for(db, game, actor, result)
     result["can_chat"] = result["channels"][0]["can_send"]
     result["chat_reason"] = result["channels"][0]["reason"]
+    # 受控傀儡席：把该席的频道视角挂在对应面板上，发送时用 as_seat 区分身份。
+    controlled = (result.get("self") or {}).get("puppet_controls") or []
+    ended = game["status"] == "ended"
+    for panel in controlled:
+        seat = next((s for s in game["seats"] if s["id"] == panel["seat_id"]), None)
+        if not seat:
+            panel["channels"] = []
+            continue
+        panel["channels"] = puppet_channel_view(db, game, seat)
+        occupant = seat["occupant_id"]
+        if not occupant:
+            continue
+        identity = {"id": occupant, "kind": "player"}
+        puppet_actions = []
+        if not ended and not storage.active_private_channel(db, game["id"], occupant):
+            create = channel_create_descriptor(db, game, identity, participants)
+            if create:
+                puppet_actions.append(create)
+        for row in db.execute(
+            "SELECT * FROM channels WHERE game_id=? ORDER BY rowid", (game["id"],)
+        ):
+            members = json.loads(row["participant_ids"])
+            if occupant not in members or row["status"] != "pending":
+                continue
+            if occupant not in json.loads(row["invited_ids"]):
+                continue
+            if occupant in json.loads(row["accepted_ids"]):
+                continue
+            puppet_actions.extend(channel_actions(row, identity, "pending", True))
+        for descriptor in puppet_actions:
+            # 同 :func:`puppet_action_panels`：星号只进 label，short_label 保持协议长度。
+            descriptor["label"] = f"*{descriptor['label']}"
+            descriptor["as_seat"] = seat["id"]
+            descriptor["description"] = (
+                f"傀儡视角 · {seat['id']}号；以该席位的公开身份建立或回应私信。"
+            )
+        panel["actions"].extend(puppet_actions)
     occupancy = {seat["id"]: seat["occupant_id"] for seat in game["seats"]}
     for seat in result["seats"]:
         seat["online"] = occupancy.get(seat["id"]) in online
@@ -268,13 +384,18 @@ def view(db, game, actor, online):
             for pid in result["result"].get("personal_losses", [])
             if pid in people
         ]
-    channel_actions = [item for channel in result["channels"] for item in channel["actions"]]
+    collected_channel_actions = [item for channel in result["channels"] for item in channel["actions"]]
     active_private = storage.active_private_channel(db, game["id"], actor["id"])
     if active_private and actor["kind"] != "host":
-        result["actions"] = channel_actions
+        result["actions"] = collected_channel_actions
     else:
         create_action = channel_create_descriptor(db, game, actor, participants)
-        result["actions"].extend(([create_action] if create_action else []) + channel_actions)
+        result["actions"].extend(
+            ([create_action] if create_action else []) + collected_channel_actions
+        )
+    if (result.get("self") or {}).get("puppet_spectator"):
+        # 傀儡席由控制者代操作：原玩家只读旁观，连私信类行动也不下发。
+        result["actions"] = []
     if actor["kind"] == "host":
         result.setdefault("host", {})["participants"] = [
             participant_summary(row)

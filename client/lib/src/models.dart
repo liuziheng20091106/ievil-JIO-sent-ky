@@ -209,6 +209,7 @@ class ActionDescriptor {
     description = raw['description']?.toString() ?? '';
     group = raw['group']?.toString() ?? '行动';
     uiVersion = jsonInt(raw['ui_version'], 'action.ui_version');
+    asSeat = raw['as_seat']?.toString();
     payload = raw['payload'] == null
         ? const <String, dynamic>{}
         : jsonObject(raw['payload'], 'action.payload');
@@ -226,6 +227,9 @@ class ActionDescriptor {
   late final String description;
   late final String group;
   late final int uiVersion;
+
+  /// 梅露露代操作傀儡席时服务端给出的目标席位；提交时必须原样回传。
+  late final String? asSeat;
   late final Map<String, dynamic> payload;
   late final List<ActionField> fields;
 
@@ -258,6 +262,7 @@ class GameChannel {
     acceptedIds = _strings(raw['accepted_ids']);
     invitation = raw['invitation']?.toString() ?? 'none';
     canSend = jsonBool(raw['can_send'], 'channel.can_send');
+    asSeat = raw['as_seat']?.toString();
     reason = raw['reason']?.toString() ?? '';
     actions = raw['actions'] == null
         ? const []
@@ -281,10 +286,38 @@ class GameChannel {
   late final String invitation;
   late final bool canSend;
   late final String reason;
+
+  /// 傀儡视角频道：发送时必须以该席位身份发出（服务端 tags 每个傀儡频道）。
+  late final String? asSeat;
   late final List<ActionDescriptor> actions;
 
   bool get isPrivate =>
       id != 'public' && id != 'system' && !id.startsWith('host:');
+}
+
+/// 梅露露控制的傀儡席面板：动作与频道都要以该席位的身份提交（as_seat）。
+/// 服务端已把标签加 `*` 前缀，客户端只负责原样显示与提交。
+class PuppetPanel {
+  PuppetPanel.fromJson(Object? value) : raw = jsonObject(value, 'panel') {
+    seatId = jsonString(raw['seat_id'], 'panel.seat_id');
+    name = raw['name']?.toString() ?? '';
+    actions = raw['actions'] == null
+        ? const []
+        : jsonArray(raw['actions'], 'panel.actions')
+            .map(ActionDescriptor.fromJson)
+            .toList(growable: false);
+    channels = raw['channels'] == null
+        ? const []
+        : jsonArray(raw['channels'], 'panel.channels')
+            .map(GameChannel.fromJson)
+            .toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String seatId;
+  late final String name;
+  late final List<ActionDescriptor> actions;
+  late final List<GameChannel> channels;
 }
 
 class GameMessage {
@@ -393,6 +426,34 @@ class GameView {
           .toList(growable: false);
   Map<String, dynamic> get host =>
       raw['host'] == null ? const {} : jsonObject(raw['host'], 'state.host');
+
+  /// 当前牌是傀儡的玩家：只读旁观，由魔女梅露露代为行动。
+  bool get puppetSpectator =>
+      jsonBool(self['puppet_spectator'], 'state.self.puppet_spectator');
+
+  /// 控制傀儡的梅露露视角面板；无控制关系时为空。
+  List<PuppetPanel> get puppetControls => self['puppet_controls'] == null
+      ? const []
+      : jsonArray(self['puppet_controls'], 'state.self.puppet_controls')
+          .map(PuppetPanel.fromJson)
+          .toList(growable: false);
+
+  Map<String, dynamic> get public =>
+      raw['public'] == null ? const {} : jsonObject(raw['public'], 'state.public');
+
+  /// 自由发言阶段已提交结束请求的席位 id。
+  List<String> get discussionEndRequests => public['discussion_end_requests'] == null
+      ? const []
+      : jsonArray(public['discussion_end_requests'], 'public.discussion_end_requests')
+          .map((item) => item.toString())
+          .toList(growable: false);
+
+  /// 系统自动推进的截止时间（Unix 秒）；为空表示没有倒计时。
+  double? get autoAdvanceAt {
+    final value = public['auto_advance_at'];
+    if (value is num) return value.toDouble();
+    return double.tryParse('$value');
+  }
 
   Iterable<ActionDescriptor> get channelActions =>
       channels.expand((item) => item.actions);

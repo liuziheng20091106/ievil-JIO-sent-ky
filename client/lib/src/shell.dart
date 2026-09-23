@@ -605,6 +605,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
             ],
           ),
         ),
+        if (store.view!.phase == 'discussion')
+          _DiscussionProgressCard(view: store.view!),
         if (store.actor!.isHost) _HostQuickTools(store: store),
         Expanded(
           child: store.messages.isEmpty
@@ -642,6 +644,15 @@ class _ChatActionPageState extends State<ChatActionPage> {
                   },
                 ),
         ),
+        if (store.view!.puppetSpectator)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(
+                AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+            child: _PuppetNoticeCard(),
+          ),
+        for (final panel in store.view!.puppetControls)
+          if (panel.actions.isNotEmpty)
+            _PuppetActionPanel(store: store, panel: panel),
         _Composer(
           store: store,
           channel: channel,
@@ -873,7 +884,7 @@ class _ChannelButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final channels = store.view!.channels;
+    final targets = store.sendTargets;
     final label = channel?.label ?? '公开讨论';
     return Tooltip(
       message: '选择发送频道',
@@ -882,15 +893,20 @@ class _ChannelButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.field),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.field),
-          onTap: channels.isEmpty
+          onTap: targets.isEmpty
               ? null
               : () async {
-                  final picked = await showModalBottomSheet<GameChannel>(
+                  final picked = await showModalBottomSheet<
+                      ({GameChannel channel, String? asSeat})>(
                     context: context,
                     useSafeArea: true,
                     builder: (context) => _ChannelSheet(store: store),
                   );
-                  if (picked != null) store.selectChannel(picked.id);
+                  if (picked != null) {
+                    // 傀儡频道自带 as_seat：选中即切换发言身份，草稿随之隔离。
+                    store.selectChannel(picked.channel.id,
+                        asSeat: picked.asSeat);
+                  }
                 },
           child: Container(
             height: 46,
@@ -900,11 +916,9 @@ class _ChannelButton extends StatelessWidget {
             child: Row(
               children: [
                 Icon(
-                  channel?.id == 'public'
-                      ? Icons.campaign_outlined
-                      : channel?.id == 'system'
-                          ? Icons.info_outline
-                          : Icons.lock_outline,
+                  store.activeAsSeat != null
+                      ? Icons.smart_toy_outlined
+                      : _channelIcon(channel?.id),
                   size: 16,
                   color: context.palette.textSecondary,
                 ),
@@ -928,6 +942,114 @@ class _ChannelButton extends StatelessWidget {
       ),
     );
   }
+}
+
+IconData _channelIcon(String? channelId) => channelId == 'public'
+    ? Icons.campaign_outlined
+    : channelId == 'system'
+        ? Icons.info_outline
+        : Icons.lock_outline;
+
+/// 傀儡席玩家的常驻提示：本次行动由魔女梅露露代为执行，自己只读旁观。
+/// 与主持人警告共用 dangerSoft 卡片样式。
+class _PuppetNoticeCard extends StatelessWidget {
+  const _PuppetNoticeCard();
+
+  @override
+  Widget build(BuildContext context) => Card(
+        color: context.palette.dangerSoft,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Row(
+            children: [
+               Icon(Icons.smart_toy_outlined,
+                  color: context.palette.danger),
+               SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Text(
+                  '你当前是傀儡，由魔女梅露露代为行动',
+                  style: TextStyle(fontSize: 13, color: context.palette.text),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+/// 自由发言结束请求的公开进度；集满六个不同席位后系统 10 秒自动进入热气球。
+class _DiscussionProgressCard extends StatelessWidget {
+  const _DiscussionProgressCard({required this.view});
+  final GameView view;
+
+  @override
+  Widget build(BuildContext context) => Card(
+        color: context.palette.accentSoft,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Row(
+            children: [
+               Icon(Icons.how_to_vote_outlined,
+                  color: context.palette.accent),
+               SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Text(
+                  '已有 ${view.discussionEndRequests.length}/6 名玩家请求结束自由发言'
+                  '${view.autoAdvanceAt == null ? '；集满六人后 10 秒自动进入热气球' : '，将在 ${_deadlineText(view.autoAdvanceAt)} 自动进入热气球'}',
+                  style: TextStyle(fontSize: 13, color: context.palette.text),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+/// 魔女梅露露的傀儡代操作面板：标题写明席位，动作一律以该席位身份提交。
+class _PuppetActionPanel extends StatelessWidget {
+  const _PuppetActionPanel({required this.store, required this.panel});
+  final GameStore store;
+  final PuppetPanel panel;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '傀儡视角 · ${panel.seatId}号 ${panel.name}',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: context.palette.textTertiary),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            SizedBox(
+              height: 42,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: panel.actions.length,
+                separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
+                itemBuilder: (context, index) {
+                  final action = panel.actions[index];
+                  return ActionChipButton(
+                    action: action,
+                    busy: store.writeBusy,
+                    onTap: () => showActionForm(
+                      context,
+                      store,
+                      action,
+                      asSeat: panel.seatId,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 class _ChannelSheet extends StatelessWidget {
@@ -959,28 +1081,30 @@ class _ChannelSheet extends StatelessWidget {
                     AppSpacing.md, 0, AppSpacing.md, AppSpacing.lg),
                 children: [
                   // 已结束的私信不再占用频道列表；历史消息仍在消息流里可见。
-                  for (final item in store.view!.channels
-                      .where((item) => item.status != 'ended'))
+                  // 傀儡频道排在自己的频道之后，标签已带 `*`，选中即以该席位发言。
+                  for (final target in store.sendTargets
+                      .where((item) => item.channel.status != 'ended'))
                     ListTile(
                       leading: Icon(
-                        item.id == 'public'
-                            ? Icons.campaign_outlined
-                            : item.id == 'system'
-                                ? Icons.info_outline
-                                : Icons.lock_outline,
-                        color: item.canSend
+                        target.asSeat != null
+                            ? Icons.smart_toy_outlined
+                            : _channelIcon(target.channel.id),
+                        color: target.channel.canSend
                             ? context.palette.accent
                             : context.palette.textTertiary,
                       ),
-                      title: Text(item.label),
-                      subtitle: item.canSend
+                      title: Text(target.channel.label),
+                      subtitle: target.channel.canSend
                           ? null
-                          : Text(item.reason.isEmpty ? '只读' : item.reason),
-                      trailing: item.id == store.selectedChannelId
+                          : Text(target.channel.reason.isEmpty
+                              ? '只读'
+                              : target.channel.reason),
+                      trailing: target.channel.id == store.activeChannelId &&
+                              target.asSeat == store.activeAsSeat
                           ?  Icon(Icons.check, color: context.palette.accent)
                           : null,
-                      enabled: item.canSend,
-                      onTap: () => Navigator.pop(context, item),
+                      enabled: target.channel.canSend,
+                      onTap: () => Navigator.pop(context, target),
                     ),
                 ],
               ),
@@ -1179,8 +1303,7 @@ Future<void> openActionPicker(
   GameStore store,
   List<ActionDescriptor> actions,
 ) async {
-  final picked =
-      await showActionPicker(context, actions: actions, title: '当前可用行动');
+  final picked = await showActionPicker(context, actions: actions, title: '当前可用行动');
   if (picked == null || !context.mounted) return;
   await showActionForm(context, store, picked);
 }
@@ -1856,9 +1979,9 @@ class _LayeredAvatar extends StatelessWidget {
       );
 }
 
-/// 警告截止时间：服务端给的是 Unix 秒浮点，直接渲染会变成
+/// 截止时间：服务端给的是 Unix 秒浮点，直接渲染会变成
 /// 「请在 1771234567.89 前完成操作」。统一换算成本机时间显示。
-String _warningDeadlineText(Object? value) {
+String _deadlineText(Object? value) {
   final epoch = value is num ? value.toDouble() : double.tryParse('$value');
   if (epoch == null) return '规定时间';
   return formatMessageTime(
@@ -1885,9 +2008,7 @@ class ProfilePage extends StatelessWidget {
     final self = view.self;
     final cards = self['cards'] is List ? self['cards'] as List : const [];
     final currentId = self['current_card_id']?.toString();
-    final public = view.raw["public"] is Map
-        ? (view.raw["public"] as Map).map((key, value) => MapEntry(key.toString(), value))
-        : const <String, dynamic>{};
+    final public = view.public;
     final declarations = public["declarations"] is List
         ? public["declarations"] as List
         : const [];
@@ -1950,6 +2071,19 @@ class ProfilePage extends StatelessWidget {
                 subtitle: Text(status['text']?.toString() ?? ''),
               ),
             ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
+        // 13 水是本席位的只读状态：本夜持有就常驻显示，夜末过期后自动消失。
+        if (self['water'] == true) ...[
+          Card(
+            color: context.palette.accentSoft,
+            child: ListTile(
+              leading: Icon(Icons.water_drop_outlined,
+                  color: context.palette.accent),
+              title: const Text('持有本夜13水（本夜未用会过期）'),
+              subtitle: const Text('使用后直接进入本夜预结算，无需主持人裁定。'),
+            ),
+          ),
           const SizedBox(height: AppSpacing.sm),
         ],
         if (declarations.isNotEmpty) ...[
@@ -2103,7 +2237,7 @@ class ProfilePage extends StatelessWidget {
                    SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
-                      '主持人已警告，请在 ${_warningDeadlineText(self['warning_deadline'])} 前完成操作。',
+                      '主持人已警告，请在 ${_deadlineText(self['warning_deadline'])} 前完成操作。',
                       style:
                            TextStyle(fontSize: 13, color: context.palette.text),
                     ),

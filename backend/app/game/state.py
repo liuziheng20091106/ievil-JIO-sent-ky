@@ -54,6 +54,37 @@ def player_seat(game, actor):
     return s
 
 
+def puppet_master(game, card):
+    """当前控制该傀儡牌的魔女梅露露牌；控制关系已撤销或主人已出局时返回 None。"""
+    master = game["cards"].get(card["states"].get("puppet") or "")
+    if master is None or not master["alive"] or not master["witch"]:
+        return None
+    return master
+
+
+def puppet_controlled_by(game, card, seat_id):
+    """该牌是否正由 seat_id 席位的魔女梅露露控制。"""
+    master = puppet_master(game, card)
+    if master is None:
+        return False
+    holder = owner(game, master["id"])
+    return holder["id"] == seat_id and current(game, holder) == master
+
+
+def controlled_cards(game, seat_id):
+    """seat_id 当前实际控制的全部傀儡牌（仅限仍在其自己席位上的当前牌）。"""
+    result = []
+    for card in game["cards"].values():
+        if not card["alive"] or not card["states"].get("puppet"):
+            continue
+        own_seat = owner(game, card["id"])
+        if current(game, own_seat) != card:
+            continue
+        if puppet_controlled_by(game, card, seat_id):
+            result.append(card)
+    return result
+
+
 def audience(game, seats):
     return [s["occupant_id"] for s in game["seats"] if s["id"] in seats and s["occupant_id"]]
 
@@ -145,15 +176,23 @@ def pending_nominators(game):
     return [
         sid
         for sid in order
-        if sid not in done and (card := current(game, sid)) and can_use_card(game, card)
+        if sid not in done and (card := current(game, sid)) and card_actionable(game, card)
     ]
 
 
 def eligible_voters(game):
+    """有投票权的席位。
+
+    傀儡自身无投票权，但控制它的魔女梅露露可以用该席位投票：
+    控制者缺位（出局或不再是当前牌）时该席不再计票。
+    """
     return [
         s
         for s in living(game)
-        if not current(game, s)["states"].get("puppet")
+        if (
+            not (card := current(game, s))["states"].get("puppet")
+            or puppet_master(game, card) is not None
+        )
         and not current(game, s)["states"].get("no_vote")
         and (
             game["spiritual"]["annan_penalty"].get(current(game, s)["id"], {}).get("day")
@@ -185,7 +224,11 @@ def poison_sources(game, card):
         if noah_seat and noah["alive"]:
             indexes = {s["id"]: index for index, s in enumerate(game["seats"])}
             distance = (indexes[target_seat["id"]] - indexes[noah_seat["id"]]) % len(game["seats"])
-            if target_seat == noah_seat or distance in {1, len(game["seats"]) - 1}:
+            # 同席：只有诺亚是这一席的下层牌才算来源；邻座仍按当前牌判定。
+            same_seat = target_seat == noah_seat
+            if (same_seat and target_seat["cards"][-1] == noah["id"]) or (
+                not same_seat and distance in {1, len(game["seats"]) - 1}
+            ):
                 sources.append("诺亚邻接")
     return sources
 
@@ -205,16 +248,42 @@ def effect_effective(game, events, card, ability):
     return effective
 
 
-def can_use_card(game, card):
+def can_use_card(game, card, puppet_controlled=False):
+    """当前牌是否可行动。
+
+    傀儡牌只有控制它的魔女梅露露通过 puppet_controlled 才能代行；
+    普通牌被 puppet_controlled 排除，保证一次只生成一个视角的行动。
+    """
     if not card or not card["alive"] or current(game, owner(game, card["id"])) != card:
         return False
-    if card["states"].get("no_ability"):
+    if card["states"].get("puppet"):
+        return puppet_controlled
+    if puppet_controlled:
         return False
-    if card["states"].get("entry_blocked_at") == f"{game['day']}:{game['phase']}":
+    return not card["states"].get("no_ability")
+
+
+def card_actionable(game, card):
+    """该当前牌现在是否可能由某位操作者行动（傀儡由其控制者代行）。"""
+    if not card:
         return False
-    return not any(
-        p["kind"] == "lower_entry" and p["card_id"] == card["id"] for p in game["pending"]
-    )
+    if can_use_card(game, card):
+        return True
+    return can_use_card(game, card, True) and puppet_master(game, card) is not None
+
+
+def seat_operable(game, seat_id):
+    """该席位的当前牌是否有人操作：傀儡需要主人仍在场代行，两张牌都出局则无人。
+
+    用于「这个席位是否还值得等」的判断。比 card_actionable 宽：不检查技能与
+    no_ability，因此发言、热气球选择这类不看牌面技能的行动仍算可操作。
+    """
+    card = current(game, seat_id)
+    if card is None:
+        return False
+    if card["states"].get("puppet"):
+        return puppet_master(game, card) is not None
+    return True
 
 
 # 不允许发到同一席位的角色对：每对的两个角色牌序索引 //2 必须不同。
@@ -269,7 +338,10 @@ def deal_cards(game):
     }
     eligible_seats = [i for i in range(7) if i not in ineligible]
     first = rng.sample(eligible_seats, 2) if len(eligible_seats) >= 2 else eligible_seats
-    destiny = [i in first for i in range(7)]
+    # 艾玛席第三天必定魔女化（艾玛存活时），因此对当事人也必须预告会魔女化。
+    # 这里只写入逐席布尔值：客户端只读自己那一位，不再单独下发艾玛席号，
+    # 否则调序阶段就会把「哪一席是艾玛」提前公开。
+    destiny = [i in first or i == emma_seat for i in range(7)]
     game["public"]["witch_destiny"] = {
         "seats": destiny,
         "first": [str(i + 1) for i in first],
@@ -278,9 +350,9 @@ def deal_cards(game):
 
 
 def upgrade_game(game):
-    """就地补齐第二版规则字段；保留旧局的全部历史数据。"""
-    changed = game.get("rules_revision") != 2
-    game["rules_revision"] = 2
+    """就地补齐第三版规则字段；保留旧局的全部历史数据。"""
+    changed = game.get("rules_revision") != 3
+    game["rules_revision"] = 3
 
     def add(mapping, key, value):
         nonlocal changed
@@ -296,6 +368,7 @@ def upgrade_game(game):
         "locked": False,
         "preview": None,
         "reactions": [],
+        "extra_attacks": [],
     }.items():
         add(night, key, value)
     legacy_actions = [action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES]
@@ -339,6 +412,23 @@ def upgrade_game(game):
         if card.get("role_id") == "nanoka":
             add(card["uses"], "bullets", 6)
             add(card["uses"], "shot_misses", 0)
+    # 第三版：13水按夜发放，一局多瓶；旧局单个持有人迁为至多一个未使用席位，
+    # 旧 water.used 不再阻止之后夜晚发水，因此整局标记直接丢弃。
+    water = game.get("water")
+    if not isinstance(water, dict) or "holders" not in water:
+        legacy = water if isinstance(water, dict) else {}
+        holders = []
+        if legacy.get("holder") and not legacy.get("used"):
+            holders = [str(legacy["holder"])]
+        game["water"] = {"holders": holders}
+        changed = True
+    add(game, "millia_swap", None)
+    add(game, "discussion_end_requests", [])
+    # 夜间死亡的下层登场、希罗选择与13水裁定改为系统自动处理，旧待办直接作废。
+    stale_kinds = {"lower_entry", "hiro", "water"}
+    if any(p.get("kind") in stale_kinds for p in game.get("pending", [])):
+        game["pending"] = [p for p in game["pending"] if p.get("kind") not in stale_kinds]
+        changed = True
     return changed
 
 
@@ -354,7 +444,7 @@ def create_game(codex):
     SystemRandom().shuffle(shuffled_codex)
     return {
         "id": uid(),
-        "rules_revision": 2,
+        "rules_revision": 3,
         "version": 0,
         "status": "lobby",
         "join_open": False,
@@ -385,6 +475,7 @@ def create_game(codex):
             "locked": False,
             "preview": None,
             "reactions": [],
+            "extra_attacks": [],
         },
         "warnings": {},
         "deaths": [],
@@ -419,7 +510,9 @@ def create_game(codex):
         "brainwash": {},
         "execution": [],
         "execution_ready": [],
-        "water": {"holder": None, "used": False},
+        "water": {"holders": []},
+        "millia_swap": None,
+        "discussion_end_requests": [],
         "photos": [],
         "marg_love": None,
         "declarations": [],
@@ -446,45 +539,34 @@ def fallen_upper_role(game, seat):
     return None if upper["alive"] else upper["role_id"]
 
 
-def hiro_pending(game, events, mode, preview=None, phase=None):
-    """希罗即将出局：选择权交回本人，主持人只处理前一天同一时点之外的裁定。"""
-    sid = owner(game, "hiro")["id"]
-    pending(
-        game,
-        "hiro",
-        "希罗即将出局：等待本人选择回溯或继续",
-        mode=mode,
-        seat_id=sid,
-        expected_day=game["day"] - 1,
-        expected_phase=game["phase"] if phase is None else phase,
-        preview=preview,
+def hiro_target_snapshot(game, half):
+    """希罗的固定回溯点：夜间回到前一天顺序发言，白天回到前一天自由发言。
+
+    找不到该时点（例如第1天夜里的死亡）时回到开局保存的最早快照。
+    """
+    want = "speech" if half == "night" else "discussion"
+    day = game["day"] - 1
+    found = next(
+        (snap for snap in game["snapshots"] if snap["day"] == day and snap["phase"] == want), None
     )
-    notify(
-        game,
-        events,
-        "你庇护后仍会出局：可以回溯到前一天同一时点，或在行动面板选择按预结算继续。",
-        [sid],
-        "希罗回溯",
-    )
+    return found or (game["snapshots"][0] if game["snapshots"] else None)
 
 
-def hiro_dilemma(game, seat_id):
-    """希罗即将出局时挂起的回溯选择；由本人作答，主持人只在特殊时点介入。"""
-    return next(
-        (p for p in game["pending"] if p["kind"] == "hiro" and p.get("seat_id") == seat_id), None
-    )
+def hiro_rewind(game, events, half):
+    """希罗即将出局：立即按固定时点回溯一次；普通与魔女各有独立额度。
 
-
-def snapshot_for(game, item):
-    """希罗的合法回溯点：前一天的同一时点。其他时点仍由主持人裁定。"""
-    return next(
-        (
-            snap
-            for snap in game["snapshots"]
-            if snap["day"] == item["expected_day"] and snap["phase"] == item["expected_phase"]
-        ),
-        None,
-    )
+    返回 True 表示已经回溯；调用方必须停止继续写阶段与快照，否则会覆盖恢复的时间线。
+    """
+    hiro = role_card(game, "hiro")
+    mode = "witch" if hiro["witch"] else "normal"
+    if game["spiritual"]["hiro_used"][mode]:
+        return False
+    snap = hiro_target_snapshot(game, half)
+    if snap is None:
+        return False
+    rewind(game, snap["id"], events, mode)
+    game["rewound_night"] = True
+    return True
 
 
 def save_snapshot(game):
@@ -539,13 +621,6 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
         del game["log"][snap["log_index"] :]
     log_event(game, "system", f"时间回溯到「{snap['label']}」，之后的时间线作废。")
     notify(game, events, "游戏时间已回溯；已经获得的信息与聊天记忆保留。")
-
-
-def move_hanna(game, offset):
-    if "hanna" in game["codex"]:
-        old = game["codex"].index("hanna")
-        game["codex"].pop(old)
-        game["codex"].insert(max(0, min(len(game["codex"]), old + offset)), "hanna")
 
 
 def check_winner(game):

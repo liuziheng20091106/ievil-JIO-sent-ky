@@ -22,7 +22,9 @@ from backend.app.simulator.transport import TestClientTransport, gateway_authent
 
 # 一局完整对局要走完魔女化、夜间、顺序发言、热气球、提名、投票与处决，
 # 同时等待系统自己 5 秒的自动推进，因此给足时间但保持有界。
-GAME_SECONDS = 150
+# 弱机器上单局可能跑到数分钟（实测最长约 400 秒），预算必须留够，
+# 否则超时会被误报成「走不到结局」。
+GAME_SECONDS = 600
 GAME_STEPS = 4000
 
 
@@ -221,6 +223,7 @@ class SimulatorCase(unittest.TestCase):
         game["night"]["extra_attacks"] = [
             {"target_card": target_card["id"], "cause": "host", "unconditional": True}
         ]
+        game["millia_swap"] = {"seat": target_seat["id"], "day": 1}
         from unittest.mock import patch
 
         with patch("backend.app.game.state.SystemRandom") as random, patch(
@@ -277,6 +280,55 @@ class SimulatorCase(unittest.TestCase):
             actor.client.refresh()
             seat = next(item for item in actor.client.view["seats"] if item["id"] == actor.seat_id)
             self.assertTrue(seat["ready"], "策略把自己的准备状态取消了")
+
+    def test_policy_drives_puppet_panels_through_as_seat(self):
+        """傀儡席没有自主行动，策略必须像真人控制者那样用 as_seat 代提交。
+
+        否则梅露露复活出傀儡后，该席既没有行动又占着待办，整局会永远卡住。
+        """
+        from backend.app.simulator.policy import HeuristicPolicy
+
+        panel_actions = [
+            {
+                "id": "speech.done",
+                "label": "*结束本次发言",
+                "short_label": "结束",
+                "payload": {},
+                "fields": [],
+                "group": "流程",
+                "as_seat": "2",
+            }
+        ]
+        view = {
+            "status": "playing",
+            "phase": "speech",
+            "half": "day",
+            "day": 2,
+            "public": {"speaker": "2", "speech_order": ["2", "3"]},
+            "self": {
+                "seat_id": "5",
+                "puppet_controls": [{"seat_id": "2", "name": "虚拟玩家2", "actions": panel_actions}],
+            },
+            "actions": [],
+        }
+
+        class FakeClient:
+            def __init__(self, view):
+                self.view = view
+
+            def action(self, action_id):
+                return next((d for d in self.view["actions"] if d["id"] == action_id), None)
+
+            def available(self, action_id):
+                return [d for d in self.view["actions"] if d["id"] == action_id]
+
+        client = FakeClient(view)
+        decision = HeuristicPolicy(seed=1).decide(client)
+        self.assertIsNotNone(decision, "控制者没有为傀儡席做出任何决策")
+        self.assertEqual(decision.action, "speech.done")
+        self.assertEqual(decision.as_seat, "2", "傀儡决策没有带上 as_seat")
+        # 决策结束后必须还原控制者自己的视图，不能把傀儡面板留在 client.view 上。
+        self.assertEqual(client.view, view)
 
     def client(self):
         client = TestClient(

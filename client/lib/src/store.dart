@@ -79,6 +79,11 @@ class GameStore extends ChangeNotifier {
   String messageScope = 'all';
   String selectedChannelId = 'public';
 
+  /// 傀儡代发身份与频道：选中某个受控傀儡席位的频道后，发送身份切到该席位。
+  /// 与自己的 [selectedChannelId] 分开存放，两条身份的频道选择与草稿永不互相串用。
+  String? puppetSeatId;
+  String selectedPuppetChannelId = 'public';
+
   /// 在线账号（不含自己的过滤在界面层做）与发给我的待处理邀请。
   List<OnlineAccount> online = const <OnlineAccount>[];
   List<LobbyInvite> invites = const <LobbyInvite>[];
@@ -623,6 +628,8 @@ class GameStore extends ChangeNotifier {
     messages = [];
     hasMoreMessages = false;
     selectedChannelId = 'public';
+    puppetSeatId = null;
+    selectedPuppetChannelId = 'public';
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
     messageScope = 'all';
@@ -812,6 +819,17 @@ class GameStore extends ChangeNotifier {
         (item) => item.id != selectedChannelId || item.status == 'ended')) {
       selectedChannelId = 'public';
     }
+    // 傀儡控制关系解除或频道失效同样要退回公屏：留着旧的 as_seat 会让下一次
+    // 发送落到服务端已拒绝的身份上。
+    if (puppetSeatId != null) {
+      final puppetChannels = channelsFor(puppetSeatId);
+      // 控制关系仍在，只是选中的频道结束了：留在该身份上，退回它的公屏。
+      if (puppetChannels.every((item) =>
+          item.id != selectedPuppetChannelId || item.status == 'ended')) {
+        puppetSeatId = null;
+        selectedPuppetChannelId = 'public';
+      }
+    }
   }
 
   Future<void> acknowledgePhase() async {
@@ -958,14 +976,46 @@ class GameStore extends ChangeNotifier {
   int get _readCursor =>
       preferences.getInt(_preferenceKey('messages_read_$messageScope')) ?? 0;
 
-  void selectChannel(String channelId) {
-    selectedChannelId = channelId;
+  /// 选择发送频道；带 [asSeat] 表示以该受控傀儡席位的身份发言。
+  /// 两条身份的频道选择分开存放：写给傀儡私信的内容不可能落到自己的频道上。
+  void selectChannel(String channelId, {String? asSeat}) {
+    if (asSeat == null) {
+      puppetSeatId = null;
+      selectedChannelId = channelId;
+    } else {
+      puppetSeatId = asSeat;
+      selectedPuppetChannelId = channelId;
+    }
     notifyListeners();
   }
 
+  /// 当前发言身份：非空时要把它作为 `as_seat` 一起提交。
+  String? get activeAsSeat => puppetSeatId;
+
+  String get activeChannelId =>
+      puppetSeatId == null ? selectedChannelId : selectedPuppetChannelId;
+
+  /// 全部发送目标：自己的频道在前，梅露露的傀儡频道在后（标签已带 `*`）。
+  /// 频道 id 可能重复（傀儡与自己可能是同一频道），身份靠 [asSeat] 区分。
+  List<({GameChannel channel, String? asSeat})> get sendTargets => [
+        for (final channel in view?.channels ?? const <GameChannel>[])
+          (channel: channel, asSeat: null),
+        for (final panel in view?.puppetControls ?? const <PuppetPanel>[])
+          for (final channel in panel.channels)
+            (channel: channel, asSeat: panel.seatId),
+      ];
+
+  /// 某个发言身份可见的频道；`asSeat` 为空表示自己的视角。
+  List<GameChannel> channelsFor(String? asSeat) => [
+        for (final target in sendTargets)
+          if (target.asSeat == asSeat) target.channel,
+      ];
+
   GameChannel? get selectedChannel {
-    for (final channel in view?.channels ?? const <GameChannel>[]) {
-      if (channel.id == selectedChannelId) return channel;
+    for (final target in sendTargets) {
+      if (target.asSeat == activeAsSeat && target.channel.id == activeChannelId) {
+        return target.channel;
+      }
     }
     return null;
   }
@@ -977,8 +1027,8 @@ class GameStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final message =
-          await api!.sendMessage(id, selectedChannelId, text.trim());
+      final message = await api!
+          .sendMessage(id, activeChannelId, text.trim(), asSeat: puppetSeatId);
       _mergeMessages([message]);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -1082,7 +1132,9 @@ class GameStore extends ChangeNotifier {
       gameId,
       actor?.accountId,
       asSeat ?? actor?.id,
-      action.id.startsWith('channel.') ? selectedChannelId : action.id,
+      action.id.startsWith('channel.')
+          ? (asSeat == null ? selectedChannelId : selectedPuppetChannelId)
+          : action.id,
       current?.day,
       current?.half,
       current?.phase,
@@ -1232,6 +1284,8 @@ class GameStore extends ChangeNotifier {
     hasMoreMessages = false;
     messageScope = 'all';
     selectedChannelId = 'public';
+    puppetSeatId = null;
+    selectedPuppetChannelId = 'public';
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
     connectionStatus = '未连接';

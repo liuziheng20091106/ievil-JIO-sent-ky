@@ -2,11 +2,12 @@
 
 from copy import deepcopy
 
-from .actions import actions_for, outstanding_seats
+from .actions import actions_for, outstanding_seats, puppet_action_panels
 from .catalog import PHASES, ROLES
 from .resolution import coco_seat
 from .state import (
-    can_use_card,
+    card_actionable,
+    controlled_cards,
     current,
     eligible_voters,
     fallen_upper_role,
@@ -16,6 +17,7 @@ from .state import (
     poison_sources,
     require,
     role_card,
+    seat_operable,
 )
 
 
@@ -56,9 +58,7 @@ def host_tasks(game):
 
     phase = game["phase"]
     for item in game["pending"]:
-        if item["kind"] == "hiro" and item.get("seat_id"):
-            warn_task("hiro", item["seat_id"], f"{item['seat_id']}号尚未选择是否回溯")
-        elif item["kind"] == "honoka_witness" and item.get("seat_id"):
+        if item["kind"] == "honoka_witness" and item.get("seat_id"):
             warn_task("honoka_witness", item["seat_id"], f"{item['seat_id']}号尚未选择目击显示角色")
     if phase in {"night", "night_coco"}:
         coco = coco_seat(game) if phase == "night" else None
@@ -68,7 +68,9 @@ def host_tasks(game):
             warn_task("night", sid, f"{sid}号尚未确认夜间行动")
     elif phase == "speech" and game["public"]["speaker"]:
         sid = game["public"]["speaker"]
-        warn_task("speech", sid, f"当前发言人：{sid}号")
+        # 无人可操作的发言人会被 advance 直接顺延，不该给主持人留一条永远等不到的警告。
+        if seat_operable(game, sid):
+            warn_task("speech", sid, f"当前发言人：{sid}号")
     elif phase == "nomination":
         for sid in pending_nominators(game):
             warn_task("nomination", sid, f"{sid}号尚未提名或放弃（可与其他人同时提交）")
@@ -174,7 +176,7 @@ def card_view(game, card, host=False):
         }
         if states.get("puppet"):
             result["states"]["puppet_master_seat"] = owner(game, states["puppet"])["id"]
-    result["states"]["entry_allowed"] = can_use_card(game, card)
+    result["states"]["entry_allowed"] = card_actionable(game, card)
     return result
 
 
@@ -241,6 +243,25 @@ def status_cards(game, own):
     return statuses
 
 
+def seat_chat(game, own):
+    """某席位的公开发言权限；傀儡席由其控制者代发。"""
+    if game["status"] == "lobby":
+        return True, ""
+    if game["status"] != "playing":
+        return False, "当前为只读状态"
+    if game["phase"] == "speech":
+        can = game["public"]["speaker"] == own["id"]
+        return can, "" if can else "顺序发言阶段，请等待你的发言顺序"
+    if game["half"] == "day" and current(game, own):
+        return True, ""
+    return (
+        False,
+        "夜间与夜间结果阶段无公开发言；可私信主持人"
+        if game["half"] == "night"
+        else "当前角色已全部出局，不再参与白天发言；可私信主持人",
+    )
+
+
 def game_view(game, actor):
     host = actor.get("kind") == "host"
     spectator = actor.get("kind") == "spectator"
@@ -291,6 +312,13 @@ def game_view(game, actor):
         if host or item["audience"] is None or access.intersection(item["audience"])
     ]
     public = deepcopy(game["public"])
+    # 魔女化命运只私下告知本人（设计文档：命运只私下告知本人并常驻「我的」页状态卡），
+    # 逐席布尔值绝不能整体下发，否则任何人一眼就能看出谁会魔女化。本人那一份由
+    # status_cards 单独投影，主持人仍然看到全部。
+    if not host:
+        public.pop("witch_destiny", None)
+    # 自由发言结束请求是公开进度：两端都要显示「已有几人提交」与 10 秒倒计时。
+    public["discussion_end_requests"] = list(game.get("discussion_end_requests", []))
     # 制作过程只给主持人看：对外不带制作/破坏/未提交的人头与席位明细
     public["balloon"].pop("last", None)
     # 当日目击名单：白天到投票结束前，死者和主持人常驻可见；进入处决或隔天自动消失。
@@ -371,6 +399,13 @@ def game_view(game, actor):
     if own:
         night = game["night"]
         view["self"]["night_confirmed"] = own_id in night["confirmed"]
+        controlled = controlled_cards(game, own_id)
+        view["self"]["puppet_spectator"] = bool(
+            current(game, own) and current(game, own)["states"].get("puppet") and not controlled
+        )
+        view["self"]["puppet_controls"] = (
+            puppet_action_panels(game, actor) if controlled else []
+        )
         view["self"]["night_actions"] = [
             {
                 "ability": a["ability"],
@@ -383,7 +418,7 @@ def game_view(game, actor):
             for a in night["actions"]
             if a["seat_id"] == own_id
         ]
-        if game["water"]["holder"] == own_id and not game["water"]["used"]:
+        if own_id in game["water"]["holders"]:
             view["self"]["water"] = True
         view["self"]["balloon_choice"] = game["balloon_choices"].get(own_id)
         view["self"]["vote"] = game["votes"].get(own_id)
@@ -443,19 +478,10 @@ def game_view(game, actor):
         )
     elif spectator and game["status"] != "ended":
         can_chat, reason = True, ""
-    elif own and game["status"] == "lobby":
-        can_chat, reason = True, ""
-    elif own and game["status"] == "playing":
-        if game["phase"] == "speech":
-            can_chat = public["speaker"] == own_id
-            reason = "" if can_chat else "顺序发言阶段，请等待你的发言顺序"
-        elif game["half"] == "day" and current(game, own):
-            can_chat, reason = True, ""
+    elif own:
+        if view["self"].get("puppet_spectator"):
+            can_chat, reason = False, "你当前是傀儡，由魔女梅露露代为行动"
         else:
-            reason = (
-                "夜间与夜间结果阶段无公开发言；可私信主持人"
-                if game["half"] == "night"
-                else "当前角色已全部出局，不再参与白天发言；可私信主持人"
-            )
+            can_chat, reason = seat_chat(game, own)
     view["can_chat"], view["chat_reason"] = can_chat, reason
     return view

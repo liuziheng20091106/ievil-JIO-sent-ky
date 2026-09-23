@@ -11,23 +11,38 @@ from .actions import (
     day_fake_allowed,
     outstanding_seats,
 )
-from .catalog import AUTO_ADVANCE_DELAY, AUTO_PHASES, DAY_ABILITIES, NIGHT_ABILITIES, PHASES, ROLES
+from .catalog import (
+    AUTO_ADVANCE_DELAY,
+    AUTO_PHASES,
+    DAY_ABILITIES,
+    DISCUSSION_END_DELAY,
+    DISCUSSION_END_VOTES,
+    NIGHT_ABILITIES,
+    PHASES,
+    ROLES,
+)
 from .resolution import (
     begin_night,
     damage_preview,
+    day_damage_preview,
     death_batch,
     eliminate_seat,
     information,
     lock_night,
     prepare_night_preview,
+    publish_witness,
     revive,
+    revoke_death,
+    sync_night_confirmations,
     target_allowed,
+    treasure_protected,
     unlock_coco,
 )
 from .state import (
     DEAL_LOWER_ROLES,
     GameError,
     audience,
+    card_actionable,
     chat_event,
     check_winner,
     clear_seat_actions,
@@ -36,8 +51,7 @@ from .state import (
     eligible_voters,
     effect_effective,
     finish,
-    hiro_dilemma,
-    hiro_pending,
+    hiro_rewind,
     living,
     log_event,
     lost_by_challenge,
@@ -52,7 +66,7 @@ from .state import (
     role_card,
     save_snapshot,
     seat,
-    snapshot_for,
+    seat_operable,
     uid,
 )
 
@@ -63,7 +77,7 @@ def validate_command(game, actor, action, payload):
     require(actor.get("kind") == "host" or actor.get("game_id") == game["id"], "没有本局操作权限")
     choices = [
         a
-        for a in actions_for(game, actor)
+        for a in actions_for(game, actor, puppet_controlled=bool(actor.get("puppet_controlled")))
         if a["id"] == action and all(payload.get(k) == v for k, v in a["payload"].items())
     ]
     require(bool(choices), "此操作不可用，请刷新当前状态")
@@ -112,9 +126,10 @@ def validate_command(game, actor, action, payload):
     return descriptor
 
 
-def set_witch(game, events, cid):
+def set_witch(game, events, cid, *, forced=False):
     card = game["cards"][cid]
-    require(cid not in {"sherry", "arisa"}, "雪莉与亚里沙不能魔女化")
+    if not forced:
+        require(cid not in {"sherry", "arisa", "emma"}, "雪莉、亚里沙与艾玛不能通过普通路径魔女化")
     require(card["alive"] and not card["witch"], "该角色不能再次魔女化")
     card["witch"] = True
     if cid not in game["generated_witches"]:
@@ -142,39 +157,30 @@ def convert_daily(game, events):
         s = owner(game, cid)
         other = next(game["cards"][x] for x in s["cards"] if x != cid)
         return (
-            cid not in {"sherry", "arisa"}
+            cid not in {"sherry", "arisa", "emma"}
             and c["alive"]
             and not c["witch"]
             and current(game, s) == c
             and other["original_role_id"] not in {"millia", "arisa"}
-            # 艾玛这张牌前两天不能魔女化
-            and not (c["role_id"] == "emma" and day <= 2)
         )
 
     converted = False
-    if destiny and day <= 3:
-        # 新版命运规则：前两天各转化指定席位当前牌，第三天转化前两日魔女各自的另一张牌。
-        if day <= 2 and day - 1 < len(destiny["first"]):
+    if day == 3:
+        # 第三天定死为艾玛：存活则无论层数与当前牌状态都强制转化；
+        # 艾玛已出局则当夜不产生新魔女，也不回退到旧的两席命运或魔典。
+        emma = game["cards"]["emma"]
+        if emma["alive"]:
+            if not emma["witch"]:
+                set_witch(game, events, "emma", forced=True)
+            converted = True
+    elif destiny and day < 3:
+        if day - 1 < len(destiny["first"]):
             s = seat(game, destiny["first"][day - 1])
             card = current(game, s)
             if card and legal(card["id"]):
                 set_witch(game, events, card["id"])
                 converted = True
-        else:
-            for sid in destiny["first"]:
-                s = seat(game, sid)
-                other = next(
-                    (
-                        game["cards"][cid]
-                        for cid in s["cards"]
-                        if not game["cards"][cid]["witch"] and game["cards"][cid]["alive"]
-                    ),
-                    None,
-                )
-                if other is not None and other["role_id"] not in {"sherry", "arisa"}:
-                    set_witch(game, events, other["id"])
-                    converted = True
-    if not converted:
+    if not converted and day != 3:
         # 命运席位当前牌不可转化（雪莉当道、亚里沙/米莉亚同席、已出局等）时，
         # 退回魔典顺序找第一个合法目标；仍无目标才交主持人裁定。
         for cid in game["codex"]:
@@ -183,13 +189,18 @@ def convert_daily(game, events):
                 converted = True
                 break
     if not converted:
-        pending(game, "codex", "本日无合法魔女化目标：主持人裁定转化或耗尽处理")
-        return
+        if day == 3:
+            log_event(game, "system", "第三天艾玛已出局，本夜不产生新的魔女。")
+        else:
+            pending(game, "codex", "本日无合法魔女化目标：主持人裁定转化或耗尽处理")
+            return
     begin_night(game, events)
 
 
 def apply_damage(game, events, preview, allow_reaction=True):
+    """结算一次伤害；希罗缺阵时按固定时点自动回溯并返回 True。"""
     hiro = role_card(game, "hiro")
+    half = game["half"]
     mode = "witch" if hiro["witch"] else "normal"
     hiro_triggered = (
         allow_reaction
@@ -197,9 +208,10 @@ def apply_damage(game, events, preview, allow_reaction=True):
         and any(death["target_card"] == "hiro" for death in preview["deaths"])
     )
     if hiro_triggered and effect_effective(game, events, hiro, "时间回溯"):
-        hiro_pending(game, events, mode, preview=preview)
-    else:
-        death_batch(game, events, preview)
+        if hiro_rewind(game, events, half):
+            return True
+    death_batch(game, events, preview)
+    return False
 
 
 def open_balloon(game, events, organizer, participants):
@@ -325,7 +337,11 @@ def next_speaker(game, current_speaker, events):
     passed = set(game.get("speech_passed", []))
     queued = game.get("speech_queued", {})
     index = order.index(current_speaker) + 1 if current_speaker in order else 0
-    while index < len(order) and (order[index] in passed or not current(game, order[index])):
+    # 用 seat_operable 而不是「有当前牌」：傀儡主人出局后该席无人可代操作，
+    # 若仍排它发言就会卡死在「当前发言人」上。发言本身不需要牌面技能，故不看技能。
+    while index < len(order) and (
+        order[index] in passed or not seat_operable(game, order[index])
+    ):
         sid = order[index]
         if sid in queued:
             # 跳过或轮到自己前已出局：提前写好的内容照旧公开，不静默丢弃。
@@ -334,12 +350,26 @@ def next_speaker(game, current_speaker, events):
     return order[index] if index < len(order) else None
 
 
+def sync_speaker(game, events):
+    """当前发言人已无人可操作时顺延到下一位；整轮无人可言则收尾。
+
+    傀儡主人出局、两张牌同时出局等都可能让「当前发言人」在发言中途变成无人可操作。
+    这类席位既拿不到发言按钮，也不该让阶段停住，必须在这里统一顺延。用 while 保证
+    连续多个无人可操作的席位在一次调用里全部越过。
+    """
+    if game["phase"] != "speech":
+        return
+    public = game["public"]
+    while public.get("speaker") and not seat_operable(game, public["speaker"]):
+        speech_done(game, events)
+
+
 def speech_plan(game, dead_first):
     """死者先发言；其余在顺序与逆序间取让魔女化玩家更早发言的一侧。
 
-    两张牌都已出局的席位不再发言，不占本轮顺序。
+    两张牌都已出局的席位不再发言，不占本轮顺序；傀儡席在主人在场时仍由主人代发言。
     """
-    seats = [s["id"] for s in living(game)]
+    seats = [s["id"] for s in living(game) if seat_operable(game, s["id"])]
     dead = [sid for sid in seats if sid in set(dead_first)]
     anchor = seats.index(dead[-1] if dead else seats[0])
     witches = {
@@ -473,6 +503,7 @@ def close_vote(game, events):
 
 def advance(game, events):
     require(not game["pending"], "仍有待裁定事项，请逐项处理后推进")
+    game.pop("rewound_night", None)
     phase = game["phase"]
     if phase == "witch":
         convert_daily(game, events)
@@ -481,7 +512,10 @@ def advance(game, events):
         lock_night(game, events)
     elif phase == "night_review":
         require(game["night"]["preview"] is not None, "尚无预结算结果")
-        death_batch(game, events, game["night"]["preview"])
+        # 统一走 apply_damage：希罗缺阵时先回溯，再决定是否落死亡。
+        apply_damage(game, events, game["night"]["preview"])
+        if game.get("rewound_night"):
+            return
         game["phase"] = "night_results"
     elif phase == "night_results":
         require(
@@ -490,10 +524,42 @@ def advance(game, events):
         )
         game["half"] = "day"
         game["phase"] = "speech"
+        # 下层牌在第二天白天自动登场：公开头像改为当前牌，本人收到私密提示。
+        for before in game["queued_reveals"]:
+            s = seat(game, before["seat_id"])
+            lower = current(game, s)
+            if not lower:
+                continue
+            s["avatar_role_id"] = lower["role_id"]
+            text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
+            if lower["id"] == "honoka":
+                text += "你可以选择一次示人角色。"
+            notify(game, events, text, [s["id"]], "下层登场")
         game["day_binding"] = (
             {"day": game["day"], "intact": True}
             if present(game, "sherry") and present(game, "hanna")
             else None
+        )
+        for notice in game["queued_notices"]:
+            notify(game, events, notice, alert=True)
+        # 夜终总结：按仍实际出局的当夜牌公开，复活或回溯撤销的死亡不计入。
+        night_deaths = [
+            game["cards"][d["target_card"]]["role_id"]
+            for d in game["deaths"]
+            if d["day"] == game["day"]
+            and d["half"] == "night"
+            and d.get("target_card") in game["cards"]
+            and not game["cards"][d["target_card"]]["alive"]
+        ]
+        notify(
+            game,
+            events,
+            f"第{game['day']}夜，"
+            + "、".join(dict.fromkeys(ROLES[rid]["name"] for rid in night_deaths))
+            + "死了。"
+            if night_deaths
+            else f"第{game['day']}夜是平安夜。",
+            alert=True,
         )
         dead_first = [
             d["seat_id"] for d in game["deaths"] if d["day"] == game["day"] and d["half"] == "night"
@@ -501,8 +567,6 @@ def advance(game, events):
         order = game["public"]["speech_order"] or speech_plan(game, dead_first)
         game["public"]["speech_order"] = order
         game["public"]["speaker"] = next_speaker(game, None, events)
-        for notice in game["queued_notices"]:
-            notify(game, events, notice, alert=True)
         game["queued_notices"] = []
         game["queued_reveals"] = []
         game["brainwash"] = {}
@@ -517,10 +581,14 @@ def advance(game, events):
         game["pending"] = [p for p in game["pending"] if not p.get("declaration_id")]
         sync_declarations(game)
     elif phase == "speech":
+        # 兜底：状态若绕过 apply_command 变成「当前发言人无人可操作」，就地顺延，
+        # 不要停在它身上；后面还有人可发言时下面的 require 仍会照常拒绝推进。
+        sync_speaker(game, events)
         require(game["public"]["speaker"] is None, "仍有顺序发言未完成，请玩家确认或警告超时")
         game["phase"] = "discussion"
     elif phase == "discussion":
         game["phase"] = "balloon"
+        game["discussion_end_requests"] = []
     elif phase == "balloon":
         # 先结算名单表决（通过即组织，不可能过半即作废），再清空，不静默丢弃。
         if game["balloon_proposal"]:
@@ -542,6 +610,8 @@ def advance(game, events):
             if game["cards"][cid]["alive"]
             and cid == "nanoka"
             and role_card(game, cid)["uses"].get("bullets", 0) > 0
+            # 傀儡当前牌在主人出局后无人可代开枪；排它会让处决永远推不动。
+            and card_actionable(game, game["cards"][cid])
         }
         require(awaiting.issubset(game["execution_ready"]), "临刑开枪响应尚未确认，可先警告")
         attacks = [
@@ -551,6 +621,8 @@ def advance(game, events):
         attacks.extend(game.get("execution_shots", []))
         preview = damage_preview(game, attacks)
         apply_damage(game, events, preview)
+        if game.get("rewound_night"):
+            return
         game["phase"] = "dusk"
     elif phase == "dusk":
         require(not game["winner_candidate"], "已有胜负候选，请确认本半天所有效果后宣判或裁定纠错")
@@ -573,6 +645,9 @@ def advance(game, events):
         game["speech_queued"] = {}
     else:
         raise GameError("当前阶段不能推进")
+    if game.pop("rewound_night", False):
+        # 本阶段内的预结算触发了希罗回溯：时间线已换掉，不得再写阶段/快照/日志。
+        return
     game["warnings"] = {}
     game["deadline"] = None
     save_snapshot(game)
@@ -621,7 +696,15 @@ def execute_declaration(game, events, declaration):
         )
     elif ability == "spear":
         card["uses"]["spear_day"] = game["day"]
-        apply_damage(game, events, damage_preview(game, [{"target_card": target_card["id"], "source_card": cid, "cause": "spear"}]))
+        apply_damage(
+            game,
+            events,
+            day_damage_preview(
+                game, [{"target_card": target_card["id"], "source_card": cid, "cause": "spear"}]
+            ),
+        )
+        if game.get("rewound_night"):
+            return
         if cid not in game["execution"]:
             game["execution"].append(cid)
     elif ability == "brainwash":
@@ -647,16 +730,6 @@ def execute_declaration(game, events, declaration):
     declaration["executed"] = True
 
 
-def publish_witness(game, events, item, suspects, honoka_role="honoka"):
-    shown = [honoka_role if role == "honoka" else role for role in suspects]
-    text = "四名疑似凶手：" + "、".join(ROLES[role]["name"] for role in shown)
-    notify(game, events, text, [item["seat_id"]], "夜间目击名单")
-    game["witness"] = {"day": game["day"], "seat_id": item["seat_id"], "text": text}
-    victim_seat = seat(game, item["seat_id"])
-    if not current(game, victim_seat):
-        game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
-
-
 def resolve_pending(game, events, data):
     item = next(p for p in game["pending"] if p["id"] == data["pending_id"])
     kind = item["kind"]
@@ -664,16 +737,6 @@ def resolve_pending(game, events, data):
         notify(
             game, events, data["text"], [item["seat_id"]], "主持人裁定信息", item.get("image_id")
         )
-    elif kind == "hiro":
-        if data["snapshot"] == "decline":
-            if item.get("preview"):
-                apply_damage(game, events, item["preview"], allow_reaction=False)
-        else:
-            snap = next(s for s in game["snapshots"] if s["id"] == data["snapshot"])
-            if snap["day"] != item["expected_day"] or snap["phase"] != item["expected_phase"]:
-                require(bool(data.get("reason", "").strip()), "非前一天对应时点需填写裁定理由")
-            rewind(game, data["snapshot"], events, item["mode"], data.get("keep_states", []))
-            return
     elif kind == "suspects":
         suspects = data["suspects"]
         source = item.get("source_card") or data.get("true_source")
@@ -701,38 +764,6 @@ def resolve_pending(game, events, data):
             )
         else:
             publish_witness(game, events, item, suspects)
-    elif kind == "lower_entry":
-        if (
-            data.get("allow")
-            and game["half"] == "night"
-            and game["phase"] in {"night", "night_coco"}
-            and not game["night"]["locked"]
-        ):
-            game["night"]["actors"][item["seat_id"]] = item["card_id"]
-            clear_seat_actions(game, item["seat_id"])
-        game["cards"][item["card_id"]]["states"]["entry_blocked_at"] = (
-            None if data.get("allow") else f"{game['day']}:{game['phase']}"
-        )
-    elif kind == "water":
-        outcome = data["outcome"]
-        if outcome == "cancel":
-            game["water"]["used"] = False
-        else:
-            attack = {
-                "target_card": item["target_card"],
-                "source_card": item["source_card"],
-                "cause": "water",
-                "hide_cause": item["hide_cause"],
-                "unconditional": outcome == "unconditional",
-                "injury": outcome == "injure",
-            }
-            if game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"}:
-                game["night"].setdefault("extra_attacks", []).append(attack)
-                if game["night"]["locked"]:
-                    prepare_night_preview(game)
-            else:
-                apply_damage(game, events, damage_preview(game, [attack]))
-        notify(game, events, data["reason"], [item["seat_id"]], "13水裁定")
     elif kind == "evidence":
         if data.get("allow"):
             recipients = None if data.get("public") else data.get("recipients", [])
@@ -819,6 +850,18 @@ def host_command(game, events, action, data):
             honoka["states"].pop("disguise", None)
         game["status"] = "playing"
         game["phase"] = "witch"
+        # 汉娜与雪莉开局即各自上层：立即绑定，不再等共同度过一个白天。
+        if current(game, owner(game, "hanna"))["id"] == "hanna" and (
+            current(game, owner(game, "sherry"))["id"] == "sherry"
+        ):
+            game["spiritual"]["sherry_bound"] = True
+            notify(
+                game,
+                events,
+                "你与汉娜均为上层，绑定自开局生效：胜负跟随汉娜，不能同意处决汉娜。",
+                [owner(game, "sherry")["id"]],
+                "雪莉绑定",
+            )
         sid = honoka_seat["id"]
         upper = [(s["id"], current(game, s)["role_id"]) for s in game["seats"] if s["id"] != sid]
         shifted = [role for _, role in upper[-1:]] + [role for _, role in upper[:-1]]
@@ -859,8 +902,8 @@ def host_command(game, events, action, data):
     elif action == "host.speech":
         # 仅发言阶段可调整：提前预设会整体旁路死者优先、魔女化更早的自动排序。
         require(game["phase"] == "speech", "进入顺序发言阶段后才能调整发言顺序")
-        ids = [s["id"] for s in living(game)]
-        require(data["start"] in ids, "只能从尚未出局的席位开始")
+        ids = [s["id"] for s in living(game) if seat_operable(game, s["id"])]
+        require(data["start"] in ids, "只能从有人可操作的存活席位开始")
         index = ids.index(data["start"])
         order = ids[index:] + ids[:index]
         if data["direction"] == "desc":
@@ -901,16 +944,18 @@ def host_command(game, events, action, data):
                 "主持人警告",
             )
     elif action == "host.water":
-        require(not game["water"]["used"], "本局唯一13水已使用")
-        require(not any(p["kind"] == "water" for p in game["pending"]), "13水正在裁定使用")
-        old = game["water"]["holder"]
-        game["water"]["holder"] = data["seat_id"]
-        if old and old != data["seat_id"]:
-            notify(game, events, "13水已由主持人收回。", [old], "13水")
+        require(
+            game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"},
+            "13水只在夜间行动、最后夜间行动或主持人预结算阶段发放",
+        )
+        holders = game["water"]["holders"]
+        require(data["seat_id"] not in holders, "该席位本夜已经持有13水")
+        require(current(game, data["seat_id"]), "只能把13水发给仍有当前牌的席位")
+        holders.append(data["seat_id"])
         notify(
             game,
             events,
-            "你获得本局唯一一瓶13水，使用时机与互动由主持人裁定。",
+            "你获得一瓶13水，本次使用无需主持人确认；本夜结束时未使用会过期收回。",
             [data["seat_id"]],
             "13水",
         )
@@ -973,6 +1018,9 @@ def host_command(game, events, action, data):
             card["states"][state] = value
             if data.get("persistent"):
                 game["spiritual"]["persistent_states"].setdefault(cid, {})[state] = value
+            # 傀儡化或失去技能会立刻改变本夜谁能行动，必须同步已确认集合，
+            # 否则该席既拿不到行动又留下阻塞的主持人待办。
+            sync_night_confirmations(game, events)
         check_winner(game)
         notify(
             game,
@@ -1118,6 +1166,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             return
         if ability == "swap":
             require(target is not None, "米莉亚每晚必须选择一名玩家换血")
+            # 换血目标持久保存：跨白天继续替死，直到下一次有效换血覆盖。
+            game["millia_swap"] = {"seat": data["target"], "day": game["day"]}
         if target:
             entry["target_seat"], entry["target_card"] = data["target"], target["id"]
         game["night"]["actions"] = [
@@ -1132,20 +1182,28 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         card = game["cards"][game["night"]["actors"][sid]]
         if card["id"] == "hiro" and card["witch"]:
             emma = role_card(game, "emma")
+            # 必须与魔女刀给出的候选一致：寻宝保护当天刀不到艾玛，也就不该要求她出手。
             can_attack_emma = (
                 emma["alive"]
                 and current(game, owner(game, "emma")) == emma
                 and target_allowed(game, "emma")
+                and not treasure_protected(game, "emma")
             )
             attacked = any(
                 a["ability"] == "knife" and a.get("target_card") == "emma" for a in actions
             )
             if can_attack_emma and not attacked:
-                require(
-                    not game["spiritual"]["hiro_exception"],
-                    "希罗唯一一夜的疯狂攻击例外已用，且艾玛在合法攻击范围内",
-                )
-                game["spiritual"]["hiro_exception"] = True
+                if game["spiritual"]["hiro_exception"]:
+                    # 唯一一次例外夜已经用完：这里不能硬拒——那样整夜没有任何人能推进，
+                    # 也无法给出「不够疯狂」的后果。按规则交主持人裁定是否足够疯狂。
+                    pending(
+                        game,
+                        "madness",
+                        f"魔女希罗（{sid}号）本夜未攻击艾玛，请裁定是否足够疯狂",
+                        seat_id=sid,
+                    )
+                else:
+                    game["spiritual"]["hiro_exception"] = True
         for selected in actions:
             selected["confirmed"] = True
         game["night"]["confirmed"].append(sid)
@@ -1282,6 +1340,16 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             game.setdefault("speech_queued", {})[sid] = text
             game.setdefault("speech_passed", []).append(sid)
             notify(game, events, f"{sid}号已写好发言，轮到时自动公开。")
+    elif action == "discussion.request_end":
+        require(game["phase"] == "discussion", "当前不在自由发言阶段")
+        require(card_actionable(game, card), "当前角色不能行动")
+        requests = game.setdefault("discussion_end_requests", [])
+        require(sid not in requests, "你已经提交过结束请求")
+        requests.append(sid)
+        if len(requests) >= DISCUSSION_END_VOTES:
+            notify(game, events, "已有六名玩家请求结束自由发言，10秒后自动进入热气球。", alert=True)
+        else:
+            notify(game, events, f"已请求结束自由发言（{len(requests)}/{DISCUSSION_END_VOTES}）。")
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
@@ -1383,21 +1451,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         require(sid not in proposal["votes"], "你已经表决过这份名单")
         proposal["votes"][sid] = action == "balloon.agree"
         resolve_balloon_proposal(game, events)
-    elif action == "hiro.decline":
-        item = hiro_dilemma(game, sid)
-        require(item is not None, "当前没有等待你决定的重溯")
-        game["pending"] = [p for p in game["pending"] if p["id"] != item["id"]]
-        if item.get("preview"):
-            apply_damage(game, events, item["preview"], allow_reaction=False)
-        else:
-            notify(game, events, "按预结算继续。", [sid], "希罗回溯")
-    elif action == "hiro.rewind":
-        item = hiro_dilemma(game, sid)
-        require(item is not None, "当前没有等待你决定的重溯")
-        snap = snapshot_for(game, item)
-        require(snap is not None, "前一天同一时点没有可用快照，请由主持人裁定")
-        rewind(game, snap["id"], events, item["mode"])
-        return
     elif action == "photo.permission":
         photo = next(p for p in game["photos"] if p["id"] == data["photo_id"])
         photo["allowed"] = bool(data.get("allow"))
@@ -1410,25 +1463,36 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         )
     elif action == "water.use":
         target = current(game, data["target"])
-        require(card is not None, "当前没有可使用13水的角色，需主持人裁定")
-        game["water"]["used"] = True
-        pending(
-            game,
-            "water",
-            f"{sid}号使用13水：裁定时机与庇护互动",
-            seat_id=sid,
-            target_card=target["id"],
-            source_card=card["id"],
-            hide_cause=bool(data.get("hide_cause") and card["id"] == "meruru" and card["witch"]),
+        require(target is not None, "目标当前没有登场角色牌")
+        require(
+            game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"},
+            "13水只能在本夜行动期使用",
         )
+        require(sid in game["water"]["holders"], "你本夜没有可用的13水")
+        game["water"]["holders"].remove(sid)
+        attack = {
+            "target_card": target["id"],
+            "source_card": card["id"] if card else None,
+            "cause": "water",
+            "hide_cause": bool(data.get("hide_cause") and card and card["id"] == "meruru" and card["witch"]),
+        }
+        game["night"].setdefault("extra_attacks", []).append(attack)
+        if game["night"]["locked"]:
+            # 已锁夜：重算预结算，不创建主持人待办。
+            prepare_night_preview(game)
+        notify(game, events, f"{sid}号使用13水指定{data['target']}号。", alert=True)
     elif action == "meruru.revive":
         card["uses"]["revive"] = True
         death = next(death for death in game["deaths"] if death["id"] == data["death_id"])
         require(
-            death["day"] == game["day"] and death.get("source_card") == card["id"],
-            "只能复活当天由该梅露露牌造成的死亡",
+            death["day"] == game["day"]
+            and death["half"] == "night"
+            and death.get("source_card") == card["id"],
+            "只能复活当天夜里由该梅露露牌造成的死亡",
         )
+        require(not game["cards"][death["target_card"]]["alive"], "该死亡已被处理")
         if effect_effective(game, events, card, "傀儡复活"):
+            revoke_death(game, events, death)
             revive(game, events, death["target_card"], puppet=card["id"])
     elif action == "evidence.submit":
         dead = game["cards"][data["card_id"]]
@@ -1533,10 +1597,6 @@ def command_log_text(game, actor, action, data, *, by_host=False):
         return f"{prefix}设定目击显示身份为{_role_name(game, data.get('role', ''))}"
     if action == "hiro.exit":
         return f"{prefix}主动出局"
-    if action == "hiro.rewind":
-        return f"{prefix}选择回溯时间"
-    if action == "hiro.decline":
-        return f"{prefix}放弃回溯，按预结算继续"
     if action == "water.use":
         return f"{prefix}使用13水{_target_text(game, data)}"
     if action == "meruru.revive":
@@ -1596,9 +1656,20 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
             alert=True,
         )
+    sync_speaker(game, events)
     sync_auto_advance(game)
     game["version"] += 1
     return events
+
+
+def discussion_end_ready(game):
+    """自由发言：六个不同席位提交结束请求后即可自动推进。"""
+    return (
+        game["status"] == "playing"
+        and game["phase"] == "discussion"
+        and not game["pending"]
+        and len(game.get("discussion_end_requests", [])) >= DISCUSSION_END_VOTES
+    )
 
 
 def auto_advance_ready(game):
@@ -1613,8 +1684,10 @@ def auto_advance_ready(game):
 
 
 def sync_auto_advance(game):
-    """没人在等的时候开始 5 秒倒计时；有人又卡住时撤销倒计时。"""
-    if auto_advance_ready(game):
+    """没人在等的时候开始倒计时；自由发言结束请求用 10 秒，其余阶段 5 秒。"""
+    if discussion_end_ready(game):
+        game["public"].setdefault("auto_advance_at", time() + DISCUSSION_END_DELAY)
+    elif auto_advance_ready(game):
         game["public"].setdefault("auto_advance_at", time() + AUTO_ADVANCE_DELAY)
     else:
         game["public"].pop("auto_advance_at", None)
@@ -1627,7 +1700,7 @@ def run_auto_advance(game, now=None):
     if not deadline or deadline > now or game["status"] != "playing":
         return []
     events = []
-    if auto_advance_ready(game):
+    if auto_advance_ready(game) or discussion_end_ready(game):
         try:
             advance(game, events)
             sync_auto_advance(game)
@@ -1655,7 +1728,6 @@ def expire_warnings(game, now=None):
             ),
             None,
         )
-        hiro = hiro_dilemma(game, sid)
         if witness:
             publish_witness(
                 game,
@@ -1664,11 +1736,6 @@ def expire_warnings(game, now=None):
                 witness["suspects"],
             )
             game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
-        elif hiro:
-            game["pending"] = [p for p in game["pending"] if p["id"] != hiro["id"]]
-            if hiro.get("preview"):
-                apply_damage(game, events, hiro["preview"], allow_reaction=False)
-            notify(game, events, "警告到期，按预结算继续。", [sid], "希罗回溯")
         elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
             clear_seat_actions(game, sid)
             game["night"]["confirmed"].append(sid)
@@ -1698,6 +1765,7 @@ def expire_warnings(game, now=None):
     ):
         settle_balloon(game, events)
     game["deadline"] = min(game["warnings"].values(), default=None)
+    sync_speaker(game, events)
     sync_auto_advance(game)
     game["version"] += 1
     return events

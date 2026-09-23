@@ -337,6 +337,7 @@ function ActionForm({
   const latestAction = [
     ...(state?.actions ?? []),
     ...(state?.channels?.flatMap((channel) => channel.actions ?? []) ?? []),
+    ...(state?.self.puppet_controls?.flatMap((panel) => panel.actions) ?? []),
   ].find((item) => actionIdentity(item) === actionIdentity(action));
   const selectedTop =
     action.id === "lobby.order"
@@ -458,18 +459,26 @@ function seatChoiceLabel(
   const seat = state?.seats.find((item) => item.id === option.value);
   if (!seat) return option.label;
   const cards = seat.cards ?? [];
-  const ids =
-    isHost && cards.length
-      ? [...new Set(cards.map((card) => card.role_id))]
-      : [seat.previous_role_id, seat.avatar_role_id].filter(
-          (id): id is string => Boolean(id),
-        );
-  const names = ids.map(
-    (roleId) =>
-      catalog.roles.find((role) => role.id === roleId)?.name ?? roleId,
+  if (state?.status === "lobby") return `${seat.id}号 · ${seat.name}`;
+  if (isHost) {
+    const names = [...new Set(cards.map((card) => card.role_id))].map(
+      (roleId) => catalog.roles.find((role) => role.id === roleId)?.name ?? roleId,
+    );
+    return names.length
+      ? `${seat.id}号 · ${seat.name}（${names.join("／")}）`
+      : option.label;
+  }
+  // 只展示该视图已获准的公开头像：没有可见信息的位置一律显示 ?，不从隐藏卡补全。
+  const publicIds = [seat.previous_role_id, seat.avatar_role_id].filter(
+    (roleId): roleId is string => Boolean(roleId),
   );
-  if (!names.length) return option.label;
-  return `${seat.id}号 · ${seat.name}（${names.join(isHost ? "／" : "→")}）`;
+  const names = publicIds.length
+    ? publicIds.map(
+        (roleId) =>
+          catalog.roles.find((role) => role.id === roleId)?.name ?? roleId,
+      )
+    : ["?"];
+  return `${seat.id}号 · ${seat.name}（${names.join("→")}）`;
 }
 
 function ActionField({
