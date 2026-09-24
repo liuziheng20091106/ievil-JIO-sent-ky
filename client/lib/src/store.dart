@@ -106,9 +106,9 @@ class GameStore extends ChangeNotifier {
   String? pendingPhaseKey;
 
   /// 新到的私密信息：由外壳弹一条醒目横幅后清空。
-  /// 登录/刷新时一次拉到的历史不弹，只有对局记录已经加载过之后新到的才提醒。
+  /// 私密信息不随筛选范围丢弃，登录/刷新时的历史也不重复提醒。
   GameMessage? pendingPrivateInfo;
-  bool _messagesPrimed = false;
+  int? _privateInfoCursor;
 
   /// 本局各参与身份佩戴的成就，以及参与者 id 到账号 id 的映射。
   /// 服务端单独下发（成就是独立于对局规则的库），取不到就当没有徽章。
@@ -746,7 +746,7 @@ class GameStore extends ChangeNotifier {
     unreadMessageCount = 0;
     pendingPhaseKey = null;
     pendingPrivateInfo = null;
-    _messagesPrimed = false;
+    _privateInfoCursor = null;
     _actionBaseline = null;
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
@@ -833,7 +833,12 @@ class GameStore extends ChangeNotifier {
           _applyView(incoming);
         case 'message':
           final message = GameMessage.fromJson(event['message']);
-          if (_matchesScope(message, messageScope)) _mergeMessages([message]);
+          if (_matchesScope(message, messageScope)) {
+            _mergeMessages([message]);
+          } else {
+            // 私密信息不随筛选范围丢弃：玩家停在公屏时也要收到提醒。
+            _notePrivateInfo([message]);
+          }
           // 自己的发言本地已合并且已读，不该再加未读角标。
           if (message.id > _readCursor && message.senderId != actor?.id) {
             unreadMessageCount++;
@@ -982,8 +987,8 @@ class GameStore extends ChangeNotifier {
       messages = page.messages;
       hasMoreMessages = page.hasMore;
       error = null;
-      // 首批历史不算「新到的私密信息」：登录、刷新、切筛选都不该弹横幅。
-      _messagesPrimed = true;
+      // 首批历史只用来定私密信息的基线：登录、刷新、切筛选都不该弹横幅。
+      _notePrivateInfo(page.messages);
     } on ApiException catch (failure) {
       error = failure.message;
     }
@@ -1055,20 +1060,32 @@ class GameStore extends ChangeNotifier {
       _presenceKey(message);
 
   void _mergeMessages(Iterable<GameMessage> incoming) {
-    final known = {for (final item in messages) item.id};
     final indexed = {for (final item in messages) item.id: item};
-    final fresh = <GameMessage>[];
     for (final item in incoming) {
-      if (_matchesScope(item, messageScope)) {
-        if (!known.contains(item.id)) fresh.add(item);
-        indexed[item.id] = item;
-      }
+      if (_matchesScope(item, messageScope)) indexed[item.id] = item;
     }
     messages = _hideStalePresence(indexed.values.toList())
       ..sort((a, b) => a.id.compareTo(b.id));
-    if (_messagesPrimed) {
-      final info = fresh.where((item) => item.kind == 'information');
-      if (info.isNotEmpty) pendingPrivateInfo = info.last;
+    _notePrivateInfo(incoming);
+  }
+
+  /// 记录新到的私密信息并准备一条横幅提醒。
+  ///
+  /// 游标按 id 单调前进，因此切换筛选范围、重连补齐都不会重复提醒；
+  /// 首次拿到的历史（登录、刷新、首屏）只用来定基线，不弹横幅。
+  void _notePrivateInfo(Iterable<GameMessage> incoming) {
+    final infos = incoming.where((item) => item.kind == 'information').toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
+    if (infos.isEmpty) return;
+    final cursor = _privateInfoCursor;
+    if (cursor == null) {
+      _privateInfoCursor = infos.last.id;
+      return;
+    }
+    for (final item in infos) {
+      if (item.id <= cursor) continue;
+      _privateInfoCursor = item.id;
+      pendingPrivateInfo = item;
     }
   }
 
@@ -1411,7 +1428,7 @@ class GameStore extends ChangeNotifier {
     // 角标计数也不该带着旧对局的残留进入新会话。
     pendingPhaseKey = null;
     pendingPrivateInfo = null;
-    _messagesPrimed = false;
+    _privateInfoCursor = null;
     newActionCount = 0;
     warningCount = 0;
     privateStateCount = 0;

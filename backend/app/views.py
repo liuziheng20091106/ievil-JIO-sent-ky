@@ -4,9 +4,51 @@ import json
 
 from . import storage
 from .game import game_view
-from .game.actions import action, field
+from .game.actions import action, field, outstanding_seats
 from .game.catalog import night_half
 from .game.views import seat_chat
+
+
+# 「请求操作」催办：自己的行动正卡住流程时的标题与说明，由服务端决定何时显示、显示什么。
+BLOCKING_PROMPTS = {
+    "night": ("请完成本夜行动", "选择行动后确认；也可以放弃并确认。"),
+    "night_coco": ("请完成最后的夜间行动", "其余人的夜间行动已锁定，只等你提交。"),
+    "speech": ("轮到你顺序发言", "发言、打断，或点「本轮不发言」跳过你的顺序。"),
+    "nomination": ("请提交提名或放弃", "同一人可以被多人提名；提交即生效。"),
+    "voting": ("请投票", "严格超过有投票权存活玩家的一半才会处决。"),
+    "execution": ("请完成临刑响应", "有临刑开枪机会时先选目标或放弃，然后确认。"),
+}
+
+
+def action_prompt(game, actor, active_private):
+    """阻塞阶段的红色催办框；玩家在私聊里时额外说明要先结束私聊。
+
+    返回 None 表示当前没有卡在本人身上的操作。内容与时机都由服务端判定，
+    客户端只负责醒目地展示。
+    """
+    if actor["kind"] != "player" or game["status"] == "ended":
+        return None
+    seat = next((s for s in game["seats"] if s["occupant_id"] == actor["id"]), None)
+    if not seat:
+        return None
+    if game["status"] == "lobby":
+        if seat["ready"]:
+            return None
+        if game["phase"] == "ordering":
+            title, text = "请确认上下牌并再次准备", "七名玩家再次准备后，主持人才会开局。"
+        else:
+            title, text = "请准备", "七名玩家全部准备后，系统才会发牌。"
+    elif seat["id"] in outstanding_seats(game):
+        title, text = BLOCKING_PROMPTS.get(
+            game["phase"], ("请完成当前操作", "你的操作正在阻塞流程推进。")
+        )
+    else:
+        return None
+    return {
+        "title": title,
+        "text": text,
+        "hint": "你正在私聊中：先结束私聊，才能执行上面的操作。" if active_private else None,
+    }
 
 
 def participant_rows(db, game_id):
@@ -410,9 +452,14 @@ def view(db, game, actor, online):
         result["actions"].extend(
             ([create_action] if create_action else []) + collected_channel_actions
         )
-    if (result.get("self") or {}).get("puppet_spectator"):
+    puppet_spectator = bool((result.get("self") or {}).get("puppet_spectator"))
+    if puppet_spectator:
         # 傀儡席由控制者代操作：原玩家只读旁观，连私信类行动也不下发。
         result["actions"] = []
+    if not puppet_spectator:
+        prompt = action_prompt(game, actor, bool(active_private) and actor["kind"] != "host")
+        if prompt:
+            result["action_prompt"] = prompt
     if actor["kind"] == "host":
         result.setdefault("host", {})["participants"] = [
             participant_summary(row)

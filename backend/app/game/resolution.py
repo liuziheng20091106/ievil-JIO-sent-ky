@@ -29,7 +29,7 @@ def information(game, events, card, title, truth, false_text, image_id=None):
     # 中毒只影响这条信息是真是假，不告诉本人掷骰结果（主持人日志里仍有中毒骰）。
     text = (
         truth
-        if effect_effective(game, events, card, f"信息：{title}", reveal=False)
+        if effect_effective(game, card, f"信息：{title}")
         else false_text
     )
     notify(game, events, text, [sid], title, image_id)
@@ -123,7 +123,6 @@ def unlock_coco(game, events):
             night_text(game, game["night"]["actions"]),
             "中毒幻觉：未辨识到有效夜间行动",
         )
-        notify(game, events, "夜间行动进入最后确认步骤。")
 
 
 def target_allowed(game, target_card_id):
@@ -420,9 +419,7 @@ def death_batch(game, events, preview):
         # 必须在判定出局前掷，否则出局后艾玛邻接毒源会随当前牌变化而失效。
         witness_truthful = True
         if game["half"] == "night":
-            witness_truthful = effect_effective(
-                game, events, card, "夜间目击名单", reveal=False
-            )
+            witness_truthful = effect_effective(game, card, "夜间目击名单")
         card["alive"] = False
         if cid in {"sherry", "hanna"} and game.get("day_binding"):
             game["day_binding"]["intact"] = False

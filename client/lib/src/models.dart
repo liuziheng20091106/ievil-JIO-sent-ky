@@ -629,6 +629,12 @@ class GameView {
   bool get puppetSpectator =>
       jsonBool(self['puppet_spectator'], 'state.self.puppet_spectator');
 
+  /// 服务端下发的「请求操作」催办：自己的行动正卡住流程时才有。
+  /// 时机与文案都由服务端决定，客户端只负责醒目展示。
+  Map<String, dynamic>? get actionPrompt => raw['action_prompt'] == null
+      ? null
+      : jsonObject(raw['action_prompt'], 'state.action_prompt');
+
   /// 控制傀儡的梅露露视角面板；无控制关系时为空。
   List<PuppetPanel> get puppetControls => self['puppet_controls'] == null
       ? const []

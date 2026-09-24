@@ -518,6 +518,43 @@ void main() {
     });
   });
 
+  testWidgets('催办框与新私密信息横幅渲染', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      store.applyView(
+        GameView.fromJson({
+          ...playerViewJson(),
+          'action_prompt': {
+            'title': '请提交提名或放弃',
+            'text': '同一人可以被多人提名；提交即生效。',
+            'hint': '你正在私聊中：先结束私聊，才能执行上面的操作。',
+          },
+        }),
+      );
+      // 第一次只是定基线（登录/刷新不弹），第二次才是新到的私密信息。
+      store.mergeMessagesForTest(messagesJson());
+      store.mergeMessagesForTest([
+        GameMessage.fromJson({
+          'id': 99,
+          'kind': 'information',
+          'sender_name': '主持人',
+          'avatar_role_id': 'host',
+          'channel_id': 'information',
+          'text': '四名疑似凶手：梅露露、汉娜、可可、诺亚。',
+          'created_at': stampAgo(0),
+        }),
+      ]);
+      await pumpAt(tester, store, const Size(420, 880));
+      expect(find.text('请提交提名或放弃'), findsOneWidget);
+      expect(find.textContaining('先结束私聊'), findsOneWidget);
+      expect(find.text('新的私密信息'), findsOneWidget);
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/player_action_prompt.png'),
+      );
+    });
+  });
+
   testWidgets('主持人端管理页渲染', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       final store = await previewStore(host: true);

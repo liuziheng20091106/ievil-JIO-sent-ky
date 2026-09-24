@@ -93,9 +93,8 @@ class PoisonAndDeclarations(unittest.TestCase):
         self.assertIn("诺亚邻接", poison_sources(game, game["cards"]["annan"]))
         with patch("backend.app.game.state.SystemRandom") as random:
             random.return_value.randrange.side_effect = [0, 1]
-            events = []
-            self.assertTrue(effect_effective(game, events, game["cards"]["millia"], "测试技能"))
-            self.assertFalse(effect_effective(game, events, game["cards"]["millia"], "测试技能"))
+            self.assertTrue(effect_effective(game, game["cards"]["millia"], "测试技能"))
+            self.assertFalse(effect_effective(game, game["cards"]["millia"], "测试技能"))
         self.assertEqual([entry["kind"] for entry in game["log"][-2:]], ["poison", "poison"])
 
     def test_poisoned_witch_knife_is_not_a_skill_and_still_kills(self):
@@ -177,8 +176,13 @@ class PoisonAndDeclarations(unittest.TestCase):
         game = arranged_game()
         game["cards"]["noah"]["states"]["display_killer"] = "coco"
         player_view = game_view(game, player(game, "1"))
-        self.assertEqual(player_view["self"]["statuses"][0]["id"], "poison")
-        self.assertNotIn("艾玛", player_view["self"]["statuses"][0]["text"])
+        self.assertNotIn(
+            "poison", [item["id"] for item in player_view["self"]["statuses"]]
+        )
+        for card in player_view["self"]["cards"]:
+            self.assertNotIn("poisoned", card["states"])
+        # 其他席位的牌面明细本来就不下发给玩家。
+        self.assertTrue(all("cards" not in seat for seat in player_view["seats"]))
         host_view = game_view(game, HOST)
         self.assertIn("millia", host_view["host"]["poison_sources"])
         spectator = game_view(
@@ -900,7 +904,11 @@ class NightReveal(unittest.TestCase):
         self.assertTrue(held[2]["alive"])
         game["pending"] = []
         events = command(game, HOST, "host.advance")
-        self.assertIn("3号玩家一张角色牌出局。", [item["text"] for item in events])
+        # 天亮只发一条汇总：夜终死讯按席位合并，不再逐条 + 角色名各发一遍。
+        self.assertIn(
+            f"第{game['day']}夜：3号玩家一张角色牌出局。",
+            [item["text"] for item in events],
+        )
         self.assertEqual(game["queued_notices"], [])
         self.assertEqual(game["phase"], "speech")
         open_view = game_view(game, player(game, "1"))["seats"]
@@ -925,7 +933,7 @@ class NightReveal(unittest.TestCase):
 
 
 class NightSummaryAndWitness(unittest.TestCase):
-    def test_peaceful_night_and_named_death_summary(self):
+    def test_peaceful_night_and_merged_death_summary(self):
         game = arranged_game("night_review", "night")
         game["night"]["reactions"] = []
         game["night"]["preview"] = {"injured": {}, "deaths": []}
@@ -942,8 +950,10 @@ class NightSummaryAndWitness(unittest.TestCase):
         command(game, HOST, "host.advance")
         game["pending"] = []
         events = command(game, HOST, "host.advance")
+        # 3号的梅露露是当夜唯一死者：逐条死讯与夜终汇总已合并成一条。
         self.assertIn(
-            f"第{game['day']}夜，梅露露死了。", [item["text"] for item in events]
+            f"第{game['day']}夜：3号玩家一张角色牌出局。",
+            [item["text"] for item in events],
         )
 
     def test_revive_revokes_the_death_record_and_its_publication(self):
@@ -1356,9 +1366,9 @@ class SpeechOrder(unittest.TestCase):
         with self.assertRaises(GameError):
             command(game, player(game, "4"), "speech.speak", {"text": "   "})
         events = command(game, player(game, "4"), "speech.speak", {"text": "我提前说完了"})
+        # 预提交发言不再发系统消息：内容留在队列里，轮到时以玩家发言公开。
         self.assertEqual(
-            [item["text"] for item in events if item["text"].startswith("4号")],
-            ["4号已写好发言，轮到时自动公开。"],
+            [item["text"] for item in events if item["text"].startswith("4号")], []
         )
         self.assertEqual(game["speech_queued"], {"4": "我提前说完了"})
         self.assertIn("4", game["speech_passed"])
@@ -1555,7 +1565,8 @@ class AutoAdvance(unittest.TestCase):
             command(game, player(game, sid), "discussion.request_end", {})
         self.assertNotIn("auto_advance_at", game["public"])
         events = command(game, player(game, "6"), "discussion.request_end", {})
-        self.assertIn("10秒后自动进入提名", "".join(e["text"] for e in events))
+        # 进度不再逐人发系统消息：由公开字段驱动两端的进度条与 10 秒倒计时。
+        self.assertEqual([e for e in events if e["kind"] != "chat"], [])
         deadline = game["public"]["auto_advance_at"]
         self.assertIsNotNone(deadline)
         run_auto_advance(game, deadline - 1)

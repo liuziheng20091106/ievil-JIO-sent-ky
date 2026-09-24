@@ -18,6 +18,7 @@ connections = set()
 
 # 账号级在线：大厅里的账号没有 WebSocket，靠轮询 /api/lobby、/api/online 续期；
 # 对局内的连接由 pong 续期。窗口与连接心跳一致（60 秒）。
+# 在线状态只投影到 seats[].online 与 /api/online，不再产生「已连接 / 已掉线」系统消息。
 PRESENCE_SECONDS = 60
 presence: dict[str, float] = {}
 
@@ -76,15 +77,6 @@ def detach(peer, code=4401):
     return peer.participant_id not in online(peer.game_id)
 
 
-def presence_text(peer, connected):
-    label = (
-        "主持人"
-        if peer.kind == "host"
-        else (f"{peer.seat_id}号玩家【{peer.name}】" if peer.seat_id else f"观战者【{peer.name}】")
-    )
-    return label + ("已连接 / 重新连接" if connected else "已掉线")
-
-
 def publish(game_id, new_messages=(), state=True):
     """Called under lock, only after mutation transaction has committed."""
     notices = list(new_messages)
@@ -94,12 +86,7 @@ def publish(game_id, new_messages=(), state=True):
                 continue
             actor = auth.actor_for_token(db, peer.token_hash, game_id)
             if not actor:
-                if detach(peer):
-                    notices.append(
-                        storage.add_message(
-                            db, game_id, kind="presence", text=presence_text(peer, False)
-                        )
-                    )
+                detach(peer)
             else:
                 peer.participant_id, peer.kind = actor["id"], actor["kind"]
                 peer.name, peer.seat_id = actor["name"], actor["seat_id"]
@@ -169,17 +156,8 @@ async def live(socket):
                 actor["seat_id"],
                 actor["account_id"],
             )
-            first = actor["id"] not in online(game["id"])
             connections.add(peer)
             touch(peer.account_id or "host")
-            notices = []
-            with storage.transaction() as db:
-                if first:
-                    notices.append(
-                        storage.add_message(
-                            db, game["id"], kind="presence", text=presence_text(peer, True)
-                        )
-                    )
             with storage.connect() as db:
                 enqueue(
                     peer,
@@ -189,7 +167,7 @@ async def live(socket):
                         "messages": storage.messages(db, game["id"], actor)["messages"],
                     },
                 )
-            publish(game["id"], notices)
+            publish(game["id"])
         tasks = [asyncio.create_task(writer(peer)), asyncio.create_task(receiver(peer))]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
@@ -204,14 +182,8 @@ async def live(socket):
         if peer:
             async with lock:
                 was_registered = peer in connections
-                last = detach(peer, 1000)
-                if last:
-                    with storage.transaction() as db:
-                        notice = storage.add_message(
-                            db, peer.game_id, kind="presence", text=presence_text(peer, False)
-                        )
-                    publish(peer.game_id, [notice])
-                elif was_registered:
+                detach(peer, 1000)
+                if was_registered:
                     publish(peer.game_id)
             if (
                 socket.application_state is WebSocketState.CONNECTED
@@ -229,26 +201,16 @@ async def clock():
         try:
             async with lock:
                 stamp = time.monotonic()
-                disconnected = {}
+                dropped = set()
                 for peer in list(connections):
                     if stamp - peer.last_pong >= 60:
                         if detach(peer, 4408):
-                            disconnected.setdefault(peer.game_id, []).append(peer)
+                            dropped.add(peer.game_id)
                     elif stamp - peer.last_ping >= 20:
                         enqueue(peer, {"type": "ping"})
                         peer.last_ping = stamp
-                for game_id, peers in disconnected.items():
-                    with storage.transaction() as db:
-                        # 初始化会删除全部对局；已消失的对局不再补写在线记录。
-                        if not game_id or not storage.load_game(db, game_id):
-                            continue
-                        rows = [
-                            storage.add_message(
-                                db, game_id, kind="presence", text=presence_text(peer, False)
-                            )
-                            for peer in peers
-                        ]
-                    publish(game_id, rows)
+                for game_id in dropped:
+                    publish(game_id)
                 with storage.connect() as db:
                     ids = [
                         row["id"]

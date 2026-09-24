@@ -453,27 +453,16 @@ def advance(game, events):
             if present(game, "sherry") and present(game, "hanna")
             else None
         )
-        for notice in game["queued_notices"]:
-            notify(game, events, notice, alert=True)
-        # 夜终总结：按仍实际出局的当夜牌公开，复活或回溯撤销的死亡不计入。
-        night_deaths = [
-            game["cards"][d["target_card"]]["role_id"]
-            for d in game["deaths"]
-            if d["day"] == game["day"]
-            and d["half"] == "night"
-            and d.get("target_card") in game["cards"]
-            and not game["cards"][d["target_card"]]["alive"]
-        ]
-        notify(
-            game,
-            events,
-            f"第{game['day']}夜，"
-            + "、".join(dict.fromkeys(ROLES[rid]["name"] for rid in night_deaths))
-            + "死了。"
-            if night_deaths
-            else f"第{game['day']}夜是平安夜。",
-            alert=True,
-        )
+        # 天亮只发一条汇总：逐条死讯与夜终总结合并，同一批死讯不再刷两遍。
+        if game["queued_notices"]:
+            notify(
+                game,
+                events,
+                f"第{game['day']}夜：" + "".join(game["queued_notices"]),
+                alert=True,
+            )
+        else:
+            notify(game, events, f"第{game['day']}夜是平安夜。", alert=True)
         dead_first = [
             d["seat_id"] for d in game["deaths"] if d["day"] == game["day"] and d["half"] == "night"
         ]
@@ -555,8 +544,8 @@ def advance(game, events):
     game["deadline"] = None
     save_snapshot(game)
     if game["status"] != "ended":
+        # 阶段推进不再发系统消息：两端都有阶段标题与全屏阶段动画，只留主持人日志。
         log_event(game, "phase", f"对局进入第{game['day']}天 · {PHASES[game['phase']]}")
-        notify(game, events, f"第{game['day']}天 · {PHASES[game['phase']]}。")
 
 
 def execute_declaration(game, events, declaration):
@@ -584,7 +573,7 @@ def execute_declaration(game, events, declaration):
     if (
         ability in POISON_EFFECT_ABILITIES
         and not declaration["fake"]
-        and not effect_effective(game, events, card, DAY_ABILITIES[ability][1])
+        and not effect_effective(game, card, DAY_ABILITIES[ability][1])
     ):
         declaration["fake"] = True
         declaration["executed"] = True
@@ -631,7 +620,7 @@ def execute_declaration(game, events, declaration):
         if target_card["id"] not in game["execution"]:
             game["execution"].append(target_card["id"])
         game["spiritual"]["annan_penalty"][cid] = {"day": game["day"] + 1, "declaration_id": declaration["id"]}
-        notify(game, events, f"{target}号进入本轮处决名单。", alert=True)
+        notify(game, events, f"{target}号进入本轮处决名单。")
     elif ability == "photo":
         photo = {"id": uid(), "sender": sid, "target": target, "day": game["day"], "allowed": False}
         game["photos"].append(photo)
@@ -693,7 +682,6 @@ def resolve_pending(game, events, data):
         if data["outcome"] == "convert":
             require(data.get("target") in game["cards"], "请选择特殊转化目标")
             set_witch(game, events, data["target"])
-        notify(game, events, "主持人已处理本日魔女化检测。")
         begin_night(game, events)
     elif kind == "madness":
         if data["outcome"] == "penalty":
@@ -1076,7 +1064,14 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             entry["roll"] = roll
             entry["mine"] = mine
             log_event(game, "roll", f"艾玛寻宝骰值{roll}：{'触发地雷' if mine else '安全'}。")
-            notify(game, events, f"艾玛寻宝结果：{'触发地雷' if mine else '安全'}。", alert=True)
+            # 寻宝是夜间私密行动：结果只发本人，触发地雷的死亡照常在白天公示。
+            notify(
+                game,
+                events,
+                f"寻宝结果：{'触发地雷' if mine else '安全'}。",
+                [sid],
+                "寻宝结果",
+            )
             if mine:
                 card["states"].pop("treasure_protected_day", None)
                 apply_damage(
@@ -1248,12 +1243,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         else:
             require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
             require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
+            # 预提交「本轮不发言」不再发系统消息：轮到时自动跳过即可。
             game.setdefault("speech_passed", []).append(sid)
-            notify(
-                game,
-                events,
-                f"{sid}号本轮不发言，轮到其顺序时自动跳过。",
-            )
     elif action == "speech.speak":
         require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
         require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
@@ -1264,19 +1255,16 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             game.setdefault("speech_passed", []).append(sid)
             speech_done(game, events)
         else:
+            # 提前写好发言同样不再发系统消息，轮到时自动公开。
             game.setdefault("speech_queued", {})[sid] = text
             game.setdefault("speech_passed", []).append(sid)
-            notify(game, events, f"{sid}号已写好发言，轮到时自动公开。")
     elif action == "discussion.request_end":
         require(game["phase"] == "discussion", "当前不在自由发言阶段")
         require(card_actionable(game, card), "当前角色不能行动")
         requests = game.setdefault("discussion_end_requests", [])
         require(sid not in requests, "你已经提交过结束请求")
+        # 进度由两端的「结束自由发言」进度条显示，不再逐人发系统消息。
         requests.append(sid)
-        if len(requests) >= DISCUSSION_END_VOTES:
-            notify(game, events, "已有六名玩家请求结束自由发言，10秒后自动进入提名。", alert=True)
-        else:
-            notify(game, events, f"已请求结束自由发言（{len(requests)}/{DISCUSSION_END_VOTES}）。")
     elif action == "vote.nominate":
         target = current(game, data["target"])
         game["nominations"].append({"seat_id": data["target"], "card_id": target["id"], "by": sid})
@@ -1286,8 +1274,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         notify(game, events, f"{sid}号提名{data['target']}号。")
         game.setdefault("nomination_done", []).append(sid)
     elif action == "vote.pass":
+        # 放弃提名不再发系统消息：提名阶段的进度在顶部显示，提交完自动推进。
         game.setdefault("nomination_done", []).append(sid)
-        notify(game, events, f"{sid}号放弃本次提名。")
     elif action == "vote.cast":
         target = nomination_rounds(game)[len(game["vote_rounds"])]["card_id"]
         require(
@@ -1371,7 +1359,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         if game["night"]["locked"]:
             # 已锁夜：重算预结算，不创建主持人待办。
             prepare_night_preview(game)
-        notify(game, events, f"{sid}号使用13水指定{data['target']}号。", alert=True)
+        notify(game, events, f"{sid}号使用13水指定{data['target']}号。")
     elif action == "meruru.revive":
         card["uses"]["revive"] = True
         death = next(death for death in game["deaths"] if death["id"] == data["death_id"])
@@ -1541,7 +1529,6 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             game,
             events,
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
-            alert=True,
         )
     sync_speaker(game, events)
     sync_auto_advance(game)
@@ -1637,7 +1624,14 @@ def expire_warnings(game, now=None):
             if sid not in game["execution_ready"]:
                 game["execution_ready"].append(sid)
         game["warnings"].pop(sid, None)
-        notify(game, events, f"{sid}号警告时间已到，当前未完成操作按放弃处理。", alert=True)
+        # 警告与超时只私下告知被警告的席位，不对全场公告。
+        notify(
+            game,
+            events,
+            f"{sid}号警告时间已到，当前未完成操作按放弃处理。",
+            [sid],
+            "警告超时",
+        )
         if game["status"] != "playing":
             # 过期结算可能已结束对局：不再写状态或处理其余席位。
             break

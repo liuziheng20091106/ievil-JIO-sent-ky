@@ -158,7 +158,6 @@ def card_view(game, card, host=False):
             for k, v in states.items()
             if k
             in {
-                "poisoned",
                 "protected",
                 "no_vote",
                 "no_ability",
@@ -179,14 +178,11 @@ def status_cards(game, own):
     if not own:
         return []
     cards = [game["cards"][card_id] for card_id in own["cards"]]
-    active = current(game, own)
     statuses = []
 
     def add(status_id, tone, title, text):
         statuses.append({"id": status_id, "tone": tone, "title": title, "text": text})
 
-    if active and poison_sources(game, active):
-        add("poison", "warning", "中毒", "情报可能错误，技能可能被视为假。")
     destiny = game["public"].get("witch_destiny")
     if destiny and game["status"] != "lobby" and int(own["id"]) <= len(destiny["seats"]):
         will = destiny["seats"][int(own["id"]) - 1]
@@ -369,7 +365,8 @@ def game_view(game, actor):
         "half": game["half"],
         "phase": game["phase"],
         "phase_label": PHASES[game["phase"]],
-        "deadline": game["deadline"],
+        # 主持人警告只私下提醒被警告的席位（self.warning_deadline），不对全场暴露倒计时。
+        "deadline": game["deadline"] if host else None,
         "seats": seats,
         "ready_count": ready_count,
         "self": {

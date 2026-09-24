@@ -264,9 +264,43 @@ class BackendFlow(unittest.TestCase):
         ).json()["messages"]
         self.assertIn(private.json()["id"], [message["id"] for message in host_scope])
         self.assertTrue(all(message["channel_id"] != "public" for message in host_scope))
-        system = self.client.get(self.root + "/messages?scope=system", headers=stranger).json()
+        system = self.client.get(self.root + "/messages?scope=system", headers=second).json()
         self.assertTrue(any("正在与" in message["text"] for message in system["messages"]))
         self.assertTrue(any("已结束私信" in message["text"] for message in system["messages"]))
+        # 私信开合只发给频道成员：不在频道里的旁观者看不到这两条。
+        stranger_system = self.client.get(
+            self.root + "/messages?scope=system", headers=stranger
+        ).json()["messages"]
+        self.assertFalse(any("正在与" in message["text"] for message in stranger_system))
+        self.assertFalse(any("已结束私信" in message["text"] for message in stranger_system))
+
+    def test_action_prompt_urges_the_blocked_player(self):
+        """催办框由服务端决定：只有卡住流程的席位才有，在私聊里额外提示先结束私聊。"""
+        self.open_join()
+        players = [self.join(f"1270{i}") for i in range(1, 8)]
+        headers = [item[0] for item in players]
+        actors = [item[1] for item in players]
+        prompt = self.client.get(self.root + "/state", headers=headers[0]).json()[
+            "action_prompt"
+        ]
+        self.assertEqual(prompt["title"], "请准备")
+        self.assertIsNone(prompt["hint"])
+        # 已经准备完的席位不再被催。
+        self.command(headers[0], "lobby.ready")
+        self.assertNotIn(
+            "action_prompt", self.client.get(self.root + "/state", headers=headers[0]).json()
+        )
+        # 进入私聊后仍要被催，并附带「先结束私聊」的说明。
+        created = self.command(
+            headers[0],
+            "channel.create",
+            {"name": "密谈", "participant_ids": [actors[1]["id"], "host"]},
+        ).json()
+        channel = next(item for item in created["channels"] if item["status"] == "pending")
+        self.command(headers[1], "channel.accept", {"channel_id": channel["id"]})
+        view = self.client.get(self.root + "/state", headers=headers[1]).json()
+        self.assertEqual(view["action_prompt"]["title"], "请准备")
+        self.assertIn("私聊", view["action_prompt"]["hint"])
 
     def test_host_player_pair_channel_skips_system_notice(self):
         self.open_join()

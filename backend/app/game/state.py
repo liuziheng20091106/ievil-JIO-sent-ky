@@ -277,11 +277,11 @@ def poisoned(game, card):
     return bool(poison_sources(game, card))
 
 
-def effect_effective(game, events, card, ability, reveal=True):
+def effect_effective(game, card, ability):
     """掷一次中毒效果骰。
 
-    reveal=False 用于信息类效果：本人必须收到一条结论，但不能被告知这条结论
-    是真话还是假话，因此只写主持人日志，不发「中毒判定」提示。
+    中毒对玩家完全隐藏：只写主持人日志，不向本人发「中毒判定」，本人拿到的
+    信息真假由这次掷骰决定。
     """
     if not poisoned(game, card):
         return True
@@ -289,8 +289,6 @@ def effect_effective(game, events, card, ability, reveal=True):
     effective = roll == 0
     text = f"{ROLES[card['role_id']]['name']} · {ability}：中毒骰值{roll}，效果{'生效' if effective else '无效'}。"
     log_event(game, "poison", text)
-    if reveal:
-        notify(game, events, f"中毒判定：本次{ability}{'生效' if effective else '无效'}。", [owner(game, card["id"])["id"]], "中毒判定")
     return effective
 
 

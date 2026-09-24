@@ -117,6 +117,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       );
     }
     final ended = view.status == 'ended';
+    // 服务端下发的「请求操作」催办：自己的行动正卡住流程时才有。
+    final prompt = view.actionPrompt;
     final labels = host ? const ['对局', '状态', '管理'] : const ['对局', '状态', '我的'];
     final icons = host
         ? const [
@@ -261,49 +263,68 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           onEndDrawerChanged: (open) {
             if (open) markThirdPageViewed();
           },
-          body: Stack(
+          body: Column(
             children: [
-              if (twoPane)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+              // 催办框常驻：自己的行动卡住流程时，切到哪一页都要看得见。
+              if (prompt != null) _ActionPromptBox(prompt: prompt),
+              if (!focusTyping && store.pendingPrivateInfo != null)
+                _PrivateInfoBanner(
+                  message: store.pendingPrivateInfo!,
+                  onOpen: () {
+                    setState(() => index = 0);
+                    store.markMessagesRead();
+                    store.acknowledgePrivateInfo();
+                  },
+                  onDismiss: store.acknowledgePrivateInfo,
+                ),
+              Expanded(
+                child: Stack(
                   children: [
-                    SizedBox(
-                        width: 340,
-                        child: PaneFrame(label: '状态', child: board)),
-                    const PaneDivider(),
-                    Expanded(
-                      child: PaneFrame(
-                        label: '对局',
-                        count: counts[0],
-                        urgent: urgent,
-                        child: chat,
-                      ),
-                    ),
-                    if (threePane) ...[
-                      const PaneDivider(),
-                      SizedBox(
-                        width: 360,
-                        child: PaneFrame(
-                          label: labels[2],
-                          count: counts[2],
-                          child: third,
-                        ),
-                      ),
-                    ],
+                    if (twoPane)
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(
+                              width: 340,
+                              child: PaneFrame(label: '状态', child: board)),
+                          const PaneDivider(),
+                          Expanded(
+                            child: PaneFrame(
+                              label: '对局',
+                              count: counts[0],
+                              urgent: urgent,
+                              child: chat,
+                            ),
+                          ),
+                          if (threePane) ...[
+                            const PaneDivider(),
+                            SizedBox(
+                              width: 360,
+                              child: PaneFrame(
+                                label: labels[2],
+                                count: counts[2],
+                                child: third,
+                              ),
+                            ),
+                          ],
+                        ],
+                      )
+                    else if (focusTyping)
+                      // 聚焦输入时没有标题栏，消息列表要自己避开状态栏。
+                      SafeArea(
+                        bottom: false,
+                        child: IndexedStack(
+                            index: index, children: [chat, board, third]),
+                      )
+                    else
+                      IndexedStack(
+                          index: index, children: [chat, board, third]),
+                    // 键盘聚焦时不弹阶段动画：它盖满整屏，会挡住正在输入的内容。
+                    if (!focusTyping && store.pendingPhaseKey != null)
+                      PhaseOverlay(store: store),
                   ],
-                )
-              else if (focusTyping)
-                // 聚焦输入时没有标题栏，消息列表要自己避开状态栏。
-                SafeArea(
-                  bottom: false,
-                  child: IndexedStack(
-                      index: index, children: [chat, board, third]),
-                )
-              else
-                IndexedStack(index: index, children: [chat, board, third]),
-              // 键盘聚焦时不弹阶段动画：它盖满整屏，会挡住正在输入的内容。
-              if (!focusTyping && store.pendingPhaseKey != null)
-                PhaseOverlay(store: store),
+                ),
+              ),
             ],
           ),
           bottomNavigationBar: (twoPane || focusTyping)
@@ -1361,21 +1382,34 @@ class MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final system = message.kind != 'chat';
     if (system) {
+      // 私密信息（只发给本人）用金色卡片顶出来；全场公告用红边；其余保持灰色居中条。
+      if (message.kind == 'information') return _privateInfoCard(context);
+      final alert = message.kind == 'alert';
       return Padding(
         padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
         child: Center(
           child: Container(
-            constraints:  BoxConstraints(maxWidth: 420),
+            constraints:  BoxConstraints(maxWidth: 460),
             padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: context.palette.surfaceMuted,
+              color: alert
+                  ? context.palette.dangerSoft
+                  : context.palette.surfaceMuted,
               borderRadius: BorderRadius.circular(AppRadius.chip),
+              border: alert
+                  ? Border.all(color: context.palette.danger.withValues(alpha: .55))
+                  : null,
             ),
             child: Text(
               _systemText,
               textAlign: TextAlign.center,
               style:  TextStyle(
-                  fontSize: 13, color: context.palette.textSecondary, height: 1.5),
+                  fontSize: alert ? 13.5 : 13,
+                  fontWeight: alert ? FontWeight.w600 : null,
+                  color: alert
+                      ? context.palette.text
+                      : context.palette.textSecondary,
+                  height: 1.5),
             ),
           ),
         ),
@@ -1518,12 +1552,214 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  /// 私密信息卡片：只有本人与主持人能看到，用金色描边把「只发给我的情报」顶出来。
+  Widget _privateInfoCard(BuildContext context) => Padding(
+        padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
+        child: Center(
+          child: Container(
+            constraints:  BoxConstraints(maxWidth: 460),
+            padding:  EdgeInsets.fromLTRB(14, 11, 14, 12),
+            decoration: BoxDecoration(
+              color: context.palette.hostSoft,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              border: Border.all(color: context.palette.host, width: 1.4),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.mark_email_unread_outlined,
+                        size: 16, color: context.palette.host),
+                     SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '私密信息 · 仅你与主持人可见',
+                        style:  TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .4,
+                            color: context.palette.host),
+                      ),
+                    ),
+                    if (_time.isNotEmpty)
+                      Text(
+                        _time,
+                        style: TextStyle(
+                            fontSize: 10, color: context.palette.textTertiary),
+                      ),
+                  ],
+                ),
+                 SizedBox(height: 6),
+                Text(
+                  message.text,
+                  style:  TextStyle(
+                      fontSize: 15, height: 1.5, color: context.palette.text),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
   /// 本机时区的精简时间；解析失败时返回空串，不显示原始时间串。
   String get _time => formatMessageTime(message.createdAt);
 
   /// 系统消息在正文后附一个精简时间，方便对照阶段变化。
   String get _systemText =>
       _time.isEmpty ? message.text : '${message.text} · $_time';
+}
+
+/// 「请求操作」红色大警告框：自己的行动卡住流程时由服务端下发，催促玩家完成。
+/// 玩家在私聊里时服务端会在 hint 里补一句「先结束私聊」。
+class _ActionPromptBox extends StatelessWidget {
+  const _ActionPromptBox({required this.prompt});
+  final Map<String, dynamic> prompt;
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = prompt['hint']?.toString();
+    return Padding(
+      padding:  EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      child: Container(
+        width: double.infinity,
+        padding:  EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: context.palette.dangerSoft,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: context.palette.danger, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: context.palette.danger.withValues(alpha: .22),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.error_outline, size: 26, color: context.palette.danger),
+             SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    prompt['title']?.toString() ?? '请求操作',
+                    style:  TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: context.palette.danger),
+                  ),
+                  if (prompt['text']?.toString().isNotEmpty == true)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        prompt['text'].toString(),
+                        style:  TextStyle(
+                            fontSize: 13,
+                            height: 1.4,
+                            color: context.palette.text),
+                      ),
+                    ),
+                  if (hint != null && hint.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.lock_outline,
+                              size: 14, color: context.palette.danger),
+                           SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              hint,
+                              style:  TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: context.palette.danger),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 新私密信息横幅：比记录里的一条消息更显眼；点「查看」跳到对局记录。
+class _PrivateInfoBanner extends StatelessWidget {
+  const _PrivateInfoBanner({
+    required this.message,
+    required this.onOpen,
+    required this.onDismiss,
+  });
+
+  final GameMessage message;
+  final VoidCallback onOpen;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding:  EdgeInsets.fromLTRB(
+            AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+        child: Container(
+          width: double.infinity,
+          padding:  EdgeInsets.fromLTRB(12, 10, 6, 10),
+          decoration: BoxDecoration(
+            color: context.palette.hostSoft,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: context.palette.host, width: 1.6),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.mark_email_unread_outlined,
+                  size: 20, color: context.palette.host),
+               SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '新的私密信息',
+                      style:  TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .4,
+                          color: context.palette.host),
+                    ),
+                     SizedBox(height: 3),
+                    Text(
+                      message.text,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style:  TextStyle(
+                          fontSize: 13.5,
+                          height: 1.4,
+                          color: context.palette.text),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(onPressed: onOpen, child: const Text('查看')),
+              IconButton(
+                tooltip: '关闭提醒',
+                onPressed: onDismiss,
+                icon: const Icon(Icons.close, size: 16),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 /// 状态页：牌桌 + 阶段信息。
@@ -2214,36 +2450,55 @@ class ProfilePage extends StatelessWidget {
             '私密情报记录',
             subtitle: '仅你能看到；按收到顺序保留。',
           ),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: Column(
-                children: [
-                  for (final raw in view.raw['information'] as List)
-                    if (raw is Map)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+          Container(
+            decoration: BoxDecoration(
+              color: context.palette.hostSoft,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              border: Border.all(color: context.palette.host, width: 1.4),
+            ),
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.mark_email_unread_outlined,
+                        size: 16, color: context.palette.host),
+                     SizedBox(width: 6),
+                    Text(
+                      '只发给你的情报',
+                      style:  TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: context.palette.host),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                for (final raw in view.raw['information'] as List)
+                  if (raw is Map)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            raw['title']?.toString() ?? '游戏信息',
+                            style:  TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: context.palette.host),
+                          ),
+                          if (raw['text']?.toString().isNotEmpty == true)
                             Text(
-                              raw['title']?.toString() ?? '游戏信息',
+                              raw['text'].toString(),
                               style:  TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: context.palette.textSecondary),
+                                  fontSize: 14, color: context.palette.text),
                             ),
-                            if (raw['text']?.toString().isNotEmpty == true)
-                              Text(
-                                raw['text'].toString(),
-                                style:  TextStyle(
-                                    fontSize: 14, color: context.palette.text),
-                              ),
-                          ],
-                        ),
+                        ],
                       ),
-                ],
-              ),
+                    ),
+              ],
             ),
           ),
         ],
