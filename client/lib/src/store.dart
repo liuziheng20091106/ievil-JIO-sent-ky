@@ -52,6 +52,9 @@ class GameStore extends ChangeNotifier {
   static const _actorKey = 'cached_actor';
   static const _gameKey = 'cached_game_id';
 
+  /// 已读公告的内容哈希（sha256）：跨重启保留，公告改了内容就重新算未读。
+  static const _announcementReadKey = 'announcement_read_hashes';
+
   final SharedPreferences preferences;
   final FlutterSecureStorage secureStorage;
 
@@ -87,9 +90,25 @@ class GameStore extends ChangeNotifier {
   /// 在线账号（不含自己的过滤在界面层做）与发给我的待处理邀请。
   List<OnlineAccount> online = const <OnlineAccount>[];
   List<LobbyInvite> invites = const <LobbyInvite>[];
+
+  /// 公告：大厅轮询顺带更新。已读状态按每条公告的 sha256 记在本地偏好里，
+  /// 公告内容一变（哈希变）就会重新算作未读。
+  List<Announcement> announcements = const <Announcement>[];
+  String announcementsVersion = '';
+  Set<String> readAnnouncementHashes = <String>{};
+
+  List<Announcement> get unreadAnnouncements => [
+        for (final item in announcements)
+          if (!readAnnouncementHashes.contains(item.hash)) item,
+      ];
   List<GameMessage> messages = [];
   Map<String, dynamic>? challengeInfo;
   String? pendingPhaseKey;
+
+  /// 新到的私密信息：由外壳弹一条醒目横幅后清空。
+  /// 登录/刷新时一次拉到的历史不弹，只有对局记录已经加载过之后新到的才提醒。
+  GameMessage? pendingPrivateInfo;
+  bool _messagesPrimed = false;
 
   /// 本局各参与身份佩戴的成就，以及参与者 id 到账号 id 的映射。
   /// 服务端单独下发（成就是独立于对局规则的库），取不到就当没有徽章。
@@ -174,6 +193,10 @@ class GameStore extends ChangeNotifier {
   }
 
   Future<void> _restoreInner() async {
+    // 已读公告的哈希跨重启保留：重启后不该把看过的公告又标成未读。
+    readAnnouncementHashes =
+        (preferences.getStringList(_announcementReadKey) ?? const <String>[])
+            .toSet();
     final savedEndpoint = preferences.getString(_endpointKey);
     if (savedEndpoint != null) {
       try {
@@ -290,13 +313,19 @@ class GameStore extends ChangeNotifier {
     api = GameApi(value);
   }
 
-  Future<void> startPlayerLogin() async {
+  Future<void> startPlayerLogin() => _startLogin(host: false);
+
+  /// 主持人登录：与玩家同一套群登录码，只是走主持人挑战端点。
+  /// 没有授权的账号会在核销后被服务端拒绝，并在这里显示原因。
+  Future<void> startHostLogin() => _startLogin(host: true);
+
+  Future<void> _startLogin({required bool host}) async {
     if (api == null) return;
     final generation = ++_challengeGeneration;
     error = null;
     Map<String, dynamic> info;
     try {
-      info = await api!.createChallenge();
+      info = host ? await api!.createHostChallenge() : await api!.createChallenge();
     } on ApiException catch (failure) {
       // 获取登录码是用户直接点击的动作：失败必须当场反馈，
       // 否则按钮恢复原状而界面毫无变化（此前该异常会被 main 吞掉）。
@@ -337,7 +366,8 @@ class GameStore extends ChangeNotifier {
       }
       await Future<void>.delayed(const Duration(seconds: 2));
       try {
-        final result = await api!.challenge(id);
+        final result =
+            host ? await api!.hostChallenge(id) : await api!.challenge(id);
         consecutiveFailures = 0;
         if (generation != _challengeGeneration) return;
         if (result['status'] == 'completed') {
@@ -388,31 +418,6 @@ class GameStore extends ChangeNotifier {
     }
   }
 
-  Future<void> hostLogin(String password) async {
-    if (api == null) return;
-    error = null;
-    try {
-      final result = await api!.hostLogin(password);
-      final token = jsonString(result['session_token'], 'login.session_token');
-      api!.token = token;
-      await _consumeSession(jsonObject(result['session'], 'login.session'),
-          token: token);
-      if (gameId != null) {
-        await enterGame(gameId!);
-      } else {
-        await refreshLobby();
-      }
-    } on ApiException catch (failure) {
-      error = failure.message;
-      notifyListeners();
-      rethrow;
-    } on FormatException catch (failure) {
-      // 主持人登录成功但响应形状异常：同样要反馈给界面而不是被 main 吞掉。
-      error = '登录响应异常：${failure.message}';
-      notifyListeners();
-    }
-  }
-
   Future<void> _consumeSession(Map<String, dynamic> result,
       {required String token}) async {
     final value = result['actor'];
@@ -443,6 +448,16 @@ class GameStore extends ChangeNotifier {
       invites = jsonArray(result['invites'] ?? const <dynamic>[], 'lobby.invites')
           .map(LobbyInvite.fromJson)
           .toList(growable: false);
+      // 大厅轮询顺带取公告：版本号变了才重建列表，避免每 5 秒刷新一次列表状态。
+      final version = result['announcements_version']?.toString() ?? '';
+      if (version != announcementsVersion) {
+        announcementsVersion = version;
+        announcements = jsonArray(
+                result['announcements'] ?? const <dynamic>[],
+                'lobby.announcements')
+            .map(Announcement.fromJson)
+            .toList(growable: false);
+      }
       _announceNewInvites();
       final participation = result['participation'];
       if (participation != null) {
@@ -465,6 +480,48 @@ class GameStore extends ChangeNotifier {
     }
     notifyListeners();
     if (gameId != null && view == null) await enterGame(gameId!);
+  }
+
+  /// 拉一次公告列表（公告页与公告管理页用）；大厅轮询也会顺带更新它。
+  Future<void> loadAnnouncements() async {
+    final client = api;
+    if (client == null || actor == null) return;
+    try {
+      final result = await client.announcements();
+      announcementsVersion = result.version;
+      announcements = result.announcements;
+      notifyListeners();
+    } on ApiException {
+      // 公告取不到不影响对局与大厅的其它功能。
+    } on FormatException {
+      // 同上。
+    }
+  }
+
+  /// 记一条公告为已读：只存内容哈希，不保存公告正文。
+  Future<void> markAnnouncementRead(Announcement item) async {
+    if (item.hash.isEmpty || readAnnouncementHashes.contains(item.hash)) return;
+    readAnnouncementHashes = {...readAnnouncementHashes, item.hash};
+    notifyListeners();
+    await preferences.setStringList(
+      _announcementReadKey,
+      readAnnouncementHashes.toList(growable: false),
+    );
+  }
+
+  Future<void> markAllAnnouncementsRead() async {
+    final hashes = {
+      ...readAnnouncementHashes,
+      for (final item in announcements)
+        if (item.hash.isNotEmpty) item.hash,
+    };
+    if (hashes.length == readAnnouncementHashes.length) return;
+    readAnnouncementHashes = hashes;
+    notifyListeners();
+    await preferences.setStringList(
+      _announcementReadKey,
+      readAnnouncementHashes.toList(growable: false),
+    );
   }
 
   /// 新到的邀请发一次系统通知（仅 Android 生效，其他平台是空操作）。
@@ -678,6 +735,8 @@ class GameStore extends ChangeNotifier {
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
     messageScope = 'all';
+    announcements = const <Announcement>[];
+    announcementsVersion = '';
     equippedAchievements = const {};
     participantAccounts = const {};
     _equippedRequested = const {};
@@ -686,6 +745,8 @@ class GameStore extends ChangeNotifier {
     privateStateCount = 0;
     unreadMessageCount = 0;
     pendingPhaseKey = null;
+    pendingPrivateInfo = null;
+    _messagesPrimed = false;
     _actionBaseline = null;
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
@@ -921,6 +982,8 @@ class GameStore extends ChangeNotifier {
       messages = page.messages;
       hasMoreMessages = page.hasMore;
       error = null;
+      // 首批历史不算「新到的私密信息」：登录、刷新、切筛选都不该弹横幅。
+      _messagesPrimed = true;
     } on ApiException catch (failure) {
       error = failure.message;
     }
@@ -992,12 +1055,28 @@ class GameStore extends ChangeNotifier {
       _presenceKey(message);
 
   void _mergeMessages(Iterable<GameMessage> incoming) {
+    final known = {for (final item in messages) item.id};
     final indexed = {for (final item in messages) item.id: item};
+    final fresh = <GameMessage>[];
     for (final item in incoming) {
-      if (_matchesScope(item, messageScope)) indexed[item.id] = item;
+      if (_matchesScope(item, messageScope)) {
+        if (!known.contains(item.id)) fresh.add(item);
+        indexed[item.id] = item;
+      }
     }
     messages = _hideStalePresence(indexed.values.toList())
       ..sort((a, b) => a.id.compareTo(b.id));
+    if (_messagesPrimed) {
+      final info = fresh.where((item) => item.kind == 'information');
+      if (info.isNotEmpty) pendingPrivateInfo = info.last;
+    }
+  }
+
+  /// 关掉「新私密信息」横幅；记录本身仍在对话与「私密情报记录」里。
+  void acknowledgePrivateInfo() {
+    if (pendingPrivateInfo == null) return;
+    pendingPrivateInfo = null;
+    notifyListeners();
   }
 
   bool _matchesScope(GameMessage message, String scope) => switch (scope) {
@@ -1331,6 +1410,8 @@ class GameStore extends ChangeNotifier {
     // 登出后 1.45 秒内重登不该凭空重播旧对局的阶段动画，
     // 角标计数也不该带着旧对局的残留进入新会话。
     pendingPhaseKey = null;
+    pendingPrivateInfo = null;
+    _messagesPrimed = false;
     newActionCount = 0;
     warningCount = 0;
     privateStateCount = 0;
@@ -1342,6 +1423,8 @@ class GameStore extends ChangeNotifier {
     selectedPuppetChannelId = 'public';
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
+    announcements = const <Announcement>[];
+    announcementsVersion = '';
     equippedAchievements = const {};
     participantAccounts = const {};
     _equippedRequested = const {};

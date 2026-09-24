@@ -1,8 +1,9 @@
 """Achievement endpoints: host-managed definitions and grants, player-owned display.
 
-权限边界：定义的新建/修改/删除、给谁授权、撤销授权都只有主持人令牌能做；玩家只能读
-自己的成就并佩戴其中一个，且只能佩戴自己名下的记录。头像摘要与对局内的佩戴信息是
-公开的展示数据——前者任何已登录身份可读，后者只有该局的主持人/参与者/观战者可读。
+权限边界：定义的新建/修改/删除、给谁授权、撤销授权都需要 3 级及以上主持，且稀有度
+不能超过该等级的上限（3 级 ≤3、4 级 ≤4、5 级全部）；玩家只能读自己的成就并佩戴其中
+一个，且只能佩戴自己名下的记录。头像摘要与对局内的佩戴信息是公开的展示数据——
+前者任何已登录身份可读，后者只有该局的主持人/参与者/观战者可读。
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,9 +13,25 @@ from . import achievement_storage, auth, auth_storage, schemas, storage
 router = APIRouter(prefix="/api/achievements")
 
 
-def require_host(request):
+def require_achievement_host(request):
+    """成就管理需要 3 级及以上主持（先鉴权，再看目标是否存在）。"""
     with storage.connect() as db:
-        return auth.require_actor(db, request, host=True)
+        return auth.require_host_level(db, request, 3)
+
+
+def check_rarity(actor, rarity):
+    """各级主持只能碰自己档位内的稀有度：3 级 ≤3、4 级 ≤4、5 级全部。"""
+    level = int(actor.get("host_level", 0))
+    limit = auth_storage.HOST_ACHIEVEMENT_LIMITS.get(level, 0)
+    if int(rarity) > limit:
+        raise HTTPException(
+            403, f"你当前是 {level} 级主持，最多只能分发稀有度 {limit} 的成就"
+        )
+    return actor
+
+
+def require_host(request):
+    return require_achievement_host(request)
 
 
 def require_reader(request):
@@ -46,27 +63,31 @@ async def catalog(request: Request):
 
 @router.post("/defs")
 async def create_definition(body: schemas.Achievement, request: Request):
-    require_host(request)
+    check_rarity(require_achievement_host(request), body.rarity)
     return achievement_storage.create_definition(body.name, body.detail, body.rarity)
 
 
 @router.post("/defs/{achievement_id}")
 async def update_definition(achievement_id: str, body: schemas.Achievement, request: Request):
-    require_host(request)
-    updated = achievement_storage.update_definition(
+    actor = require_achievement_host(request)
+    existing = achievement_storage.definition(achievement_id)
+    if not existing:
+        raise HTTPException(404, "成就不存在")
+    # 改前改后都要在自己档位内：不能把别人的高级成就改低，也不能改成超出上限。
+    check_rarity(actor, max(body.rarity, existing["rarity"]))
+    return achievement_storage.update_definition(
         achievement_id, body.name, body.detail, body.rarity
     )
-    if not updated:
-        raise HTTPException(404, "成就不存在")
-    return updated
 
 
 @router.delete("/defs/{achievement_id}")
 async def delete_definition(achievement_id: str, request: Request):
-    require_host(request)
-    result = achievement_storage.delete_definition(achievement_id)
-    if not result["deleted"]:
+    actor = require_achievement_host(request)
+    existing = achievement_storage.definition(achievement_id)
+    if not existing:
         raise HTTPException(404, "成就不存在")
+    check_rarity(actor, existing["rarity"])
+    result = achievement_storage.delete_definition(achievement_id)
     return {"ok": True, "removed_grants": result["removed_grants"]}
 
 
@@ -98,18 +119,25 @@ async def players(request: Request):
 
 @router.post("/players/{account_id}/grants")
 async def create_grant(account_id: str, body: schemas.AchievementGrant, request: Request):
-    require_host(request)
+    actor = require_achievement_host(request)
+    definition = achievement_storage.definition(body.achievement_id)
+    if not definition:
+        raise HTTPException(409, "成就已不存在")
+    check_rarity(actor, definition["rarity"])
     created = achievement_storage.grant(account_id, body.achievement_id, account_name(account_id))
     if not created:
-        raise HTTPException(409, "该玩家已经获得过这个成就，或成就已不存在")
+        raise HTTPException(409, "该玩家已经获得过这个成就")
     return created
 
 
 @router.delete("/grants/{grant_id}")
 async def revoke_grant(grant_id: str, request: Request):
-    require_host(request)
-    if not achievement_storage.revoke(grant_id):
+    actor = require_achievement_host(request)
+    grant = achievement_storage.grant_by_id(grant_id)
+    if not grant:
         raise HTTPException(404, "授权记录不存在")
+    check_rarity(actor, grant["rarity"])
+    achievement_storage.revoke(grant_id)
     return {"ok": True}
 
 

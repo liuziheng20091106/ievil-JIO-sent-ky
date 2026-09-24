@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +13,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from . import achievement_storage, achievements_api, api, auth_storage, realtime, storage
+from . import (
+    achievement_storage,
+    achievements_api,
+    announcement_storage,
+    announcements_api,
+    api,
+    auth_storage,
+    hosts_api,
+    realtime,
+    storage,
+)
 from .game import GameError
 
 logger = logging.getLogger(__name__)
@@ -23,6 +34,10 @@ async def lifespan(app):
     storage.initialize()
     auth_storage.initialize()
     achievement_storage.initialize()
+    announcement_storage.initialize()
+    if not os.environ.get("GAME_ADMIN_QQ", "").strip():
+        # 没有内置管理员就没有人能建局：启动时就把这条配置缺失说出来。
+        logger.warning("GAME_ADMIN_QQ 未配置：没有账号能登录主持人端，请先配置管理员 QQ 号")
     timer = asyncio.create_task(realtime.clock())
     try:
         yield
@@ -36,6 +51,8 @@ async def lifespan(app):
 app = FastAPI(title="魔法裁判 · 七双", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.include_router(api.router)
 app.include_router(achievements_api.router)
+app.include_router(announcements_api.router)
+app.include_router(hosts_api.router)
 
 
 @app.middleware("http")

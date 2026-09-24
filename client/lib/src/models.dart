@@ -111,6 +111,8 @@ class Actor {
     seatId = raw['seat_id']?.toString();
     accountId = (raw['account_id'] ?? raw['id']).toString();
     avatarUrl = raw['avatar_url']?.toString();
+    hostLevel =
+        raw['host_level'] == null ? 0 : jsonInt(raw['host_level'], 'actor.host_level');
   }
 
   final Map<String, dynamic> raw;
@@ -121,8 +123,20 @@ class Actor {
   late final String? seatId;
   late final String? avatarUrl;
 
+  /// 主持等级（1-5）；非主持人是 0。权限判定在服务端，这里只用来决定显示哪些入口。
+  late final int hostLevel;
+
   bool get isHost => kind == 'host';
   bool get isSpectator => kind == 'spectator';
+
+  /// 3 级起可以定义与分发成就（稀有度上限由服务端按等级校验）。
+  bool get canManageAchievements => isHost && hostLevel >= 3;
+
+  /// 4 级起可以授权/取消 1-3 级主持。
+  bool get canManageHosts => isHost && hostLevel >= 4;
+
+  /// 5 级是系统管理员：可以发布公告、分发全等级成就、授权 1-5 级主持。
+  bool get isAdmin => isHost && hostLevel >= 5;
 }
 
 class LobbyGame {
@@ -489,6 +503,60 @@ class AchievementSummary {
   late final int total;
   late final EquippedAchievement? equipped;
   late final List<AchievementGrant> top;
+}
+
+/// 公告：标题 + markdown 正文；hash 是内容哈希，客户端用它记「已读」。
+class Announcement {
+  Announcement.fromJson(Object? value) : raw = jsonObject(value, 'announcement') {
+    id = jsonString(raw['id'], 'announcement.id');
+    title = jsonString(raw['title'], 'announcement.title');
+    body = raw['body']?.toString() ?? '';
+    authorName = raw['author_name']?.toString() ?? '';
+    createdAt = raw['created_at']?.toString() ?? '';
+    updatedAt = raw['updated_at']?.toString() ?? '';
+    hash = raw['hash']?.toString() ?? '';
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String title;
+  late final String body;
+  late final String authorName;
+  late final String createdAt;
+  late final String updatedAt;
+  late final String hash;
+}
+
+/// 主持授权名单上的一行：内置管理员、已授权账号，以及已经用完 1 局权限的账号。
+class HostAccount {
+  HostAccount.fromJson(Object? value) : raw = jsonObject(value, 'host') {
+    accountId = jsonString(raw['account_id'], 'host.account_id');
+    name = raw['name']?.toString() ?? '';
+    qqId = raw['qq_id']?.toString() ?? '';
+    avatarUrl = raw['avatar_url']?.toString() ?? '';
+    level = jsonInt(raw['level'], 'host.level');
+    consumed = jsonBool(raw['consumed'], 'host.consumed');
+    builtin = jsonBool(raw['builtin'], 'host.builtin');
+    grantedAt = raw['granted_at']?.toString();
+    grantedBy = raw['granted_by']?.toString();
+  }
+
+  final Map<String, dynamic> raw;
+  late final String accountId;
+  late final String name;
+  late final String qqId;
+  late final String avatarUrl;
+  late final int level;
+
+  /// 1 级授权已经用完那一局：界面要提示「需要重新授权」。
+  late final bool consumed;
+
+  /// 内置管理员（GAME_ADMIN_QQ）：等级由服务端配置决定，界面不能改。
+  late final bool builtin;
+  late final String? grantedAt;
+  late final String? grantedBy;
+
+  int get effectiveLevel => consumed ? 0 : level;
 }
 
 /// 角色目录：`/api/catalog` 的裁剪结果。

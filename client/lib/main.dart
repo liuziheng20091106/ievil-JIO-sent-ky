@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 
 import 'src/app_icons.dart';
 import 'src/achievement_pages.dart';
+import 'src/announcement_pages.dart';
 import 'src/design.dart';
+import 'src/host_pages.dart';
 import 'src/models.dart';
 import 'src/picks.dart';
 import 'src/release.dart';
@@ -280,7 +282,7 @@ class _EndpointPageState extends State<EndpointPage> {
 /// （gateway/gateway.py 的 LOGIN_PATTERN），少一个空格或不带前缀都不算登录。
 String loginCommandText(String code) => '活动登录 $code';
 
-/// 登录：QQ 群验证码 / 主持人密码。
+/// 登录：玩家与主持人都是 QQ 群验证码；主持授权与账号绑定，没有密码入口。
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.store});
   final GameStore store;
@@ -292,13 +294,10 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage>
     with SingleTickerProviderStateMixin {
   late final TabController tabs = TabController(length: 2, vsync: this);
-  final password = TextEditingController();
-  bool hostBusy = false;
 
   @override
   void dispose() {
     tabs.dispose();
-    password.dispose();
     super.dispose();
   }
 
@@ -464,6 +463,7 @@ class _LoginPageState extends State<LoginPage>
                           SizedBox(width: AppSpacing.md),
                           Expanded(
                             child: Text(
+                              '主持授权与 QQ 账号绑定：管理员授权后，用同一个群登录码进入主持人端。'
                               '主持人可以查看本局全部角色与私密信息，请勿共享登录会话。',
                               style: TextStyle(
                                 fontSize: 13,
@@ -475,25 +475,84 @@ class _LoginPageState extends State<LoginPage>
                         ],
                       ),
                     ),
+                    const SizedBox(height: AppSpacing.xl),
+                    Center(child: AppLogo(size: 88, rounded: true)),
                     const SizedBox(height: AppSpacing.lg),
-                    TextField(
-                      controller: password,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: '主持人密码',
-                        prefixIcon: Icon(Icons.lock_outline, size: 20),
+                    Text(
+                      challenge == null ? '用 QQ 群完成主持人验证' : '请在指定 QQ 群发送',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: context.palette.text,
                       ),
-                      onSubmitted: (_) => loginHost(),
                     ),
-                    const SizedBox(height: AppSpacing.lg),
-                    FilledButton(
-                      onPressed: hostBusy ? null : loginHost,
-                      child: Text(hostBusy ? '登录中…' : '进入主持人工作台'),
+                    if (challenge != null) ...[
+                       SizedBox(height: AppSpacing.md),
+                      Container(
+                        padding:  EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
+                        ),
+                        decoration: BoxDecoration(
+                          color: context.palette.accentSoft,
+                          borderRadius: BorderRadius.circular(AppRadius.card),
+                        ),
+                        child: Column(
+                          children: [
+                             Text(
+                              '活动登录',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: context.palette.textSecondary,
+                              ),
+                            ),
+                             SizedBox(height: AppSpacing.xs),
+                            SelectableText(
+                              code,
+                              style:  TextStyle(
+                                fontSize: 34,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 6,
+                                color: context.palette.accent,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      OutlinedButton.icon(
+                        onPressed: copyLoginCommand,
+                        icon: const Icon(Icons.content_copy_rounded, size: 18),
+                        label: Text('一键复制「${loginCommandText(code)}」'),
+                      ),
+                    ],
+                     SizedBox(height: AppSpacing.xl),
+                    FilledButton.icon(
+                      onPressed: challenge == null
+                          ? () async {
+                              try {
+                                await widget.store.startHostLogin();
+                              } catch (_) {
+                                // 具体原因由 store.error 呈现（例如没有主持授权）。
+                              }
+                            }
+                          : null,
+                      icon: Icon(
+                        challenge == null
+                            ? Icons.verified_user_outlined
+                            : Icons.hourglass_top_rounded,
+                        size: 18,
+                      ),
+                      label: Text(
+                        challenge == null ? '获取登录码' : '等待群内验证…',
+                      ),
                     ),
                     if (widget.store.error != null) ...[
                        SizedBox(height: AppSpacing.md),
                       Text(
                         widget.store.error!,
+                        textAlign: TextAlign.center,
                         style:  TextStyle(
                           color: context.palette.danger,
                           fontSize: 13,
@@ -508,22 +567,6 @@ class _LoginPageState extends State<LoginPage>
         ],
       ),
     );
-  }
-
-  Future<void> loginHost() async {
-    if (password.text.isEmpty) {
-      return;
-    }
-    setState(() => hostBusy = true);
-    try {
-      await widget.store.hostLogin(password.text);
-    } catch (_) {
-      // 服务端原因由 store.error 暴露，密码输入保留。
-    } finally {
-      if (mounted) {
-        setState(() => hostBusy = false);
-      }
-    }
   }
 }
 
@@ -647,7 +690,9 @@ class _LobbyPageState extends State<LobbyPage> {
                         ),
                       ),
                       Text(
-                        store.actor!.isHost ? '主持人' : '已通过 QQ 登录',
+                        store.actor!.isHost
+                            ? hostLevelName(store.actor!.hostLevel)
+                            : '已通过 QQ 登录',
                         style:  TextStyle(
                           fontSize: 13,
                           color: context.palette.textTertiary,
@@ -825,33 +870,19 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
                 ),
               ),
-            // 成就：主持人在这里管理定义与授权，玩家在这里查看自己获得的成就并佩戴。
-            Card(
-              child: ListTile(
-                contentPadding: EdgeInsets.symmetric(
-                    horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
-                leading: Icon(
-                  Icons.emoji_events_outlined,
-                  color: store.actor!.isHost
-                      ? context.palette.host
-                      : context.palette.accent,
-                ),
-                title: Text(
-                  store.actor!.isHost ? '成就管理' : '我的成就',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: context.palette.text,
-                  ),
-                ),
-                subtitle: Text(
-                  store.actor!.isHost
-                      ? '自定义成就，授权给玩家'
-                      : '查看获得的成就并挑一个佩戴',
-                  style: TextStyle(
-                      fontSize: 12, color: context.palette.textTertiary),
-                ),
-                trailing: const Icon(Icons.chevron_right),
+            // 公告：大厅轮询顺带更新（见 store.refreshLobby），点开看 markdown 正文。
+            AnnouncementSection(store: store),
+            // 成就：玩家看自己获得的成就并佩戴；3 级及以上主持才能管理定义与授权。
+            if (!store.actor!.isHost || store.actor!.canManageAchievements)
+              _LobbyEntry(
+                icon: Icons.emoji_events_outlined,
+                color: store.actor!.isHost
+                    ? context.palette.host
+                    : context.palette.accent,
+                title: store.actor!.isHost ? '成就管理' : '我的成就',
+                subtitle: store.actor!.isHost
+                    ? '自定义成就，授权给玩家'
+                    : '查看获得的成就并挑一个佩戴',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => store.actor!.isHost
@@ -860,7 +891,32 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
                 ),
               ),
-            ),
+            // 主持授权：4 级起可以授权他人（等级上限由服务端按你的等级给）。
+            if (store.actor!.canManageHosts)
+              _LobbyEntry(
+                icon: Icons.verified_user_outlined,
+                color: context.palette.accent,
+                title: '主持授权',
+                subtitle: '授权或取消 ${hostLevelName(store.actor!.hostLevel)} 的下级主持',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => HostAuthorizationPage(store: store),
+                  ),
+                ),
+              ),
+            // 公告管理：只有 5 级（系统管理员）能发布。
+            if (store.actor!.isAdmin)
+              _LobbyEntry(
+                icon: Icons.campaign_outlined,
+                color: context.palette.host,
+                title: '公告管理',
+                subtitle: '发布、编辑与删除全服公告（markdown）',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AnnouncementAdminPage(store: store),
+                  ),
+                ),
+              ),
             const SectionTitle('在线玩家', subtitle: '最近一分钟内有活动的已登录账号。'),
             Card(
               child: Padding(
@@ -983,4 +1039,45 @@ class _LobbyPageState extends State<LobbyPage> {
     }
     return const [];
   }
+}
+
+/// 大厅里的功能入口卡片：图标 + 标题 + 一句话说明。
+class _LobbyEntry extends StatelessWidget {
+  const _LobbyEntry({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: ListTile(
+          contentPadding: EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
+          leading: Icon(icon, color: color),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: context.palette.text,
+            ),
+          ),
+          subtitle: Text(
+            subtitle,
+            style:
+                TextStyle(fontSize: 12, color: context.palette.textTertiary),
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: onTap,
+        ),
+      );
 }

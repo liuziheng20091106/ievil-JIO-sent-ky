@@ -22,11 +22,6 @@ class GameApi {
             'GET', '/api/native/auth/challenges/${Uri.encodeComponent(id)}'),
       );
 
-  Future<Map<String, dynamic>> hostLogin(String password) async => jsonObject(
-        await _request('POST', '/api/native/host/login',
-            body: {'password': password}),
-      );
-
   Future<Map<String, dynamic>> health() async =>
       jsonObject(await _request('GET', '/api/health'));
 
@@ -174,6 +169,84 @@ class GameApi {
 
   Future<void> logout() async {
     await _request('POST', '/api/logout');
+  }
+
+  /// 主持人也是 QQ 账号：与玩家同一个群登录码，只是换成主持人挑战端点。
+  Future<Map<String, dynamic>> createHostChallenge() async =>
+      jsonObject(await _request('POST', '/api/native/auth/host/challenges'));
+
+  Future<Map<String, dynamic>> hostChallenge(String id) async => jsonObject(
+        await _request(
+            'GET', '/api/native/auth/host/challenges/${Uri.encodeComponent(id)}'),
+      );
+
+  /// 公告列表（任何已登录身份可读）。
+  Future<({List<Announcement> announcements, String version})>
+      announcements() async {
+    final body = jsonObject(await _request('GET', '/api/announcements'));
+    return (
+      announcements: jsonArray(body['announcements'], 'announcements')
+          .map(Announcement.fromJson)
+          .toList(growable: false),
+      version: body['announcements_version']?.toString() ?? '',
+    );
+  }
+
+  Future<Announcement> createAnnouncement({
+    required String title,
+    required String body,
+  }) async =>
+      Announcement.fromJson(await _request(
+        'POST',
+        '/api/announcements',
+        body: {'title': title, 'body': body},
+      ));
+
+  Future<Announcement> updateAnnouncement(
+    String announcementId, {
+    required String title,
+    required String body,
+  }) async =>
+      Announcement.fromJson(await _request(
+        'POST',
+        '/api/announcements/${Uri.encodeComponent(announcementId)}',
+        body: {'title': title, 'body': body},
+      ));
+
+  Future<void> deleteAnnouncement(String announcementId) async {
+    await _request(
+      'DELETE',
+      '/api/announcements/${Uri.encodeComponent(announcementId)}',
+    );
+  }
+
+  /// 主持授权名单（4 级及以上）；grantable 是当前身份最多能授到的等级。
+  Future<({List<HostAccount> hosts, int grantable})> hosts() async {
+    final body = jsonObject(await _request('GET', '/api/hosts'));
+    return (
+      hosts: jsonArray(body['hosts'], 'hosts')
+          .map(HostAccount.fromJson)
+          .toList(growable: false),
+      grantable: jsonInt(body['grantable'], 'grantable'),
+    );
+  }
+
+  /// 按昵称或 QQ 号找账号。
+  Future<List<HostAccount>> hostAccounts(String query) async => jsonArray(
+        jsonObject(await _request('GET', '/api/hosts/accounts',
+            query: {'q': query}))['accounts'],
+        'accounts',
+      ).map(HostAccount.fromJson).toList(growable: false);
+
+  Future<HostAccount> authorizeHost(String accountId, int level) async =>
+      HostAccount.fromJson(await _request(
+        'POST',
+        '/api/hosts/${Uri.encodeComponent(accountId)}',
+        body: {'level': level},
+      ));
+
+  Future<void> revokeHost(String accountId) async {
+    await _request('DELETE', '/api/hosts/${Uri.encodeComponent(accountId)}');
   }
 
   /// 成就目录：玩家用它对照自己获得的成就，主持人用它挑要授权的成就。

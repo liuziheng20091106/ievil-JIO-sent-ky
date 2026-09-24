@@ -50,6 +50,7 @@ class Harness:
         *,
         gateway_token="test-gateway-secret",
         group_id=123456,
+        host_qq="10001",
         codex=None,
         seed=0,
         policies=None,
@@ -64,7 +65,8 @@ class Harness:
         self.transport = TestClientTransport(client)
         self.authenticate = _authenticator_for_test_client(client, gateway_token, group_id)
         self.host = build_client(self.transport, "主持人")
-        self.host.login_host()
+        # 主持人必须是被授权的 QQ 账号（检查里默认把 host_qq 配成 GAME_ADMIN_QQ）。
+        self.host.login_host(self.authenticate, host_qq, "测试主持人", group_id=group_id)
         self.host.create_game(codex or DEFAULT_CODEX_ROLES)
         self.host.refresh()
         self.seats = self._seat_players(seed, policies)

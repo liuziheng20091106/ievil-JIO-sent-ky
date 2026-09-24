@@ -30,6 +30,7 @@ class BackendFlow(unittest.TestCase):
             {
                 "GAME_GATEWAY_TOKEN": "test-gateway-secret",
                 "GAME_QQ_GROUP_ID": "123456",
+                "GAME_ADMIN_QQ": "10001",
             },
         )
         self.env_patch.start()
@@ -41,13 +42,36 @@ class BackendFlow(unittest.TestCase):
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        native_host = self.client.post("/api/native/host/login", json={"password": "114514"})
-        native_host.raise_for_status()
-        self.host = {"Authorization": "Bearer " + native_host.json()["session_token"]}
+        # 主持人不再是共享密码：GAME_ADMIN_QQ 指定的 QQ 账号登录后即为 5 级主持。
+        self.host, self.host_actor = self.host_login("10001")
         created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
         created.raise_for_status()
         self.game_id = created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
+
+    def host_login(self, qq_id):
+        """主持人入口的 QQ 登录：与玩家共用登录码，只是换成主持人挑战端点。"""
+        challenge = self.client.post("/api/native/auth/host/challenges").json()
+        bound = self.client.post(
+            "/api/internal/qq/login",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
+            json={
+                "code": challenge["code"],
+                "qq_id": qq_id,
+                "nickname": "主持" + qq_id,
+                "avatar_url": "https://example.invalid/" + qq_id,
+                "group_id": 123456,
+            },
+        )
+        bound.raise_for_status()
+        completed = self.client.get(
+            "/api/native/auth/host/challenges/" + challenge["id"]
+        )
+        completed.raise_for_status()
+        self.assertEqual(completed.json().get("status"), "completed")
+        return {
+            "Authorization": "Bearer " + completed.json()["session_token"]
+        }, completed.json()["session"]["actor"]
 
     def account(self, qq_id):
         challenge = self.client.post("/api/native/auth/challenges").json()
@@ -732,6 +756,7 @@ class NoOriginGate(unittest.TestCase):
                 "GAME_DATA_DIR": self.temp.name,
                 "GAME_GATEWAY_TOKEN": "test-gateway-secret",
                 "GAME_QQ_GROUP_ID": "1105925736",
+                "GAME_ADMIN_QQ": "10001",
             },
         )
         self.env.start()
@@ -740,8 +765,33 @@ class NoOriginGate(unittest.TestCase):
         auth_storage.initialize()
         self.client = TestClient(app)
 
+    def host_login(self, qq_id):
+        challenge = self.client.post("/api/native/auth/host/challenges").json()
+        bound = self.client.post(
+            "/api/internal/qq/login",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
+            json={
+                "code": challenge["code"],
+                "qq_id": qq_id,
+                "nickname": "主持" + qq_id,
+                "avatar_url": "https://example.invalid/" + qq_id,
+                "group_id": 1105925736,
+            },
+        )
+        bound.raise_for_status()
+        completed = self.client.get(
+            "/api/native/auth/host/challenges/" + challenge["id"]
+        )
+        completed.raise_for_status()
+        self.assertEqual(completed.json().get("status"), "completed")
+        return {
+            "Authorization": "Bearer " + completed.json()["session_token"]
+        }, completed.json()["session"]["actor"]
+
     def test_write_without_origin_or_token_reaches_route(self):
-        response = self.client.post("/api/host/login", json={"password": "wrong"})
+        # 主持人专属写接口在没有令牌时由路由自身鉴权返回 401，
+        # 而不是被来源校验拦成 403。
+        response = self.client.post("/api/reset")
         self.assertEqual(
             response.status_code,
             401,
@@ -816,8 +866,8 @@ class NoOriginGate(unittest.TestCase):
         )
 
     def test_websocket_with_valid_token_connects(self):
-        login = self.client.post("/api/native/host/login", json={"password": "114514"})
-        token = login.json()["session_token"]
+        host, _ = self.host_login("10001")
+        token = host["Authorization"].removeprefix("Bearer ")
         catalog = self.client.get(
             "/api/catalog", headers={"Authorization": "Bearer " + token}
         ).json()

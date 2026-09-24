@@ -1,4 +1,4 @@
-"""Independent QQ account, login challenge, and persistent token storage."""
+"""Independent QQ account, login challenge, persistent token, and host authorization."""
 
 import hashlib
 import secrets
@@ -10,6 +10,17 @@ from . import storage
 
 TOKEN_DAYS = 180
 CHALLENGE_MINUTES = 5
+
+# 主持等级：1 级只主持 1 局，5 级是系统管理员。等级本身由服务端判定，
+# 客户端只按等级显示入口。
+HOST_LEVEL_MIN = 1
+HOST_LEVEL_MAX = 5
+
+# 各级主持可授权/取消的最高等级；不在表里的等级没有授权他人的权限。
+HOST_GRANT_LIMITS = {4: 3, 5: 5}
+
+# 各级主持可定义与分发的成就最高稀有度（1-10）；1-2 级不能碰成就。
+HOST_ACHIEVEMENT_LIMITS = {3: 3, 4: 4, 5: 10}
 
 
 def now():
@@ -70,6 +81,11 @@ def initialize():
             valid INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS token_account ON login_tokens(account_id, valid);
+        CREATE TABLE IF NOT EXISTS host_authorizations (
+            account_id TEXT PRIMARY KEY, level INTEGER NOT NULL,
+            granted_by TEXT NOT NULL DEFAULT '', granted_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, hosted_game_id TEXT, consumed_at TEXT
+        );
         """)
         if "client_kind" not in {
             row["name"] for row in db.execute("PRAGMA table_info(login_challenges)")
@@ -117,6 +133,113 @@ def account(account_id):
         return db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
 
 
+def account_by_qq(qq_id):
+    if not qq_id:
+        return None
+    with connect() as db:
+        return db.execute("SELECT * FROM accounts WHERE qq_id=?", (qq_id,)).fetchone()
+
+
+def accounts_matching(query="", limit=30):
+    """按昵称或 QQ 号搜索账号：主持授权页用它挑人（其余名单仍不含 QQ 号）。"""
+    text = (query or "").strip()
+    with connect() as db:
+        if text:
+            like = f"%{text}%"
+            rows = db.execute(
+                """SELECT * FROM accounts WHERE nickname LIKE ? OR qq_id LIKE ?
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (like, like, limit),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM accounts ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def host_authorization(account_id):
+    if not account_id:
+        return None
+    with connect() as db:
+        row = db.execute(
+            "SELECT * FROM host_authorizations WHERE account_id=?", (account_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def host_level(account_id):
+    """授权表里的有效等级；1 级主持完一局（consumed_at 置位）后为 0。"""
+    row = host_authorization(account_id)
+    if not row or row["consumed_at"]:
+        return 0
+    return int(row["level"])
+
+
+def host_authorizations():
+    with connect() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM host_authorizations")]
+
+
+def authorize_host(account_id, level, granted_by=""):
+    """授权或改级；重新授权会清掉「一局已用完」，重新给一次机会。"""
+    stamp = now_text()
+    with transaction() as db:
+        db.execute(
+            """INSERT INTO host_authorizations
+               (account_id,level,granted_by,granted_at,updated_at,hosted_game_id,consumed_at)
+               VALUES(?,?,?,?,?,NULL,NULL)
+               ON CONFLICT(account_id) DO UPDATE SET
+               level=excluded.level, granted_by=excluded.granted_by,
+               granted_at=excluded.granted_at, updated_at=excluded.updated_at,
+               hosted_game_id=NULL, consumed_at=NULL""",
+            (account_id, int(level), granted_by, stamp, stamp),
+        )
+    return host_authorization(account_id)
+
+
+def revoke_host(account_id):
+    with transaction() as db:
+        removed = db.execute(
+            "DELETE FROM host_authorizations WHERE account_id=?", (account_id,)
+        ).rowcount
+    return bool(removed)
+
+
+def mark_hosted_game(account_id, game_id):
+    """记下这一局由谁建立：1 级授权在他主持的这一局结束时作废。"""
+    if not account_id:
+        return
+    with transaction() as db:
+        db.execute(
+            "UPDATE host_authorizations SET hosted_game_id=?, updated_at=? WHERE account_id=?",
+            (game_id, now_text(), account_id),
+        )
+
+
+def consume_single_use_for_game(game_id):
+    """局终（或对局被清空）时让该局的 1 级授权立即失效。"""
+    if not game_id:
+        return 0
+    stamp = now_text()
+    with transaction() as db:
+        return db.execute(
+            """UPDATE host_authorizations SET consumed_at=?, updated_at=?
+               WHERE hosted_game_id=? AND level<? AND consumed_at IS NULL""",
+            (stamp, stamp, game_id, 2),
+        ).rowcount
+
+
+def challenge_account(challenge_id):
+    """挑战已绑定的账号 id；还没完成绑定时为 None。"""
+    with connect() as db:
+        row = db.execute(
+            "SELECT account_id FROM login_challenges WHERE id=?", (challenge_id,)
+        ).fetchone()
+        return row["account_id"] if row else None
+
+
 def create_challenge(client_kind="web"):
     with transaction() as db:
         for _ in range(20):
@@ -161,7 +284,7 @@ def complete_challenge(code, qq_id, nickname, avatar_url):
         return challenge["id"] if changed else None
 
 
-def poll_challenge(challenge_id, client_kind):
+def poll_challenge(challenge_id, client_kind, kind="player"):
     with transaction() as db:
         row = db.execute("SELECT * FROM login_challenges WHERE id=?", (challenge_id,)).fetchone()
         if not row or row["client_kind"] != client_kind:
@@ -173,7 +296,7 @@ def poll_challenge(challenge_id, client_kind):
             return None, "expired"
         if row["status"] != "completed":
             return {"id": row["id"], "status": row["status"], "expires_at": row["expires_at"]}, None
-        token = issue_token(db, "player", row["account_id"])
+        token = issue_token(db, kind, row["account_id"])
         db.execute("UPDATE login_challenges SET consumed_at=? WHERE id=?", (now_text(), challenge_id))
         account_row = db.execute("SELECT * FROM accounts WHERE id=?", (row["account_id"],)).fetchone()
         return {

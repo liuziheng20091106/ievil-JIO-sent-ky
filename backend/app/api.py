@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from . import (
     achievement_storage,
+    announcement_storage,
     auth,
     auth_storage,
     evidence,
@@ -130,8 +131,21 @@ def require_gateway_group(group_id):
         raise HTTPException(403, "QQ群不匹配")
 
 
-def poll_login(challenge_id, client_kind):
-    result, error = auth_storage.poll_challenge(challenge_id, client_kind)
+def poll_login(challenge_id, client_kind, host=False):
+    if host:
+        # 主持人登录必须先有授权：等一整轮才发现没权限体验太差。
+        account_id = auth_storage.challenge_account(challenge_id)
+        if account_id and auth.host_level(
+            auth_storage.account(account_id)
+        ) < auth_storage.HOST_LEVEL_MIN:
+            if not auth.admin_qq_ids():
+                raise HTTPException(
+                    403, "服务端尚未配置管理员 QQ（GAME_ADMIN_QQ），请部署者先指定后再登录"
+                )
+            raise HTTPException(403, "该账号没有有效的主持授权，请让管理员授权后再登录")
+    result, error = auth_storage.poll_challenge(
+        challenge_id, client_kind, kind="host" if host else "player"
+    )
     if error in {"missing", "consumed"}:
         raise HTTPException(410, "登录挑战不存在或已消费")
     if error == "expired":
@@ -186,6 +200,35 @@ async def native_challenge_status(challenge_id: str):
     return {"status": "completed", "session_token": token, "session": session_for_token(token)}
 
 
+@router.post("/auth/host/challenges")
+async def web_host_challenge():
+    return auth_storage.create_challenge("web_host")
+
+
+@router.get("/auth/host/challenges/{challenge_id}")
+async def web_host_challenge_status(challenge_id: str, request: Request, response: Response):
+    result = poll_login(challenge_id, "web_host", host=True)
+    if result["status"] != "completed":
+        return result
+    token = result.pop("token")
+    auth.set_cookie(response, request, token)
+    return {"status": "completed", **session_for_token(token)}
+
+
+@router.post("/native/auth/host/challenges")
+async def native_host_challenge():
+    return auth_storage.create_challenge("native_host")
+
+
+@router.get("/native/auth/host/challenges/{challenge_id}")
+async def native_host_challenge_status(challenge_id: str):
+    result = poll_login(challenge_id, "native_host", host=True)
+    if result["status"] != "completed":
+        return result
+    token = result.pop("token")
+    return {"status": "completed", "session_token": token, "session": session_for_token(token)}
+
+
 @router.post("/internal/qq/login")
 async def qq_login(body: schemas.QQLogin, request: Request):
     require_gateway(request)
@@ -217,30 +260,6 @@ async def qq_members(body: schemas.QQMemberSync, request: Request):
 async def me(request: Request):
     with storage.connect() as db:
         return auth.me(auth.actor_for_token(db, auth.token_hash(request)))
-
-
-def host_login_session(body, request):
-    if not secrets.compare_digest(body.password.encode(), b"114514"):
-        raise HTTPException(401, "主持人密码错误")
-    revoke_current(request)
-    token = auth.issue_session(None, "host")
-    refresh_connections()
-    return token, session_for_token(token)
-
-
-@router.post("/host/login")
-async def login(body: schemas.Login, request: Request, response: Response):
-    async with realtime.lock:
-        token, session = host_login_session(body, request)
-        auth.set_cookie(response, request, token)
-        return session
-
-
-@router.post("/native/host/login")
-async def native_host_login(body: schemas.Login, request: Request):
-    async with realtime.lock:
-        token, session = host_login_session(body, request)
-        return {"session_token": token, "session": session}
 
 
 @router.post("/logout")
@@ -295,7 +314,12 @@ async def lobby(request: Request):
             if (invited_game := storage.load_game(db, row["game_id"]))
         ]
         if not game or game["status"] == "ended":
-            return {"game": None, "participation": None, "invites": invites}
+            return {
+                "game": None,
+                "participation": None,
+                "invites": invites,
+                **announcement_storage.lobby_payload(),
+            }
         participation = (
             auth.actor_for_token(db, auth.token_hash(request), game["id"]) if account else None
         )
@@ -303,6 +327,7 @@ async def lobby(request: Request):
             "game": lobby_game_view(game),
             "participation": participation,
             "invites": invites,
+            **announcement_storage.lobby_payload(),
         }
 
 
@@ -313,7 +338,8 @@ async def online_players(
     """在线账号名单。带 game_id 时额外给出「能否邀请 / 是否已邀请」。"""
     with storage.connect() as db:
         actor = auth.require_actor(db, request)
-        realtime.touch(actor["account_id"] or "host")
+        # 主持人统一记在 "host" 键上：QQ 主持人也是主持人，不该出现在玩家在线名单里。
+        realtime.touch("host" if actor["kind"] == "host" else actor["account_id"])
         keys = realtime.online_keys()
         available, invited = {}, set()
         if game_id:
@@ -352,7 +378,10 @@ async def reset(request: Request):
     async with realtime.lock:
         with storage.transaction() as db:
             auth.require_actor(db, request, host=True)
+            cleared = storage.current_game_id(db)
             storage.purge(db)
+        # 对局被清空等于这一局结束：1 级主持的授权在这里也一并作废。
+        auth_storage.consume_single_use_for_game(cleared)
         clear_connections()
         with storage.connect() as db:
             return auth.me(auth.actor_for_token(db, auth.token_hash(request)))
@@ -362,10 +391,11 @@ async def reset(request: Request):
 async def create(body: schemas.Create, request: Request):
     async with realtime.lock:
         with storage.transaction() as db:
-            auth.require_actor(db, request, host=True)
+            actor = auth.require_actor(db, request, host=True)
             active = db.execute("SELECT id FROM games WHERE status != 'ended' LIMIT 1").fetchone()
             if active:
                 raise HTTPException(409, "请先结束当前对局，再创建下一局")
+            replaced = storage.current_game_id(db)
             storage.purge(db)
             game = create_game(body.codex)
             db.execute(
@@ -379,6 +409,9 @@ async def create(body: schemas.Create, request: Request):
                 ),
             )
             row = storage.add_message(db, game["id"], text="新对局已创建，等待主持人开放参局")
+        # 记下这一局由谁建立：1 级主持在它结束时授权作废。
+        auth_storage.mark_hosted_game(actor.get("account_id"), game["id"])
+        auth_storage.consume_single_use_for_game(replaced)
         clear_connections(game["id"])
         realtime.publish(game["id"], [row])
         return current_view(game["id"], auth.token_hash(request))
@@ -657,7 +690,8 @@ def channel_notice(db, game_id, row, ending=False):
     creator = names.get(row["creator_id"], "参与者")
     others = "、".join(names.get(member, "参与者") for member in members if member != row["creator_id"])
     text = creator + "与" + others + "已结束私信" if ending else creator + "正在与" + others + "私信"
-    return storage.add_message(db, game_id, text=text)
+    # 私信开合只发给频道成员：全场公告会把记录刷满。
+    return storage.add_message(db, game_id, text=text, audience=members)
 
 
 def end_channel(db, game_id, row, *, notice=True):
@@ -886,8 +920,14 @@ async def command(game_id: str, body: schemas.Command, request: Request):
                 # 进入夜间：关闭全部私聊频道，夜间只允许与主持人建立私聊。
                 rows.extend(close_night_channels(db, game_id))
             storage.save_game(db, game)
+        # 先算出要返回的视图，再作废 1 级授权：否则这条已经成功的命令会因为
+        # 令牌当场失效而回一个 401。
+        result = current_view(game_id, auth.token_hash(request))
+        # 1 级主持只主持 1 局：这一局落幕，他的授权立即失效（旧令牌也会一并失效）。
+        if game["status"] == "ended":
+            auth_storage.consume_single_use_for_game(game_id)
         realtime.publish(game_id, rows)
-        return current_view(game_id, auth.token_hash(request))
+        return result
 
 
 @router.get("/games/{game_id}/seats/{seat_id}/view")

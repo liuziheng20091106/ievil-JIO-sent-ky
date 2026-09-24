@@ -218,6 +218,12 @@ def revoke(grant_id):
         return True
 
 
+def grant_by_id(grant_id):
+    with connect() as db:
+        row = _grant_row(db, grant_id)
+        return grant_view(row) if row else None
+
+
 def grants_for(account_id):
     """某账号获得的全部成就：稀有度高的在前，同档按获得时间新的在前。"""
     with connect() as db:

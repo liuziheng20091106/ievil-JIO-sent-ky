@@ -1,7 +1,7 @@
 name: seven_double_client
 description: Native Android and Windows client for Seven Double.
 publish_to: none
-version: 1.0.6+1
+version: 1.0.5+1
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -18,6 +18,8 @@ dependencies:
   shared_preferences: ^2.5.3
   # 只用于渲染绘制的 SVG 图标（月代雪标志、行动图标），不引入状态或路由框架。
   flutter_svg: ^2.0.17
+  # 公告正文是 markdown，要求渲染完整（表格、引用、代码块等），因此引入渲染包。
+  flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:
   flutter_test:

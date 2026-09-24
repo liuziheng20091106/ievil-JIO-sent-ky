@@ -40,6 +40,7 @@ class SimulatorCase(unittest.TestCase):
             {
                 "GAME_GATEWAY_TOKEN": "test-gateway-secret",
                 "GAME_QQ_GROUP_ID": "123456",
+                "GAME_ADMIN_QQ": "10001",
                 "GAME_ALLOWED_ORIGINS": "testserver",
             },
         )

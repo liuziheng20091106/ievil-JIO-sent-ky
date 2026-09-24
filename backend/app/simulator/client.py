@@ -64,12 +64,19 @@ class ProtocolClient:
 
     # ------------------------------------------------------------------ 登录
 
-    def login_host(self, password="114514"):
+    def login_host(self, authenticator, qq_id, nickname, *, group_id=None):
+        """主持人也是 QQ 账号：先被授权，再走与玩家相同的群登录码流程。
+
+        ``authenticator(code, qq_id, nickname, group_id)`` 与玩家登录共用。
+        """
+        challenge = self.call(
+            "POST", "/api/native/auth/host/challenges", {}, action="host.challenge"
+        )
+        authenticator(challenge["code"], qq_id, nickname, group_id)
         payload = self.call(
-            "POST",
-            "/api/native/host/login",
-            {"password": password},
-            action="host.login",
+            "GET",
+            "/api/native/auth/host/challenges/" + challenge["id"],
+            action="host.challenge.poll",
         )
         self.token = payload["session_token"]
         self.actor = payload["session"]["actor"]

@@ -53,20 +53,46 @@ def account_actor(account):
     }
 
 
+def admin_qq_ids():
+    """内置系统管理员的 QQ 号；用 GAME_ADMIN_QQ 配置，英文逗号分隔。"""
+    return {item.strip() for item in os.environ.get("GAME_ADMIN_QQ", "").split(",") if item.strip()}
+
+
+def host_level(account):
+    """主持等级：内置管理员恒为 5 级，其余看授权表；被取消或用完一局后为 0。"""
+    if account is None:
+        return 0
+    if account["qq_id"] in admin_qq_ids():
+        return auth_storage.HOST_LEVEL_MAX
+    return auth_storage.host_level(account["id"])
+
+
+def host_actor(account, db, game_id=None):
+    return {
+        "id": "host",
+        "account_id": account["id"],
+        "kind": "host",
+        "game_id": game_id or storage.current_game_id(db),
+        "seat_id": None,
+        # 对局里一律显示为「主持人」：QQ 昵称只出现在授权管理页。
+        "name": "主持人",
+        "qq_id": account["qq_id"],
+        "avatar_url": account["avatar_url"],
+        "host_level": host_level(account),
+        "access_ids": ["host"],
+    }
+
+
 def actor_for_token(db, hashed, game_id=None):
     token = auth_storage.token_row(hashed)
     if not token:
         return None
     if token["kind"] == "host":
-        return {
-            "id": "host",
-            "account_id": None,
-            "kind": "host",
-            "game_id": game_id or storage.current_game_id(db),
-            "seat_id": None,
-            "name": "主持人",
-            "access_ids": ["host"],
-        }
+        account = auth_storage.account(token["account_id"]) if token["account_id"] else None
+        # 授权被取消或用完（1 级）之后，旧令牌立即不再有效。
+        if not account or host_level(account) < auth_storage.HOST_LEVEL_MIN:
+            return None
+        return host_actor(account, db, game_id)
     account = auth_storage.account(token["account_id"])
     if not account:
         return None
@@ -97,13 +123,27 @@ def actor_for_token(db, hashed, game_id=None):
     }
 
 
-def require_actor(db, connection, game_id=None, host=False):
-    actor = actor_for_token(db, token_hash(connection), game_id)
+def require_actor(db, connection, game_id=None, host=False, level=1):
+    """取当前身份；host=True 时要求主持权限，level 给出所需的最低主持等级。"""
+    hashed = token_hash(connection)
+    actor = actor_for_token(db, hashed, game_id)
     if not actor:
+        # 令牌本身还在、只是主持授权被取消或用完：给出能看懂的原因。
+        token = auth_storage.token_row(hashed)
+        if token and token["kind"] == "host":
+            raise HTTPException(403, "主持授权已失效或已被取消，请重新登录")
         raise HTTPException(401, "登录已失效或尚未加入本局")
-    if host and actor["kind"] != "host":
-        raise HTTPException(403, "仅主持人可以进行此操作")
+    if host:
+        if actor["kind"] != "host":
+            raise HTTPException(403, "仅主持人可以进行此操作")
+        if int(actor.get("host_level", 0)) < level:
+            raise HTTPException(403, f"此操作需要 {level} 级主持权限")
     return actor
+
+
+def require_host_level(db, connection, level, game_id=None):
+    """主持专属功能的等级门槛：公告要 5 级，授权他人要 4 级等。"""
+    return require_actor(db, connection, game_id, host=True, level=level)
 
 
 def require_account(connection):

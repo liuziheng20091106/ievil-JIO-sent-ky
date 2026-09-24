@@ -224,10 +224,9 @@ export function App() {
 }
 
 function Entry() {
-  const { authenticate, refresh } = useGame();
+  const { refresh } = useGame();
   const [mode, setMode] = useState<"qq" | "host">("qq");
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -238,7 +237,9 @@ function Entry() {
     const poll = async () => {
       try {
         const next = await api<LoginChallenge>(
-          `/auth/challenges/${encodeURIComponent(challenge.id)}`,
+          mode === "host"
+            ? `/auth/host/challenges/${encodeURIComponent(challenge.id)}`
+            : `/auth/challenges/${encodeURIComponent(challenge.id)}`,
         );
         if (!active) return;
         setChallenge(next);
@@ -259,27 +260,19 @@ function Entry() {
       active = false;
       clearTimeout(timer);
     };
-  }, [challenge?.id, challenge?.status, refresh]);
+  }, [challenge?.id, challenge?.status, mode, refresh]);
 
-  const startQQ = async () => {
+  // 玩家与主持人都是 QQ 登录：主持人入口只是换一组挑战端点，授权与账号绑定。
+  const startChallenge = async () => {
     setBusy(true);
     setError("");
     try {
-      setChallenge(await api<LoginChallenge>("/auth/challenges", {}));
-    } catch (failure) {
-      setError(errorText(failure));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitHost = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await authenticate("/host/login", { password });
-      setPassword("");
+      setChallenge(
+        await api<LoginChallenge>(
+          mode === "host" ? "/auth/host/challenges" : "/auth/challenges",
+          {},
+        ),
+      );
     } catch (failure) {
       setError(errorText(failure));
     } finally {
@@ -331,6 +324,8 @@ function Entry() {
             className={mode === "qq" ? "active" : ""}
             onClick={() => {
               setMode("qq");
+              // 换入口要重新生成：玩家挑战与主持人挑战是两组端点。
+              setChallenge(null);
               setError("");
             }}
           >
@@ -340,65 +335,48 @@ function Entry() {
             className={mode === "host" ? "active" : ""}
             onClick={() => {
               setMode("host");
+              setChallenge(null);
               setError("");
             }}
           >
             主持人登录
           </button>
         </div>
-        {mode === "qq" ? (
-          <div className="entry-login-flow">
-            <p className="hint">
-              生成验证码后，在指定 QQ 群发送完整文字。群内昵称和头像将作为本局公开身份。
-            </p>
-            {challenge?.status === "pending" && challenge.code && (
-              <div className="invite-code" role="status">
-                <span className="eyebrow">请在 QQ 群发送</span>
-                <input
-                  readOnly
-                  value={`活动登录 ${challenge.code}`}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-                <small>
-                  验证码有效至
-                  {new Date(challenge.expires_at).toLocaleTimeString("zh-CN")}
-                </small>
-              </div>
-            )}
-            <button
-              type="button"
-              className="primary full-width"
-              disabled={busy}
-              onClick={() => void startQQ()}
-            >
-              {busy
-                ? "正在生成…"
-                : challenge
-                  ? "重新生成验证码"
-                  : "生成 QQ 登录码"}
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={(event) => void submitHost(event)}>
-            <label className="field">
-              <span>主持人密码</span>
+        <div className="entry-login-flow">
+          <p className="hint">
+            {mode === "qq"
+              ? "生成验证码后，在指定 QQ 群发送完整文字。群内昵称和头像将作为本局公开身份。"
+              : "主持授权与 QQ 账号绑定：由管理员授权后，用同一个群登录码进入主持人端。主持人可以查看本局全部角色与私密信息。"}
+          </p>
+          {challenge?.status === "pending" && challenge.code && (
+            <div className="invite-code" role="status">
+              <span className="eyebrow">请在 QQ 群发送</span>
               <input
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="输入主持人密码"
+                readOnly
+                value={`活动登录 ${challenge.code}`}
+                onFocus={(event) => event.currentTarget.select()}
               />
-            </label>
-            <p className="hint">
-              主持人可以查看本局全部角色与私密信息。请勿向玩家共享你的会话。
-            </p>
-            <button className="primary full-width" disabled={busy}>
-              {busy ? "正在进入…" : "进入主持人工作台 →"}
-            </button>
-          </form>
-        )}
+              <small>
+                验证码有效至
+                {new Date(challenge.expires_at).toLocaleTimeString("zh-CN")}
+              </small>
+            </div>
+          )}
+          <button
+            type="button"
+            className="primary full-width"
+            disabled={busy}
+            onClick={() => void startChallenge()}
+          >
+            {busy
+              ? "正在生成…"
+              : challenge
+                ? "重新生成验证码"
+                : mode === "host"
+                  ? "生成主持人登录码"
+                  : "生成 QQ 登录码"}
+          </button>
+        </div>
         {error && (
           <p className="error" role="alert">
             {error}

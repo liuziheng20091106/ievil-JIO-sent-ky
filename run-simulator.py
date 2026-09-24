@@ -32,6 +32,11 @@ def parse_args(argv=None):
     parser.add_argument("--max-steps", type=int, default=4000, help="单局步数上限")
     parser.add_argument("--gateway-token", default=os.environ.get("GAME_GATEWAY_TOKEN", ""))
     parser.add_argument("--group-id", default=os.environ.get("GAME_QQ_GROUP_ID", "123456"))
+    parser.add_argument(
+        "--host-qq",
+        default=os.environ.get("GAME_ADMIN_QQ", "").split(",")[0].strip() or "10001",
+        help="模拟主持人的 QQ 号；必须是服务端 GAME_ADMIN_QQ 指定（或已授权）的账号",
+    )
     parser.add_argument("--quiet", action="store_true", help="只输出每局一行结果")
     return parser.parse_args(argv)
 
@@ -47,6 +52,8 @@ def build_environment(data_dir, gateway_token, group_id):
     if gateway_token:
         os.environ["GAME_GATEWAY_TOKEN"] = gateway_token
     os.environ["GAME_QQ_GROUP_ID"] = str(group_id)
+    # 主持人登录要有一个被授权的 QQ 账号：进程内跑批时用测试管理员号。
+    os.environ.setdefault("GAME_ADMIN_QQ", "10001")
     os.environ.setdefault("GAME_ALLOWED_ORIGINS", "testserver")
 
     from backend.app import auth_storage, realtime, storage
@@ -71,7 +78,7 @@ def run_one(args, seed, directory, root):
         transport = HttpTransport(args.url)
         authenticate = gateway_authenticator(transport, args.gateway_token, args.group_id)
         host = ProtocolClient(transport, "主持人", origin=args.url)
-        host.login_host()
+        host.login_host(authenticate, args.host_qq, "测试主持人", group_id=args.group_id)
         host.create_game(DEFAULT_CODEX_ROLES)
         host.refresh()
         seats = []

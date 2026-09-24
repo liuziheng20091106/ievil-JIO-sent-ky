@@ -8,12 +8,21 @@ class Input(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class Login(Input):
-    password: str = Field(max_length=128)
-
-
 class Create(Input):
     codex: list[str] = Field(min_length=11, max_length=11)
+
+
+class HostAuthorization(Input):
+    """主持授权：等级 1-5；具体能授到几级由授权人的等级决定。"""
+
+    level: StrictInt = Field(ge=1, le=5)
+
+
+class Announcement(Input):
+    """公告：标题 + markdown 正文，只有 5 级主持能发布。"""
+
+    title: str = Field(min_length=1, max_length=60)
+    body: str = Field(min_length=1, max_length=4000)
 
 
 class Participation(Input):

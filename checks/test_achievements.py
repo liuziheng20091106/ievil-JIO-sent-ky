@@ -29,6 +29,7 @@ class AchievementFlow(unittest.TestCase):
             {
                 "GAME_GATEWAY_TOKEN": "test-gateway-secret",
                 "GAME_QQ_GROUP_ID": "123456",
+                "GAME_ADMIN_QQ": "10001",
             },
         )
         self.env_patch.start()
@@ -40,15 +41,37 @@ class AchievementFlow(unittest.TestCase):
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        native_host = self.client.post("/api/native/host/login", json={"password": "114514"})
-        native_host.raise_for_status()
-        self.host = {"Authorization": "Bearer " + native_host.json()["session_token"]}
+        # 管理员 QQ（GAME_ADMIN_QQ）登录后就是 5 级主持。
+        self.host, self.host_actor = self.host_login("10001")
         self.created = self.client.post(
             "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX}
         )
         self.created.raise_for_status()
         self.game_id = self.created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
+
+    def host_login(self, qq_id):
+        challenge = self.client.post("/api/native/auth/host/challenges").json()
+        bound = self.client.post(
+            "/api/internal/qq/login",
+            headers={"X-Gateway-Token": "test-gateway-secret"},
+            json={
+                "code": challenge["code"],
+                "qq_id": qq_id,
+                "nickname": "主持" + qq_id,
+                "avatar_url": "https://example.invalid/" + qq_id,
+                "group_id": 123456,
+            },
+        )
+        bound.raise_for_status()
+        completed = self.client.get(
+            "/api/native/auth/host/challenges/" + challenge["id"]
+        )
+        completed.raise_for_status()
+        self.assertEqual(completed.json().get("status"), "completed")
+        return {
+            "Authorization": "Bearer " + completed.json()["session_token"]
+        }, completed.json()["session"]["actor"]
 
     def account(self, qq_id):
         challenge = self.client.post("/api/native/auth/challenges").json()
