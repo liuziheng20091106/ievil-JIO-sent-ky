@@ -697,7 +697,6 @@ def resolve_pending(game, events, data):
         begin_night(game, events)
     elif kind == "madness":
         if data["outcome"] == "penalty":
-            game["public"]["achievements_enabled"] = False
             cid = data["target"]
             effect = data["penalty"]
             require(effect != "none" or bool(data["reason"].strip()), "请明确不利裁定")

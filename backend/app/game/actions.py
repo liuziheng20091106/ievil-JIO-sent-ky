@@ -461,7 +461,7 @@ def pending_action(game, item):
                 "select",
                 [
                     ("warn", "警告"),
-                    ("penalty", "判定不够疯狂，禁用成就并执行不利裁定"),
+                    ("penalty", "判定不够疯狂并执行不利裁定"),
                     ("satisfied", "符合要求"),
                 ],
                 default="warn",

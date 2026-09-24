@@ -86,6 +86,13 @@ def initialize():
                     ),
                 )
         db.execute("DROP TABLE IF EXISTS sessions")
+        # 原游戏没有成就设计：清掉历史对局里残留的占位字段，免得状态查看器继续显示它。
+        for row in db.execute("SELECT id,state FROM games").fetchall():
+            state = json.loads(row["state"])
+            public = state.get("public")
+            if isinstance(public, dict) and "achievements_enabled" in public:
+                public.pop("achievements_enabled")
+                db.execute("UPDATE games SET state=? WHERE id=?", (dumps(state), row["id"]))
         # 旧的 invites 是已删除的邀请码模型，形状不同；只有旧形状才重建。
         invite_columns = {row["name"] for row in db.execute("PRAGMA table_info(invites)")}
         if invite_columns and "account_id" not in invite_columns:

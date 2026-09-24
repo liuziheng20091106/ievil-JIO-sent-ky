@@ -570,7 +570,6 @@ def create_game(codex):
             "speech_order": [],
             "votes": {},
             "declarations": [],
-            "achievements_enabled": True,
             "rewinds": 0,
         },
         "nominations": [],

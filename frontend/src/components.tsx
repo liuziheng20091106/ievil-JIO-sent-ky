@@ -308,7 +308,6 @@ const labels: Record<string, string> = {
   total: "轮数",
   results: "计票结果",
   execution_seats: "待处决席位",
-  achievements_enabled: "本局成就可用",
   rewinds: "回溯次数",
   interrupted_speaker: "被打断的发言席位",
   night_confirmed: "已确认行动席位",
