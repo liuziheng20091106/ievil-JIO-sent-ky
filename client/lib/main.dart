@@ -15,7 +15,8 @@ import 'src/store.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await GameStore.create();
-  final release = ReleaseMonitor();
+  // 「知道了 / 忽略」的记忆写在偏好里，重启后不重复弹同一条提示。
+  final release = ReleaseMonitor(preferences: store.preferences);
   // 版本标签与保活白名单是只读探测，失败不阻塞启动；每个服务地址只查一次。
   Object? checked;
   store.addListener(() {
@@ -55,11 +56,16 @@ class AppGate extends StatelessWidget {
   // 测试与预览不传：没有发布监控时直接渲染页面本身。
   final ReleaseMonitor? release;
 
+  /// 版本与保活提示只在大厅出现：这两种横幅都挂在标题栏之上，对局中会挤占消息
+  /// 与输入区（软键盘打开时尤其明显），也不该在牌局中间打断玩家。
+  static bool showsNotices(GameStore store) =>
+      store.actor != null && store.gameId == null;
+
   @override
   Widget build(BuildContext context) {
     final page = _page(context);
     final release = this.release;
-    if (release == null) return page;
+    if (release == null || !showsNotices(store)) return page;
     return AnimatedBuilder(
       animation: release,
       builder: (context, _) {
@@ -73,17 +79,19 @@ class AppGate extends StatelessWidget {
               ),
               actions: const [SizedBox.shrink()],
             )
-          else if (release.updateAvailable)
+          else if (release.updateNoticeVisible)
             MaterialBanner(
               content: const Text('有新版本可用，建议向主持人获取最新安装包。'),
               actions: [
                 TextButton(
-                  onPressed: ScaffoldMessenger.of(context).hideCurrentMaterialBanner,
+                  // 横幅是页面自己渲染的，不在 ScaffoldMessenger 的队列里，
+                  // 必须真的把「已关闭」记下来才会消失。
+                  onPressed: release.dismissUpdateNotice,
                   child: const Text('知道了'),
                 ),
               ],
             ),
-          if (!release.batteryOptimizationIgnored)
+          if (release.batteryNoticeVisible)
             MaterialBanner(
               content: const Text('为避免后台断连，建议允许应用忽略电池优化。'),
               actions: [
@@ -92,7 +100,7 @@ class AppGate extends StatelessWidget {
                   child: const Text('去设置'),
                 ),
                 TextButton(
-                  onPressed: ScaffoldMessenger.of(context).hideCurrentMaterialBanner,
+                  onPressed: release.dismissBatteryNotice,
                   child: const Text('忽略'),
                 ),
               ],

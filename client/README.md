@@ -14,9 +14,9 @@ flutter build windows --debug
 
 发行构建：`flutter build apk --release --target-platform android-arm64` 与 `flutter build windows --release`，随后运行仓库根目录的 `package-release.cmd` 打包 `魔法裁判Windows.zip` 并把 zip 与 `app-release.apk` 覆盖发布到局域网分发目录。
 
-安卓后台保活：应用启动后拉起前台服务（`KeepAliveService`，常驻低优先级通知 + PARTIAL 唤醒锁）维持 WebSocket 心跳；首次连接服务器后若未加入「忽略电池优化」白名单，界面顶部横幅可一键跳转授权。
+安卓后台保活：应用启动后拉起前台服务（`KeepAliveService`，常驻低优先级通知 + PARTIAL 唤醒锁）维持 WebSocket 心跳；首次连接服务器后若未加入「忽略电池优化」白名单，大厅顶部横幅可一键跳转授权，也可以点「忽略」不再提示（记在 `shared_preferences`）。
 
-版本检查：连接服务器后读取 `/api/health` 下发的 `client_latest` / `client_minimum` 标签；低于 latest 横幅提示可更新，低于 minimum 横幅要求必须更新。比较用的内置版本号在 `lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `pubspec.yaml` 版本名同步手改，安卓 versionCode/versionName 不动。
+版本检查：连接服务器后读取 `/api/health` 下发的 `client_latest` / `client_minimum` 标签；低于 latest 横幅提示可更新，低于 minimum 横幅要求必须更新。可更新横幅可点「知道了」关闭，同样按被关掉的标签记住，服务端下发更新的版本才会重新提示。两条提示与保活提示都只在大厅出现，对局中不显示。比较用的内置版本号在 `lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `pubspec.yaml` 版本名同步手改，安卓 versionCode/versionName 不动。
 
 Windows 构建需要 Visual Studio 的 C++ 桌面工作负载，以及 `flutter_secure_storage` 依赖的 ATL 组件（`Microsoft.VisualStudio.Component.VC.ATL`）。
 
@@ -31,6 +31,8 @@ Windows 主持人端禁止重复实例：同一登录会话里重复启动不会
 对局被主持人终止（或分出胜负）后，客户端停留在只读结局页：标题栏与结算卡各有一个「返回大厅」入口，点它回到主界面（大厅）后，主持人可确认魔典建立下一局，其他身份等待新局。返回后重启客户端不会被重新拉回已终止的那一局——服务器仍把这一局当作当前局返回给 `/api/me`，是否已经离开由客户端本地判断；需要回看记录请在返回大厅前查看。
 
 屏幕宽度足够时同屏显示多个界面，不再用底栏把页面藏起来：平板横屏（宽 ≥840）左侧固定「状态」牌桌、右侧「对局」，双牌/管理收进右上角抽屉（入口保留该页待办角标）；电脑宽屏（宽 ≥1200）「状态 / 对局 / 我的·管理」三栏并排。手机与平板竖屏保持底部导航一次一页，角标与「已查看」语义不变：同屏可见的页面直接算已查看，窄屏仍由底栏选择触发。
+
+软键盘弹出时对局页进入聚焦输入：标题栏、连接状态、消息筛选、阶段进度、主持人快捷工具、傀儡面板与悬浮底栏全部隐藏，只留消息列表和输入区（发送频道、发送按钮、输入框与紧凑的行动入口），收起键盘立即恢复。宽屏多栏布局不受影响。
 
 在线玩家与对局邀请：大厅与对局内的「状态」页都列出最近一分钟内有活动的已登录账号（不含 QQ 号与令牌）。非观战身份可从「状态」页邀请在线账号加入本局；邀请只是定向通知，受邀者仍须等主持人「开放加入」后才能接受并入席，可随时拒绝。同一局同一账号只保留一条待处理邀请，10 分钟未响应即失效。大厅定时刷新同时充当自己的在线心跳与邀请收件箱，对局内则由 WebSocket 心跳维持在线。
 

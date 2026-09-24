@@ -134,15 +134,28 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       host ? store.newActionCount : store.privateStateCount,
     ];
     final urgent = store.warningCount > 0 || store.newActionCount > 0;
+    // 软键盘打开即进入「只留输入区」：小屏上标题栏、筛选、快捷工具与底栏一起把
+    // 消息和输入框挤没，这里把它们全部让位给消息列表与输入区。
+    final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
     return LayoutBuilder(
       builder: (context, constraints) {
         // 平板/电脑屏幕够宽就同屏显示多栏，不再让底栏把页面藏起来：
         // 达到 dualPane 后状态与对局并排，达到 triplePane 再接上「我的/管理」。
         final threePane = constraints.maxWidth >= AppBreakpoints.triplePane;
         final twoPane = constraints.maxWidth >= AppBreakpoints.dualPane;
+        // 多栏布局有自己的栏位标题，键盘聚焦只在单页窄屏生效。
+        final focusTyping = typing && !twoPane;
         markVisiblePages(twoPane ? (threePane ? 3 : 2) : 0);
-        final inset = twoPane ? AppSpacing.lg : AppSpacing.bottomBar;
-        final chat = ChatActionPage(store: store, bottomInset: inset);
+        final inset = twoPane
+            ? AppSpacing.lg
+            : focusTyping
+                ? AppSpacing.sm
+                : AppSpacing.bottomBar;
+        final chat = ChatActionPage(
+          store: store,
+          bottomInset: inset,
+          typing: focusTyping,
+        );
         final board = BoardPage(store: store, bottomInset: inset);
         final third = host
             ? HostManagementPage(store: store, bottomInset: inset)
@@ -150,7 +163,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         return Scaffold(
           key: _scaffold,
           extendBody: !twoPane,
-          appBar: AppBar(
+          appBar: focusTyping ? null : AppBar(
             title: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -278,12 +291,21 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                     ],
                   ],
                 )
+              else if (focusTyping)
+                // 聚焦输入时没有标题栏，消息列表要自己避开状态栏。
+                SafeArea(
+                  bottom: false,
+                  child: IndexedStack(
+                      index: index, children: [chat, board, third]),
+                )
               else
                 IndexedStack(index: index, children: [chat, board, third]),
-              if (store.pendingPhaseKey != null) PhaseOverlay(store: store),
+              // 键盘聚焦时不弹阶段动画：它盖满整屏，会挡住正在输入的内容。
+              if (!focusTyping && store.pendingPhaseKey != null)
+                PhaseOverlay(store: store),
             ],
           ),
-          bottomNavigationBar: twoPane
+          bottomNavigationBar: (twoPane || focusTyping)
               ? null
               : SafeArea(
                   minimum:  EdgeInsets.fromLTRB(20, 0, 20, 14),
@@ -505,11 +527,15 @@ class ChatActionPage extends StatefulWidget {
     super.key,
     required this.store,
     this.bottomInset = AppSpacing.bottomBar,
+    this.typing = false,
   });
   final GameStore store;
 
   /// 底部为悬浮底栏预留的高度；宽屏没有底栏，由外壳传入更小的值。
   final double bottomInset;
+
+  /// 软键盘是否正打开：为真时隐藏页内除输入区以外的全部控件。
+  final bool typing;
 
   @override
   State<ChatActionPage> createState() => _ChatActionPageState();
@@ -574,40 +600,43 @@ class _ChatActionPageState extends State<ChatActionPage> {
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
-    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final typing = widget.typing;
     final channel = store.selectedChannel;
     return Column(
       children: [
-        SizedBox(
-          height: 54,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
-            scrollDirection: Axis.horizontal,
-            children: [
-              for (final entry in scopes.entries)
-                Padding(
-                  padding:  EdgeInsets.only(right: AppSpacing.sm),
-                  child: FilterChip(
-                    avatar: Icon(
-                      entry.value.$2,
-                      size: 15,
-                      color: store.messageScope == entry.key
-                          ? context.palette.accent
-                          : context.palette.textTertiary,
+        // 键盘打开后页内只留输入区：筛选、阶段进度、主持人快捷工具、傀儡面板与
+        // 常驻提示全部让位，消息列表继续占满剩余空间，边打字边看上下文。
+        if (!typing)
+          SizedBox(
+            height: 54,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final entry in scopes.entries)
+                  Padding(
+                    padding:  EdgeInsets.only(right: AppSpacing.sm),
+                    child: FilterChip(
+                      avatar: Icon(
+                        entry.value.$2,
+                        size: 15,
+                        color: store.messageScope == entry.key
+                            ? context.palette.accent
+                            : context.palette.textTertiary,
+                      ),
+                      label: Text(entry.value.$1),
+                      selected: store.messageScope == entry.key,
+                      showCheckmark: false,
+                      onSelected: (_) => store.loadMessages(entry.key),
                     ),
-                    label: Text(entry.value.$1),
-                    selected: store.messageScope == entry.key,
-                    showCheckmark: false,
-                    onSelected: (_) => store.loadMessages(entry.key),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
-        if (store.view!.phase == 'discussion')
+        if (!typing && store.view!.phase == 'discussion')
           _DiscussionProgressCard(view: store.view!),
-        if (store.actor!.isHost) _HostQuickTools(store: store),
+        if (!typing && store.actor!.isHost) _HostQuickTools(store: store),
         Expanded(
           child: store.messages.isEmpty
               ? const EmptyState(
@@ -644,20 +673,21 @@ class _ChatActionPageState extends State<ChatActionPage> {
                   },
                 ),
         ),
-        if (store.view!.puppetSpectator)
+        if (!typing && store.view!.puppetSpectator)
           const Padding(
             padding: EdgeInsets.fromLTRB(
                 AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
             child: _PuppetNoticeCard(),
           ),
-        for (final panel in store.view!.puppetControls)
-          if (panel.actions.isNotEmpty)
-            _PuppetActionPanel(store: store, panel: panel),
+        if (!typing)
+          for (final panel in store.view!.puppetControls)
+            if (panel.actions.isNotEmpty)
+              _PuppetActionPanel(store: store, panel: panel),
         _Composer(
           store: store,
           channel: channel,
           controller: message,
-          keyboard: keyboard,
+          typing: typing,
           actions: actions,
           bottomInset: widget.bottomInset,
           error: sendError,
@@ -687,7 +717,7 @@ class _Composer extends StatelessWidget {
     required this.store,
     required this.channel,
     required this.controller,
-    required this.keyboard,
+    required this.typing,
     required this.actions,
     required this.bottomInset,
     required this.onSend,
@@ -698,7 +728,9 @@ class _Composer extends StatelessWidget {
   final GameStore store;
   final GameChannel? channel;
   final TextEditingController controller;
-  final bool keyboard;
+
+  /// 软键盘已打开：行动入口收成一个按钮，不再横向铺开。
+  final bool typing;
   final List<ActionDescriptor> actions;
   final double bottomInset;
   final VoidCallback onSend;
@@ -768,7 +800,7 @@ class _Composer extends StatelessWidget {
               ),
               SizedBox(
                 height: 42,
-                child: keyboard
+                child: typing
                     ? Align(
                         alignment: Alignment.centerLeft,
                         child: Badge.count(

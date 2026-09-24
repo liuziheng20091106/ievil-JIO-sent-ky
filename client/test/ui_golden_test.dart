@@ -538,6 +538,34 @@ void main() {
     });
   });
 
+  testWidgets('软键盘打开时对局页只留输入区', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      await pumpAt(tester, store, const Size(420, 880));
+      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.byType(FilterChip), findsWidgets);
+
+      // 模拟软键盘弹出：物理像素与逻辑像素在 pumpAt 里是 1:1。
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // 标题栏、筛选、快捷工具与底栏全部让位，只留消息与输入区。
+      expect(find.byType(AppBar), findsNothing);
+      expect(find.byType(NavigationBar), findsNothing);
+      expect(find.byType(FilterChip), findsNothing);
+      expect(find.byType(MessageBubble), findsWidgets, reason: '消息列表仍在');
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text('公开讨论'), findsOneWidget, reason: '发送频道入口属于输入区');
+
+      // 收起键盘后回到原来的完整布局。
+      tester.view.viewInsets = FakeViewPadding.zero;
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(AppBar), findsOneWidget);
+      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.byType(FilterChip), findsWidgets);
+    });
+  });
+
   testWidgets('屏幕够宽时同屏显示多个界面，窄屏仍是一次一页', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       // 电脑宽屏：状态、对局、管理三栏同屏，悬浮底栏不再出现。
