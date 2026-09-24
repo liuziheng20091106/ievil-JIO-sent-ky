@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app_icons.dart';
 import 'design.dart';
 import 'models.dart';
+import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 
 /// 自绘选择界面：选玩家显示「头像 + 名字 + 角色」，选行动显示图标。
@@ -75,7 +76,7 @@ Future<List<String>?> showPlayerPicker(
   int? min,
   int? max,
 }) =>
-    showModalBottomSheet<List<String>>(
+    showPredictiveSheet<List<String>>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -300,7 +301,7 @@ Future<ActionDescriptor?> showActionPicker(
   required List<ActionDescriptor> actions,
   String title = '可用行动',
 }) =>
-    showModalBottomSheet<ActionDescriptor>(
+    showPredictiveSheet<ActionDescriptor>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -421,7 +422,7 @@ Future<List<String>?> showCodexPicker(
   required List<String> initial,
   required int requiredCount,
 }) =>
-    showModalBottomSheet<List<String>>(
+    showPredictiveSheet<List<String>>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,

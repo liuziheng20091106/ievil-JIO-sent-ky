@@ -42,7 +42,9 @@ Windows 主持人端禁止重复实例：同一登录会话里重复启动不会
 
 公告：5 级主持在大厅的「公告管理」里用 markdown 发布（带实时预览），大厅卡片显示最新几条与未读数、点开看渲染后的正文。已读状态按每条公告的 sha256 存在本机 `shared_preferences`（只存哈希），公告内容改过会重新算未读；公告数据由大厅每 5 秒的轮询顺带带回，不额外开轮询。公告存在后端的独立库 `data/announcements.sqlite3`，跨局保留。markdown 用 `flutter_markdown_plus` 渲染。
 
-界面跟随系统深色模式：浅色与深色共用同一套语义色板（`lib/src/design.dart` 的 `AppPalette`），组件通过 `context.palette` 取色；系统切换深浅色时整套界面（卡片、文字、输入框、底栏、对话框）一起变化。Android 已开启 `enableOnBackInvokedCallback`，Android 14+ 从对局内页面返回时出现系统预测性返回预览。
+界面跟随系统深色模式：浅色与深色共用同一套语义色板（`lib/src/design.dart` 的 `AppPalette`），组件通过 `context.palette` 取色；系统切换深浅色时整套界面（卡片、文字、输入框、底栏、对话框）一起变化。
+
+预测性返回（Android 14+ 边滑时跟手预览）：清单里已开 `enableOnBackInvokedCallback`，且 Flutter 只有在「栈里有可 pop 的路由」时才会向系统注册返回回调——所以对局外壳本身（它是根路由）滑返回等于退出应用，系统只会给静态动画，这是预期行为。有预览的是两类界面：① 从大厅推入的页面（成就、我的成就、主持授权、公告、公告管理、更换服务器），由 Flutter 自带的过渡器处理；② 模态底部面板（行动面板、行动表单、选人/选行动/选魔典/选成就等选择器），由 `lib/src/predictive_sheet.dart` 接返回手势并直接驱动面板自己的动画控制器。`showDialog` 的对话框不在覆盖范围。
 
 ## 结构
 
@@ -57,6 +59,7 @@ lib/src/achievements.dart  稀有度色板、成就徽章与头像成就摘要
 lib/src/achievement_pages.dart 玩家的「我的成就」与主持人的「成就管理」
 lib/src/host_pages.dart    主持等级说明与「主持授权」页
 lib/src/announcement_pages.dart 大厅公告、公告页（markdown）与公告管理
+lib/src/predictive_sheet.dart 模态底部面板的预测性返回（接系统返回手势，见上）
 ```
 
 客户端不做规则判断：行动是否可用、是否被私信锁定、能看到哪些牌与消息，全部以服务端返回的描述为准。

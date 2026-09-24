@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:seven_double_client/src/action_sheet.dart';
 import 'package:seven_double_client/src/app_icons.dart';
 import 'package:seven_double_client/src/design.dart';
+import 'package:seven_double_client/src/emoji_picker.dart';
 import 'package:seven_double_client/src/models.dart';
 import 'package:seven_double_client/src/participant_menu.dart';
 import 'package:seven_double_client/src/picks.dart';
@@ -601,6 +603,123 @@ void main() {
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(FilterChip), findsWidgets);
     });
+  });
+
+  // 回归：键盘弹出会切到「只留输入区」布局。曾经这一支把 IndexedStack 换成
+  // SafeArea(IndexedStack)，元素类型改变导致整棵子树重建，输入框 controller 与焦点
+  // 一起被销毁——草稿被清空、键盘刚弹出又收起，在手机上根本没法输入。
+  testWidgets('键盘弹出与收起都不清空输入框草稿', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      await pumpAt(tester, store, const Size(420, 880));
+      await tester.enterText(find.byType(TextField), '打了一半的草稿');
+      await tester.pump();
+      expect(find.text('打了一半的草稿'), findsOneWidget);
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('打了一半的草稿'), findsOneWidget, reason: '弹键盘不能清草稿');
+
+      tester.view.viewInsets = FakeViewPadding.zero;
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('打了一半的草稿'), findsOneWidget, reason: '收键盘不能清草稿');
+    });
+  });
+
+  // 表情面板：开面板、搜索点选把 token 插进输入框、再点一次收起。
+  // 输入框内部始终是纯文本 token，所以发送格式与长度校验都不受影响。
+  testWidgets('输入区的表情面板能展开并插入 token', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      await pumpAt(tester, store, const Size(420, 880));
+      expect(find.byType(EmojiPicker), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.emoji_emotions_outlined));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(EmojiPicker), findsOneWidget);
+      // 面板占位与软键盘同权：标题栏、筛选与底栏一起让位，聊天区域才不被挤没。
+      expect(find.byType(AppBar), findsNothing);
+      expect(find.byType(NavigationBar), findsNothing);
+      expect(find.byType(MessageBubble), findsWidgets, reason: '消息列表仍在');
+      expect(find.text('公开讨论'), findsOneWidget, reason: '发送频道入口属于输入区');
+
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(EmojiPicker),
+          matching: find.byType(TextField),
+        ),
+        '微笑',
+      );
+      await tester.pump();
+      await tester.tap(find.descendant(
+        of: find.byType(GridView),
+        matching: find.byType(InkWell),
+      ));
+      await tester.pump();
+      expect(find.text('[/微笑]'), findsOneWidget);
+      // 富文本输入的实证：输入框内部把这个 token 真的画成了表情图，
+      // 但 controller 里存的仍是纯文本。
+      expect(
+        find.descendant(
+          of: find.byType(EditableText),
+          matching: find.byType(Image),
+        ),
+        findsOneWidget,
+      );
+
+      // 收起面板后草稿内容不变，消息正文会把它画成表情图。
+      await tester.tap(find.byIcon(Icons.emoji_emotions_outlined));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(EmojiPicker), findsNothing);
+      expect(find.byType(AppBar), findsOneWidget, reason: '收起面板要恢复完整布局');
+      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.text('[/微笑]'), findsOneWidget);
+    });
+  });
+
+  // 顺序发言（speech.speak）就是多行字段：插入的表情必须自己写回表单值与草稿，
+  // 因为程序改 controller 不触发 onChanged，否则提交的还是插入前的旧内容。
+  testWidgets('行动表单的多行字段能插入表情并写回表单值', (tester) async {
+    final store = await previewStore(host: false);
+    final action = ActionDescriptor.fromJson({
+      'id': 'speech.speak',
+      'label': '提前写发言（轮到你时公开）',
+      'short_label': '发言',
+      'ui_version': 1,
+      'fields': [
+        {'name': 'text', 'label': '发言内容', 'type': 'textarea'},
+      ],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(body: ActionFormSheet(store: store, action: action)),
+      ),
+    );
+    await tester.pump();
+    expect(find.widgetWithText(TextButton, '表情'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, '表情'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(EmojiPicker), findsOneWidget);
+
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(EmojiPicker),
+        matching: find.byType(TextField),
+      ),
+      '微笑',
+    );
+    await tester.pump();
+    await tester.tap(find.descendant(
+      of: find.byType(GridView),
+      matching: find.byType(InkWell),
+    ));
+    await tester.pump();
+
+    final field = tester.widget<TextFormField>(find.byType(TextFormField));
+    expect(field.controller!.text, '[/微笑]');
+    expect(store.draftFor(action)['text'], '[/微笑]', reason: '草稿要跟着更新');
   });
 
   testWidgets('屏幕够宽时同屏显示多个界面，窄屏仍是一次一页', (tester) async {

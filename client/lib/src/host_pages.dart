@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'design.dart';
 import 'models.dart';
+import 'predictive_sheet.dart';
 import 'store.dart';
 
 /// 主持等级与授权管理。
@@ -103,7 +104,7 @@ class _HostAuthorizationPageState extends State<HostAuthorizationPage> {
   Future<void> pickAccount() async {
     final api = widget.store.api;
     if (api == null || busy || grantable < 1) return;
-    final account = await showModalBottomSheet<HostAccount>(
+    final account = await showPredictiveSheet<HostAccount>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,

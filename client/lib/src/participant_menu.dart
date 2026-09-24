@@ -4,6 +4,7 @@ import 'achievements.dart';
 import 'action_sheet.dart';
 import 'design.dart';
 import 'models.dart';
+import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 import 'store.dart';
 
@@ -114,7 +115,7 @@ Future<void> showRoleIntro(
   GameStore store,
   String roleId,
 ) =>
-    showModalBottomSheet<void>(
+    showPredictiveSheet<void>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,
@@ -213,7 +214,7 @@ Future<void> showRoleDetail(
   GameStore store,
   ParticipantRef ref,
 ) =>
-    showModalBottomSheet<void>(
+    showPredictiveSheet<void>(
       context: context,
       useSafeArea: true,
       builder: (context) => _RoleDetailSheet(store: store, ref: ref),
@@ -438,7 +439,7 @@ Future<void> showAvatarMenu(
   // 该参与者的账号 id：用于读取公开的成就摘要（总成就数 + 最稀有的 5 个）。
   final accountId = store.accountFor(ref.participantId);
 
-  await showModalBottomSheet<void>(
+  await showPredictiveSheet<void>(
     context: context,
     useSafeArea: true,
     isScrollControlled: true,

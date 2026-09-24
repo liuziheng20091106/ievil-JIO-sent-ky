@@ -8,10 +8,13 @@ import 'action_sheet.dart';
 import 'achievements.dart';
 import 'app_icons.dart';
 import 'design.dart';
+import 'emoji.dart';
+import 'emoji_picker.dart';
 import 'message_time.dart';
 import 'models.dart';
 import 'participant_menu.dart';
 import 'picks.dart';
+import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 import 'store.dart';
 
@@ -33,6 +36,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   /// 只在档位变化时登记一次，避免每帧写偏好引起重复重建。
   int viewedTier = 0;
   AppLifecycleState lifecycle = AppLifecycleState.resumed;
+
+  /// 输入区是否正被占位（软键盘或表情面板）：两者都让页内其余控件让位，
+  /// 否则面板一展开就把消息列表挤没。由 ChatActionPage 上报。
+  bool composerOpen = false;
 
   bool get host => widget.store.actor!.isHost;
 
@@ -137,17 +144,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       host ? store.newActionCount : store.privateStateCount,
     ];
     final urgent = store.warningCount > 0 || store.newActionCount > 0;
-    // 软键盘打开即进入「只留输入区」：小屏上标题栏、筛选、快捷工具与底栏一起把
-    // 消息和输入框挤没，这里把它们全部让位给消息列表与输入区。
-    final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
+    // 软键盘或表情面板占位即进入「只留输入区」：小屏上标题栏、筛选、快捷工具与底栏
+    // 一起把消息和输入框挤没，这里把它们全部让位给消息列表与输入区。
+    final covered = MediaQuery.viewInsetsOf(context).bottom > 0 || composerOpen;
     return LayoutBuilder(
       builder: (context, constraints) {
         // 平板/电脑屏幕够宽就同屏显示多栏，不再让底栏把页面藏起来：
         // 达到 dualPane 后状态与对局并排，达到 triplePane 再接上「我的/管理」。
         final threePane = constraints.maxWidth >= AppBreakpoints.triplePane;
         final twoPane = constraints.maxWidth >= AppBreakpoints.dualPane;
-        // 多栏布局有自己的栏位标题，键盘聚焦只在单页窄屏生效。
-        final focusTyping = typing && !twoPane;
+        // 多栏布局有自己的栏位标题，聚焦收起只在单页窄屏生效。
+        final focusTyping = covered && !twoPane;
         markVisiblePages(twoPane ? (threePane ? 3 : 2) : 0);
         final inset = twoPane
             ? AppSpacing.lg
@@ -158,6 +165,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           store: store,
           bottomInset: inset,
           typing: focusTyping,
+          onComposerExpanded: (open) {
+            if (open != composerOpen) setState(() => composerOpen = open);
+          },
         );
         final board = BoardPage(store: store, bottomInset: inset);
         final third = host
@@ -265,9 +275,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           },
           body: Column(
             children: [
+              // 这两个横幅与下面的 Expanded 同处一个 children 列表：增删子项会挪动
+              // Expanded 的下标，Flutter 按下标匹配就把整棵子树重建，输入框 controller
+              // 与焦点随之丢失（草稿被清空）。所以始终占住 child 位置，只切换内容。
               // 催办框常驻：自己的行动卡住流程时，切到哪一页都要看得见。
-              if (prompt != null) _ActionPromptBox(prompt: prompt),
-              if (!focusTyping && store.pendingPrivateInfo != null)
+              if (prompt == null)
+                const SizedBox.shrink()
+              else
+                _ActionPromptBox(prompt: prompt),
+              if (focusTyping || store.pendingPrivateInfo == null)
+                const SizedBox.shrink()
+              else
                 _PrivateInfoBanner(
                   message: store.pendingPrivateInfo!,
                   onOpen: () {
@@ -309,16 +327,20 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                           ],
                         ],
                       )
-                    else if (focusTyping)
-                      // 聚焦输入时没有标题栏，消息列表要自己避开状态栏。
+                    else
+                      // 只切换 SafeArea 的生效范围，绝不切换 widget 类型：
+                      // 键盘一弹出就把 IndexedStack 换成「SafeArea 包着 IndexedStack」，
+                      // 元素类型改变会让整棵子树（含输入框 controller 与焦点）被销毁重建，
+                      // 表现就是草稿被清空、键盘刚弹出又立刻收起。
+                      // focusTyping 为假时四边都不生效，渲染结果与裸 IndexedStack 一致。
                       SafeArea(
+                        top: focusTyping,
+                        left: focusTyping,
+                        right: focusTyping,
                         bottom: false,
                         child: IndexedStack(
                             index: index, children: [chat, board, third]),
-                      )
-                    else
-                      IndexedStack(
-                          index: index, children: [chat, board, third]),
+                      ),
                     // 键盘聚焦时不弹阶段动画：它盖满整屏，会挡住正在输入的内容。
                     if (!focusTyping && store.pendingPhaseKey != null)
                       PhaseOverlay(store: store),
@@ -550,6 +572,7 @@ class ChatActionPage extends StatefulWidget {
     required this.store,
     this.bottomInset = AppSpacing.bottomBar,
     this.typing = false,
+    this.onComposerExpanded,
   });
   final GameStore store;
 
@@ -558,6 +581,9 @@ class ChatActionPage extends StatefulWidget {
 
   /// 软键盘是否正打开：为真时隐藏页内除输入区以外的全部控件。
   final bool typing;
+
+  /// 输入区被占位（软键盘或表情面板）时上报外壳：外壳据此收起标题栏、筛选与底栏。
+  final ValueChanged<bool>? onComposerExpanded;
 
   @override
   State<ChatActionPage> createState() => _ChatActionPageState();
@@ -571,10 +597,11 @@ class _ChatActionPageState extends State<ChatActionPage> {
     'system': ('系统', Icons.info_outline),
     'host': ('主持人', Icons.workspace_premium_outlined),
   };
-  final message = TextEditingController();
+  final message = EmojiEditingController();
   final scroll = ScrollController();
   String? sendError;
   int lastCount = 0;
+  bool emojiOpen = false;
 
   @override
   void initState() {
@@ -669,7 +696,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
               : ListView.builder(
                   controller: scroll,
                   padding: const EdgeInsets.fromLTRB(AppSpacing.lg,
-                      AppSpacing.sm, AppSpacing.lg, AppSpacing.md),
+                      AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
                   itemCount:
                       store.messages.length + (store.hasMoreMessages ? 1 : 0),
                   itemBuilder: (context, index) {
@@ -713,11 +740,25 @@ class _ChatActionPageState extends State<ChatActionPage> {
           actions: actions,
           bottomInset: widget.bottomInset,
           error: sendError,
+          emojiOpen: emojiOpen,
+          onToggleEmoji: () => setEmojiOpen(!emojiOpen),
+          onPickEmoji: (face) => message.insertFace(face),
+          onTapField: () => setEmojiOpen(false),
           onSend: send,
           onClearError: () => setState(() => sendError = null),
         ),
       ],
     );
+  }
+
+  /// 表情面板与软键盘不同时占位：开面板先收键盘，面板才不会被顶出屏幕。
+  /// 面板保持打开，方便连着挑几个，与 QQ 一致。
+  /// 面板占位和软键盘一样上报外壳，让标题栏、筛选与底栏一起让位给聊天区域。
+  void setEmojiOpen(bool open) {
+    if (emojiOpen == open) return;
+    setState(() => emojiOpen = open);
+    widget.onComposerExpanded?.call(open);
+    if (open) FocusManager.instance.primaryFocus?.unfocus();
   }
 
   Future<void> send() async {
@@ -742,6 +783,10 @@ class _Composer extends StatelessWidget {
     required this.typing,
     required this.actions,
     required this.bottomInset,
+    required this.emojiOpen,
+    required this.onToggleEmoji,
+    required this.onPickEmoji,
+    required this.onTapField,
     required this.onSend,
     required this.onClearError,
     this.error,
@@ -755,6 +800,12 @@ class _Composer extends StatelessWidget {
   final bool typing;
   final List<ActionDescriptor> actions;
   final double bottomInset;
+  final bool emojiOpen;
+  final VoidCallback onToggleEmoji;
+  final ValueChanged<EmojiFace> onPickEmoji;
+
+  /// 重新聚焦输入框即收起面板：否则键盘与面板会同时占位。
+  final VoidCallback onTapField;
   final VoidCallback onSend;
   final VoidCallback onClearError;
   final String? error;
@@ -771,10 +822,16 @@ class _Composer extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 发送目标与发送按钮同处文本框上方，文本框整行展开不再被挤压。
+            // 发送目标、表情入口与发送按钮同处文本框上方，文本框整行展开不再被挤压。
             Row(
               children: [
                 Expanded(child: _ChannelButton(store: store, channel: channel)),
+                const SizedBox(width: AppSpacing.sm),
+                _EmojiButton(
+                  enabled: canSend,
+                  open: emojiOpen,
+                  onTap: onToggleEmoji,
+                ),
                 const SizedBox(width: AppSpacing.sm),
                 _SendButton(enabled: canSend, onSend: onSend),
               ],
@@ -794,6 +851,7 @@ class _Composer extends StatelessWidget {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
+              onTap: onTapField,
               onChanged: (_) => onClearError(),
               onSubmitted: (_) => onSend(),
             ),
@@ -850,6 +908,13 @@ class _Composer extends StatelessWidget {
                       ),
               ),
             ],
+            if (emojiOpen)
+              EmojiPicker(
+                onPick: onPickEmoji,
+                // 小屏上给消息列表留出空间：面板最高不超过屏幕的三分之一。
+                height: (MediaQuery.sizeOf(context).height * 0.32)
+                    .clamp(150.0, 236.0),
+              ),
           ],
         ),
       ),
@@ -910,6 +975,47 @@ class _DashedLinePainter extends CustomPainter {
       oldDelegate.gap != gap;
 }
 
+/// 表情面板开关：与发送按钮同尺寸同圆角，贴在发送按钮左侧。
+class _EmojiButton extends StatelessWidget {
+  const _EmojiButton({
+    required this.enabled,
+    required this.open,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final bool open;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: open ? '收起表情' : '表情',
+        child: SizedBox(
+          width: 46,
+          height: 46,
+          child: Material(
+            color: open
+                ? context.palette.accentSoft
+                : context.palette.surfaceMuted,
+            borderRadius: BorderRadius.circular(AppRadius.field),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.field),
+              onTap: enabled ? onTap : null,
+              child: Icon(
+                Icons.emoji_emotions_outlined,
+                size: 20,
+                color: !enabled
+                    ? context.palette.textTertiary
+                    : open
+                        ? context.palette.accent
+                        : context.palette.textSecondary,
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
 class _SendButton extends StatelessWidget {
   const _SendButton({required this.enabled, required this.onSend});
   final bool enabled;
@@ -950,7 +1056,7 @@ class _ChannelButton extends StatelessWidget {
           onTap: targets.isEmpty
               ? null
               : () async {
-                  final picked = await showModalBottomSheet<
+                  final picked = await showPredictiveSheet<
                       ({GameChannel channel, String? asSeat})>(
                     context: context,
                     useSafeArea: true,
@@ -1386,11 +1492,11 @@ class MessageBubble extends StatelessWidget {
       if (message.kind == 'information') return _privateInfoCard(context);
       final alert = message.kind == 'alert';
       return Padding(
-        padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
+        padding:  EdgeInsets.symmetric(vertical: 3),
         child: Center(
           child: Container(
             constraints:  BoxConstraints(maxWidth: 460),
-            padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            padding:  EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
               color: alert
                   ? context.palette.dangerSoft
@@ -1404,12 +1510,12 @@ class MessageBubble extends StatelessWidget {
               _systemText,
               textAlign: TextAlign.center,
               style:  TextStyle(
-                  fontSize: alert ? 13.5 : 13,
+                  fontSize: alert ? 13 : 12.5,
                   fontWeight: alert ? FontWeight.w600 : null,
                   color: alert
                       ? context.palette.text
                       : context.palette.textSecondary,
-                  height: 1.5),
+                  height: 1.3),
             ),
           ),
         ),
@@ -1419,7 +1525,7 @@ class MessageBubble extends StatelessWidget {
     // 发送者佩戴的成就：服务端按参与者 id 下发，取不到就不显示徽章。
     final badge = store?.equippedFor(message.senderId);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         mainAxisAlignment:
             mine ? MainAxisAlignment.end : MainAxisAlignment.start,
@@ -1445,7 +1551,7 @@ class MessageBubble extends StatelessWidget {
               children: [
                 if (message.senderName != null && !mine)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 3, left: 2),
+                    padding: const EdgeInsets.only(bottom: 2, left: 2),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1474,7 +1580,7 @@ class MessageBubble extends StatelessWidget {
                   ),
                 if (mine && badge != null)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 3, right: 2),
+                    padding: const EdgeInsets.only(bottom: 2, right: 2),
                     child: AchievementBadge(
                       name: badge.name,
                       rarity: badge.rarity,
@@ -1483,7 +1589,7 @@ class MessageBubble extends StatelessWidget {
                   ),
                 Container(
                   padding:
-                       EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                       EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
                     color: mine ? context.palette.accent : context.palette.surface,
                     borderRadius: BorderRadius.circular(AppRadius.card),
@@ -1522,25 +1628,14 @@ class MessageBubble extends StatelessWidget {
                             ],
                           ),
                         ),
-                      Text(
-                        message.text,
+                      Text.rich(
+                        TextSpan(children: emojiSpans(message.text)),
                         style: TextStyle(
                           fontSize: 15,
-                          height: 1.5,
+                          height: 1.35,
                           color: mine ? context.palette.onAccent : context.palette.text,
                         ),
                       ),
-                      if (_time.isNotEmpty) ...[
-                         SizedBox(height: AppSpacing.xs),
-                        Text(
-                          _time,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color:
-                                mine ? Colors.white70 : context.palette.textTertiary,
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -1554,11 +1649,11 @@ class MessageBubble extends StatelessWidget {
 
   /// 私密信息卡片：只有本人与主持人能看到，用金色描边把「只发给我的情报」顶出来。
   Widget _privateInfoCard(BuildContext context) => Padding(
-        padding:  EdgeInsets.symmetric(vertical: AppSpacing.sm),
+        padding:  EdgeInsets.symmetric(vertical: 3),
         child: Center(
           child: Container(
             constraints:  BoxConstraints(maxWidth: 460),
-            padding:  EdgeInsets.fromLTRB(14, 11, 14, 12),
+            padding:  EdgeInsets.fromLTRB(12, 8, 12, 9),
             decoration: BoxDecoration(
               color: context.palette.hostSoft,
               borderRadius: BorderRadius.circular(AppRadius.card),
@@ -1591,10 +1686,10 @@ class MessageBubble extends StatelessWidget {
                   ],
                 ),
                  SizedBox(height: 6),
-                Text(
-                  message.text,
+                Text.rich(
+                  TextSpan(children: emojiSpans(message.text)),
                   style:  TextStyle(
-                      fontSize: 15, height: 1.5, color: context.palette.text),
+                      fontSize: 15, height: 1.35, color: context.palette.text),
                 ),
               ],
             ),

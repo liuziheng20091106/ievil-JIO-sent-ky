@@ -4,6 +4,7 @@ import 'achievements.dart';
 import 'api.dart';
 import 'design.dart';
 import 'models.dart';
+import 'predictive_sheet.dart';
 import 'store.dart';
 
 /// 成就的两个页面：
@@ -763,7 +764,7 @@ class _PlayersTabState extends State<_PlayersTab> {
   }
 
   Future<void> open(AchievementPlayer player) async {
-    await showModalBottomSheet<void>(
+    await showPredictiveSheet<void>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,
@@ -969,7 +970,7 @@ class _PlayerSheetState extends State<_PlayerSheet> {
 
   Future<void> pickAndGrant() async {
     final owned = grants.map((grant) => grant.achievementId).toSet();
-    final picked = await showModalBottomSheet<AchievementDef>(
+    final picked = await showPredictiveSheet<AchievementDef>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,

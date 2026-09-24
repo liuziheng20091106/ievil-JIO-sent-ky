@@ -112,6 +112,18 @@ flutter build windows --debug
 
 脚本会写入 Windows 的 `app_icon.ico`、Android 传统 mipmap 与自适应图标前景/底色、以及网页 `favicon.ico` / `favicon.png` / `apple-touch-icon.png`（需要 Pillow）。图标保留圆形、四周透明；自适应图标前景按 Android 安全区缩放并配主题底色 `#191721`。
 
+### 表情资源
+
+客户端聊天与顺序发言的表情面板使用 QFace 的静态 QQ 表情（经典 275 张 + 超级 50 张）。改动来源后重新生成：
+
+```cmd
+.venv\Scripts\python.exe tools\gen_emoji.py [QFace 仓库路径]
+```
+
+脚本读取 QFace 的 `lib/data.json`、`qq_emoji/face_config.json` 与 `public/static/s<id>.png`，写入 `client/assets/emoji/qq/<id>.png` 与 `client/lib/src/emoji.dart`（表情总表、`[/名字]` token 切分、输入框控制器）。只取静态图，不含动画。
+
+表情在文本里就是 `[/微笑]` 这样的纯文本 token，输入框与消息气泡再把它画成内联图片。因此草稿、2000 字上限、服务端校验与实时推送都不用改动；网页端不渲染 token，但仍能读懂原文。
+
 ## 反向代理
 
 服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。代理需要：
@@ -168,7 +180,7 @@ frontend/src/  React + TypeScript 网页界面
 client/        Flutter Android / Windows 原生客户端
 gateway/       NapCat OneBot QQ 登录网关
 checks/        后端回归检查
-tools/         应用图标生成脚本
+tools/         应用图标与表情资源生成脚本
 docs/          游戏规则与设计方案
 img/           角色头像
 ```

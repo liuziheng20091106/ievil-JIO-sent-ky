@@ -10,6 +10,7 @@ import 'src/design.dart';
 import 'src/host_pages.dart';
 import 'src/models.dart';
 import 'src/picks.dart';
+import 'src/predictive_sheet.dart';
 import 'src/release.dart';
 import 'src/role_visuals.dart';
 import 'src/shell.dart';
@@ -17,6 +18,8 @@ import 'src/store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 行动弹窗的预测性返回：注册返回手势观察者（Android 14+ 由系统送到这里）。
+  PredictiveSheetBack.instance.start();
   final store = await GameStore.create();
   // 「知道了 / 忽略」的记忆写在偏好里，重启后不重复弹同一条提示。
   final release = ReleaseMonitor(preferences: store.preferences);
@@ -39,15 +42,20 @@ class SevenDoubleApp extends StatelessWidget {
   final ReleaseMonitor release;
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: kAppTitle,
-        debugShowCheckedModeBanner: false,
-        theme: buildAppTheme(),
-        darkTheme: buildAppTheme(Brightness.dark),
-        themeMode: ThemeMode.system,
-        home: AnimatedBuilder(
-          animation: store,
-          builder: (context, _) => AppGate(store: store, release: release),
+  Widget build(BuildContext context) => SheetVsyncHost(
+        // SheetVsyncHost 给行动弹窗的控制器提供 vsync；面板控制器必须在路由建立前
+        // 创建，所以 vsync 只能从树里的 State 拿（见 src/predictive_sheet.dart）。
+        child: MaterialApp(
+          title: kAppTitle,
+          debugShowCheckedModeBanner: false,
+          theme: buildAppTheme(),
+          darkTheme: buildAppTheme(Brightness.dark),
+          themeMode: ThemeMode.system,
+          navigatorObservers: [PredictiveSheetBack.instance.routeObserver],
+          home: AnimatedBuilder(
+            animation: store,
+            builder: (context, _) => AppGate(store: store, release: release),
+          ),
         ),
       );
 }

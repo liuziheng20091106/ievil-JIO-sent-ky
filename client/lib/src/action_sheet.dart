@@ -8,8 +8,11 @@ import 'package:flutter/services.dart';
 
 import 'app_icons.dart';
 import 'design.dart';
+import 'emoji.dart';
+import 'emoji_picker.dart';
 import 'models.dart';
 import 'picks.dart';
+import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 import 'store.dart';
 
@@ -21,7 +24,7 @@ Future<void> showActionForm(
   String? asSeat,
   Map<String, dynamic>? initial,
 }) async {
-  await showModalBottomSheet<void>(
+  await showPredictiveSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -36,7 +39,7 @@ Future<void> showActionForm(
 
 /// 轻预览：长按行动按钮时展示，不提交。
 Future<void> showActionPreview(BuildContext context, ActionDescriptor action) =>
-    showModalBottomSheet<void>(
+    showPredictiveSheet<void>(
       context: context,
       builder: (context) => Padding(
         padding: const EdgeInsets.fromLTRB(
@@ -131,7 +134,8 @@ class ActionFormSheet extends StatefulWidget {
 class _ActionFormSheetState extends State<ActionFormSheet> {
   final formKey = GlobalKey<FormState>();
   final values = <String, dynamic>{};
-  final controllers = <String, TextEditingController>{};
+  // 表情插入的是 `[/名字]` token：输入框内部仍是纯文本，草稿与提交格式不变。
+  final controllers = <String, EmojiEditingController>{};
   final drawingKeys = <String, GlobalKey<_DrawingPadState>>{};
 
   /// 手绘笔迹提升到表单层：字段在惰性 ListView 里滚出视口后 State 会被销毁，
@@ -139,6 +143,9 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
   final strokes = <String, List<Offset?>>{};
   String? error;
   bool submitting = false;
+
+  /// 当前展开表情面板的多行字段名；null 表示没有展开。
+  String? emojiField;
 
   @override
   void initState() {
@@ -156,7 +163,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
         case 'text':
         case 'textarea':
         case 'number':
-          controllers[field.name] = TextEditingController(
+          controllers[field.name] = EmojiEditingController(
             text: values[field.name]?.toString() ?? '',
           );
         case 'checkbox':
@@ -361,6 +368,13 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 ),
               ),
             ),
+            if (emojiField != null)
+              EmojiPicker(
+                onPick: (face) => _insertEmoji(emojiField!, face),
+                // 表单本身已占屏 88%，面板再高会把字段区压没。
+                height: (MediaQuery.sizeOf(context).height * 0.26)
+                    .clamp(140.0, 210.0),
+              ),
           ],
         ),
       ),
@@ -391,28 +405,56 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     switch (field.type) {
       case 'text':
       case 'textarea':
+        final multiline = field.type == 'textarea';
+        final panelOpen = emojiField == field.name;
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-          child: TextFormField(
-            controller: controllers[field.name],
-            minLines: field.type == 'textarea' ? 3 : 1,
-            maxLines: field.type == 'textarea' ? 6 : 1,
-            decoration: InputDecoration(
-              labelText: field.label,
-              alignLabelWithHint: field.type == 'textarea',
-            ),
-            validator: (value) {
-              final text = value?.trim() ?? '';
-              if (field.required && text.isEmpty) {
-                return '此项必填';
-              }
-              final min = field.raw['min_length'];
-              if (min is int && text.length < min) {
-                return '至少输入 $min 个字符';
-              }
-              return null;
-            },
-            onChanged: (value) => _change(field.name, value),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextFormField(
+                controller: controllers[field.name],
+                minLines: multiline ? 3 : 1,
+                maxLines: multiline ? 6 : 1,
+                decoration: InputDecoration(
+                  labelText: field.label,
+                  alignLabelWithHint: multiline,
+                ),
+                validator: (value) {
+                  final text = value?.trim() ?? '';
+                  if (field.required && text.isEmpty) {
+                    return '此项必填';
+                  }
+                  final min = field.raw['min_length'];
+                  if (min is int && text.length < min) {
+                    return '至少输入 $min 个字符';
+                  }
+                  return null;
+                },
+                // 重新聚焦即收起面板：键盘与面板不能同时占位。
+                onTap: () {
+                  if (panelOpen) setState(() => emojiField = null);
+                },
+                onChanged: (value) => _change(field.name, value),
+              ),
+              // 顺序发言这类多行字段给表情入口；单行字段（席位名、编号）不需要。
+              if (multiline)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _toggleEmojiField(field.name),
+                    icon: const Icon(Icons.emoji_emotions_outlined, size: 18),
+                    label: Text(panelOpen ? '收起表情' : '表情'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: panelOpen
+                          ? context.palette.accent
+                          : context.palette.textSecondary,
+                      visualDensity: VisualDensity.compact,
+                      textStyle: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ),
+            ],
           ),
         );
       case 'number':
@@ -985,6 +1027,22 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     _saveDraft();
   }
 
+  /// 表情面板一次只服务一个多行字段；开面板先收键盘，避免键盘与面板同时占位。
+  void _toggleEmojiField(String name) {
+    final open = emojiField == name;
+    setState(() => emojiField = open ? null : name);
+    if (!open) FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  /// 面板插入不触发 onChanged，必须自己写回表单值与草稿，
+  /// 否则提交的是插入前的旧内容。
+  void _insertEmoji(String name, EmojiFace face) {
+    final controller = controllers[name];
+    if (controller == null) return;
+    controller.insertFace(face);
+    _change(name, controller.text);
+  }
+
   void _saveDraft() {
     widget.store.saveDraft(widget.action, values,
         asSeat: widget.asSeat, initial: widget.initial);
@@ -1069,7 +1127,7 @@ Future<List<String>?> _showOptionSheet(
   required bool multi,
   int? max,
 }) =>
-    showModalBottomSheet<List<String>>(
+    showPredictiveSheet<List<String>>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
