@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from . import api, auth_storage, realtime, storage
+from . import achievement_storage, achievements_api, api, auth_storage, realtime, storage
 from .game import GameError
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app):
     storage.initialize()
     auth_storage.initialize()
+    achievement_storage.initialize()
     timer = asyncio.create_task(realtime.clock())
     try:
         yield
@@ -34,6 +35,7 @@ async def lifespan(app):
 
 app = FastAPI(title="魔法裁判 · 七双", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.include_router(api.router)
+app.include_router(achievements_api.router)
 
 
 @app.middleware("http")

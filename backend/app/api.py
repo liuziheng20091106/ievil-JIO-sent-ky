@@ -8,7 +8,16 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from . import auth, auth_storage, evidence, realtime, schemas, storage, views
+from . import (
+    achievement_storage,
+    auth,
+    auth_storage,
+    evidence,
+    realtime,
+    schemas,
+    storage,
+    views,
+)
 from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
 from .game.catalog import night_half
 from .game.state import controlled_cards, owner
@@ -448,6 +457,9 @@ async def participate(game_id: str, body: schemas.Participation, request: Reques
         with storage.transaction() as db:
             game = require_game(db, game_id, mutable=True)
             actor, row = join_game(db, game, account, body.kind, auth.token_hash(request))
+        # 成就库的「最近参赛顺序」：以玩家身份入席才算参赛，观战不算。
+        if body.kind == "player":
+            achievement_storage.touch_played(account["id"], account["nickname"])
         realtime.publish(game_id, [row] if row else [])
         refresh_connections()
         return auth.me(actor)
@@ -527,6 +539,8 @@ async def accept_invite(invite_id: str, request: Request):
                 "UPDATE invites SET status='accepted',responded_at=? WHERE id=?",
                 (storage.now_text(), invite_id),
             )
+        # 与主动入席一致：接受邀请也算一次参赛。
+        achievement_storage.touch_played(account["id"], account["nickname"])
         realtime.publish(game["id"], [message] if message else [])
         refresh_connections()
         return auth.me(actor)

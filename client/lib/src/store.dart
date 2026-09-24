@@ -91,6 +91,15 @@ class GameStore extends ChangeNotifier {
   Map<String, dynamic>? challengeInfo;
   String? pendingPhaseKey;
 
+  /// 本局各参与身份佩戴的成就，以及参与者 id 到账号 id 的映射。
+  /// 服务端单独下发（成就是独立于对局规则的库），取不到就当没有徽章。
+  Map<String, EquippedAchievement> equippedAchievements = const {};
+  Map<String, String> participantAccounts = const {};
+
+  /// 上一次为哪批参与身份取过佩戴信息：候场期间陆续有人入席就再补一次，
+  /// 避免为同一批人反复请求。
+  Set<String> _equippedRequested = const {};
+
   /// 下层牌刚登场（下层登场、复活、换牌）时待展示的角色 id；
   /// 由 GameShell 弹一次角色卡介绍后清空。
   String? pendingRoleId;
@@ -615,6 +624,42 @@ class GameStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 本局某参与身份佩戴的成就；没有佩戴或还没取到时为 null。
+  EquippedAchievement? equippedFor(String? participantId) =>
+      participantId == null ? null : equippedAchievements[participantId];
+
+  /// 参与者 id 对应的账号 id：点头像看成就摘要时用它查公开摘要。
+  String? accountFor(String? participantId) =>
+      participantId == null ? null : participantAccounts[participantId];
+
+  /// 拉取本局各参与身份佩戴的成就。失败只影响徽章与摘要，不打扰对局。
+  Future<void> loadGameAchievements() async {
+    final id = gameId;
+    final client = api;
+    if (client == null || id == null) return;
+    try {
+      final rows = await client.gameEquipped(id);
+      final equipped = <String, EquippedAchievement>{};
+      final accounts = <String, String>{};
+      for (final row in rows) {
+        if (row.accountId.isNotEmpty) {
+          accounts[row.participantId] = row.accountId;
+        }
+        final badge = row.equipped;
+        if (badge != null) equipped[row.participantId] = badge;
+      }
+      equippedAchievements = equipped;
+      participantAccounts = accounts;
+      notifyListeners();
+    } on ApiException {
+      // 服务端暂时读不到：维持现状，不影响对局操作。
+    } on FormatException {
+      // 同上。
+    } catch (_) {
+      // 这一处是不 await 的补充请求，任何传输层异常都不能冒成未捕获错误。
+    }
+  }
+
   /// 从已终止的对局返回主界面：断开本局的只读视图与实时连接，回到大厅。
   /// 不改动服务器上的参与身份与记录，主持人建下一局时由服务器统一清空。
   Future<void> returnToLobby() async {
@@ -633,6 +678,9 @@ class GameStore extends ChangeNotifier {
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
     messageScope = 'all';
+    equippedAchievements = const {};
+    participantAccounts = const {};
+    _equippedRequested = const {};
     newActionCount = 0;
     warningCount = 0;
     privateStateCount = 0;
@@ -814,6 +862,12 @@ class GameStore extends ChangeNotifier {
     }
 
     view = next;
+    // 候场期间陆续有人入席：参与身份变了就补一次佩戴信息，后入席的玩家也有徽章。
+    final participants = next.participantIds;
+    if (participants.isNotEmpty && !setEquals(participants, _equippedRequested)) {
+      _equippedRequested = participants;
+      loadGameAchievements();
+    }
     // 频道结束或消失都要回到公屏：结束的频道不再出现在频道列表里。
     if (next.channels.every(
         (item) => item.id != selectedChannelId || item.status == 'ended')) {
@@ -1288,6 +1342,9 @@ class GameStore extends ChangeNotifier {
     selectedPuppetChannelId = 'public';
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
+    equippedAchievements = const {};
+    participantAccounts = const {};
+    _equippedRequested = const {};
     connectionStatus = '未连接';
   }
 

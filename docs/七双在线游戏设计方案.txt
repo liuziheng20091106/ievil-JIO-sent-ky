@@ -16,7 +16,7 @@
 - 不设计反作弊、设备指纹、IP封禁、行为风控、举报审核、竞技排名等系统。
 - 保留正常身份验证、房间权限、输入校验和私密信息隔离；这些是游戏正常运行的要求，不是反作弊功能。
 
-首发运行范围：一个服务实例供一名主持人管理一局七双；结束后可新建下一局。保留观战和替补入口。不做13人模式、公开匹配大厅、多个并行对局、语音聊天或独立成就系统。规则提到的“本局禁用成就”只保留局内标记。
+首发运行范围：一个服务实例供一名主持人管理一局七双；结束后可新建下一局。保留观战和替补入口。不做13人模式、公开匹配大厅、多个并行对局或语音聊天。规则提到的“本局禁用成就”只保留局内标记：成就是主持人手工授权的独立库（见第八节第5小节），与这条标记不联动。
 
 二、技术方案与模块边界
 
@@ -25,7 +25,7 @@
 后端：FastAPI + Uvicorn；Pydantic 校验传输输入；JSON兼容字典保存领域状态，标准库 sqlite3 保存本地数据，secrets 生成登录挑战、令牌与随机洗牌种子，random.SystemRandom 处理游戏内洗牌与已注明概率的效果。
 前端网页：Node.js + npm + Vite + React + TypeScript；CSS Grid/Flex 实现响应布局；使用浏览器原生 fetch、WebSocket、Canvas。无需 Next.js、SSR、Redux、Socket.IO 或大型组件库。
 原生客户端：Flutter + Material 3，仅依赖 flutter_secure_storage 与 shared_preferences；使用 Dart 自带的 HTTP、WebSocket 与 JSON，不引入状态框架、路由框架或动态 UI 包。
-存储：两个 SQLite 文件。对局库保存对局数据，鉴权库保存账号与登录令牌。无需 PostgreSQL、Redis、消息队列或 ORM。
+存储：三个 SQLite 文件。对局库保存对局数据，鉴权库保存账号与登录令牌，成就库保存成就定义、授权与佩戴。无需 PostgreSQL、Redis、消息队列或 ORM。
 部署：前端构建后由 FastAPI 同源提供网页、API 和图片；Node.js 用于前端开发与构建，不再另设一套 Node 游戏后端。Uvicorn 首发只运行一个 worker；QQ 登录另有一个独立的 NapCat 网关进程。
 已在 Python 3.14.3、Node.js v24.13.0 环境安装依赖并完成生产构建；源码使用Python 3.14语法，Node.js最低要求22.12.0。依赖分别记录在 backend/requirements.txt、gateway/requirements.txt、requirements-dev.txt 与 frontend/package-lock.json。
 
@@ -41,6 +41,8 @@ backend/app/
   storage.py              SQLite读写与事务、消息按频道可见性分页
   views.py                按身份生成可见视图；所有出口共用
   evidence.py             私密文字/图片证物的校验、保存与访问权限
+  achievement_storage.py  独立成就库：成就定义、授权、佩戴与最近参赛时间
+  achievements_api.py     成就接口；主持人专属的定义与授权路由
   game/
     state.py              双牌状态、快照/回溯与共享规则
     catalog.py            14个角色的名称、规则说明、头像、技能标识
@@ -72,6 +74,8 @@ client/                   Flutter Android / Windows 原生客户端
   lib/src/store.dart      账号、参与身份、视图、频道消息与草稿
   lib/src/shell.dart      玩家/主持人壳、悬浮底栏、双头像、阶段动画
   lib/src/action_sheet.dart 行动表单、单次确认提交、手绘输入
+  lib/src/achievements.dart 稀有度色板、成就徽章与头像成就摘要
+  lib/src/achievement_pages.dart 玩家的「我的成就」与主持人的「成就管理」
 
 gateway/                  NapCat OneBot QQ 登录网关
   gateway.py              群消息登录码绑定、失败原因回群、成员同步、断线退避
@@ -342,11 +346,12 @@ Information：信物授权、四人目击名单、证物、私密提示与状态
 PersistentEffect：不能随希罗回溯消失的绑定、处罚、回溯消耗及其他主持人明确保留的效果。
 Snapshot：游戏内时间点、对应牌与技能状态；不包含登录账号、连接、历史聊天或可回溯的鉴权数据。
 
-2. 两个SQLite数据库
+2. 三个SQLite数据库
 
 对局库 data/seven-double.sqlite3 使用七张表：games（完整领域状态、快照、版本）、participants（参与身份、account_id 关联与历史权限）、channels（私信频道的创建者、状态、成员/邀请/同意名单与结束时间）、messages（聊天、信息、通知及接收范围）、evidence（文字、图片及归属）、invites（定向对局邀请：受邀账号、邀请人、状态、创建与响应时间）；领域快照存在 games.state 内，不另建事件重放或快照数据库。旧的 sessions 表与旧邀请码形状的 invites 表在初始化时删除重建。
 鉴权库 data/auth.sqlite3 使用三张表：accounts（qq_id、昵称、头像）、login_challenges（六位挑战码的散列、状态、过期与消费时间、客户端种类）、login_tokens（token_hash、account_id、kind、expires_at、valid）。只保存 SHA-256 后的令牌与挑战码，原始值不落库。
-两个库之间不伪造外键：单进程事务边界先校验账号，再写对局参与身份。备份边界也不同——清空对局只删对局库内容，账号与登录令牌保留。`data/` 可用 `GAME_DATA_DIR` 覆盖，验证时请指向独立临时目录。
+成就库 data/achievements.sqlite3 使用三张表：achievements（名称、内容、稀有度 1-10、创建与更新时间）、grants（account_id、achievement_id、获得时间，同一玩家同一个成就只记一次）、players（昵称快照、佩戴的授权 id、最近一次以玩家身份参赛的时间）。成就与授权跨局保留——建局清空对局库不会碰它。
+三个库之间不伪造外键：单进程事务边界先校验账号，再写对局参与身份。备份边界也不同——清空对局只删对局库内容，账号、登录令牌与成就记录全部保留。`data/` 可用 `GAME_DATA_DIR` 覆盖，验证时请指向独立临时目录。
 角色素材继续读现有img目录；证物图像作为SQLite BLOB保存在evidence表并按身份检查权限，不能通过公开静态素材路径访问。信物不保存图像。
 游戏命令先在本局锁内校验与计算，事务保存状态及产生的消息，再推送；保存失败则不发布成功结果。小规模对局不需要分布式锁。
 提供启动时读回当前状态，避免刷新或服务重启重新发牌；不承诺服务中断自动托管，也不增加房主故障转移方案。
@@ -365,6 +370,14 @@ HTTP承接登录、加入、游戏命令与聊天提交；WebSocket只负责实�
 WebSocket使用 sync、state、message、ping 消息，客户端回复pong。持久消息有递增id，消息kind区分聊天、私密信息、在线通知等；对局结束随state同步。所有内容按接收权限生成，不做复杂增量补丁。
 连接建立时在同一同步边界注册订阅并取得快照与最近一页获准消息，然后投递后续更新，避免初始化窗口漏消息。重连后重新同步状态，按after游标补充获准历史，客户端按消息id去重。
 纯在线状态和聊天不抬高游戏命令版本，避免正常发言让别人选好的夜间行动无故失效。
+
+5. 成就系统
+
+成就由主持人授权，所有成就都可以自定义：名称（不超过24字）、内容（不超过200字）、稀有度1-10（数字越大越稀有，客户端按档位取十种不同的底色）。新建、修改、删除定义，以及给谁授权、撤销哪条授权，都只有主持人令牌能做；玩家只能读自己的成就并佩戴其中一个，且只能佩戴自己名下的记录——这些边界在服务端判定，界面隐藏不能代替授权。
+
+删除定义会连同授权一起删除并清空对应佩戴（界面先提示已授予多少人），撤销单条授权同样清空佩戴；同一玩家同一个成就只记一次，重复授权返回冲突。玩家列表取自成就库的 players 表：以玩家身份参局或获得过成就的账号才在其中，按最近一次参赛时间倒序、从未参赛的排在最后（观战不计入参赛）。头像摘要是公开展示数据（总成就数 + 最稀有的5个），任何已登录身份可读；对局内的佩戴信息只发给该局的主持人、参与者与观战者。
+
+界面上：大厅一张卡片进入「我的成就」（玩家）或「成就管理」（主持人，分成就定义与玩家授权两页）；对局内玩家发言时昵称右边显示其佩戴的成就（底色即稀有度颜色），点击玩家头像在快捷菜单下方展开该玩家的成就摘要。
 
 九、HTTP与实时接口约定
 
@@ -396,6 +409,17 @@ POST /api/games/{game_id}/messages            channel_id、text；返回发送�
 GET  /api/games/{game_id}/messages            按游标分页读取获准记录，支持 scope 筛选
 POST /api/games/{game_id}/evidence            提交文本或图片证物；私信锁定或观战身份一律拒绝
 GET  /api/games/{game_id}/evidence/{id}       检查权限后返回材料或图片
+GET  /api/achievements/catalog                成就目录：名称、内容、稀有度与已授予人数
+POST /api/achievements/defs                   主持人新建成就定义
+POST /api/achievements/defs/{id}              主持人修改成就定义
+DELETE /api/achievements/defs/{id}            主持人删除定义（连同授权，返回移除条数）
+GET  /api/achievements/players                主持人总玩家列表；按最近参赛排序并带全部授权
+POST /api/achievements/players/{id}/grants    主持人授权；同一玩家同一成就只记一次
+DELETE /api/achievements/grants/{grant_id}    主持人撤销授权
+GET  /api/achievements/me                     玩家自己的成就与佩戴
+POST /api/achievements/me/equip               玩家佩戴（grant_id 为空表示取消佩戴）
+GET  /api/achievements/accounts/{id}          头像摘要：总成就数 + 最稀有的5个
+GET  /api/achievements/games/{game_id}/equipped  本局各参与身份佩戴的成就（按参与者 id）
 WS   /api/live                                用Cookie或Bearer建立连接，接收事件并回复心跳
 
 commands统一使用 expected_version、action、payload 信封；房间管理输入由Pydantic校验，游戏动作由后端动作描述和领域函数逐项校验权限、字段、阶段、次数与目标。不接受任意JSON覆盖整个游戏状态。
@@ -470,7 +494,7 @@ QQ登录：复制 gateway\.env.example 为 gateway\.env 并填写 NapCat 地址�
 可用环境变量GAME_DATA_DIR指定独立数据目录，联调曾使用data/verification，交付时清除此测试目录。退出浏览器不会结束对局；须由主持人结算或终止当前局后才能创建下一局。
 对局结束后数据仍可只读查看，直到建立下一局为止：建立新对局会自动清除上一局对局库的全部数据（含结算与聊天），主持人也可在管理面板点「一键初始化」立即清空；两种方式都保留QQ账号、玩家登录令牌与主持人登录，下一局重新开放加入即可参局。
 前端开发：保持后端8000端口运行，在frontend目录执行npm run dev；正式使用前执行npm run build。开发服务器不是第二套游戏后端。重新构建后无需让玩家清缓存：index.html 每次回源校验，带哈希的资源长期缓存。
-发行版本标签：后端 /api/health 下发 GAME_CLIENT_LATEST 与 GAME_CLIENT_MINIMUM（三段数字，未配置则不下发）；客户端把内置的 ReleaseMonitor.currentVersion 与之比较，低于 latest 顶部横幅提示可更新，低于 minimum 横幅要求必须更新后才能继续使用。这两条提示与安卓保活提示都只在大厅显示，对局中不打断牌局；可更新与保活提示能按「知道了 / 忽略」关掉，关闭结果记在 shared_preferences（版本提示按被关掉的 latest 标签记忆，服务端下发更新的版本才重新提示）。发版流程是先把 client/lib/src/release.dart 的 currentVersion 与 client/pubspec.yaml 的版本名同步提高，再把 GAME_CLIENT_LATEST 改成新版本、GAME_CLIENT_MINIMUM 留在仍被兼容的旧版本（部署环境当前为 latest=1.0.4、minimum=1.0.3；内置 1.0.5 对应的标签是 latest=1.0.5、minimum=1.0.3，随 APK 一起更新：1.0.3 客户端只提示可更新，低于 1.0.3 的客户端仍强制更新）；安卓 versionCode/versionName 不随之变动，更新与否完全由这两个环境变量与内置版本号决定。
+发行版本标签：后端 /api/health 下发 GAME_CLIENT_LATEST 与 GAME_CLIENT_MINIMUM（三段数字，未配置则不下发）；客户端把内置的 ReleaseMonitor.currentVersion 与之比较，低于 latest 顶部横幅提示可更新，低于 minimum 横幅要求必须更新后才能继续使用。这两条提示与安卓保活提示都只在大厅显示，对局中不打断牌局；可更新与保活提示能按「知道了 / 忽略」关掉，关闭结果记在 shared_preferences（版本提示按被关掉的 latest 标签记忆，服务端下发更新的版本才重新提示）。发版流程是先把 client/lib/src/release.dart 的 currentVersion 与 client/pubspec.yaml 的版本名同步提高，再把 GAME_CLIENT_LATEST 改成新版本、GAME_CLIENT_MINIMUM 留在仍被兼容的旧版本（部署环境当前为 latest=1.0.4、minimum=1.0.3；内置 1.0.6 对应的标签是 latest=1.0.6、minimum=1.0.3，随 APK 一起更新：1.0.3 客户端只提示可更新，低于 1.0.3 的客户端仍强制更新）；安卓 versionCode/versionName 不随之变动，更新与否完全由这两个环境变量与内置版本号决定。
 原生客户端：在client目录执行flutter pub get、flutter analyze、flutter test；产物用flutter build apk --debug或flutter build windows --debug。Android 构建需要 Android SDK（platform 与 build-tools 36）与 JDK 21；Flutter 3.47 的模板用 AGP 9.1，因此 Gradle wrapper 固定为 9.3.1。Windows 构建需要 Visual Studio 的 C++ 桌面工作负载与 ATL 组件（flutter_secure_storage 依赖 atlstr.h）。
 检查依赖：.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 规则/访问检查：.venv\Scripts\python.exe -m unittest discover -s checks -v

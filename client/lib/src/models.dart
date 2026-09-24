@@ -361,6 +361,136 @@ class RoleInfo {
   late final String? avatar;
 }
 
+/// 成就定义：主持人自定义的名称、内容与稀有度（1-10，数字越大越稀有）。
+class AchievementDef {
+  AchievementDef.fromJson(Object? value)
+      : raw = jsonObject(value, 'achievement') {
+    id = jsonString(raw['id'], 'achievement.id');
+    name = jsonString(raw['name'], 'achievement.name');
+    detail = raw['detail']?.toString() ?? '';
+    rarity = jsonInt(raw['rarity'], 'achievement.rarity');
+    grantedCount = jsonInt(raw['granted_count'], 'achievement.granted_count');
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String name;
+  late final String detail;
+  late final int rarity;
+
+  /// 已授予人数：主持人删除定义前用它判断影响面。
+  late final int grantedCount;
+}
+
+/// 某个账号获得的一个成就。
+class AchievementGrant {
+  AchievementGrant.fromJson(Object? value) : raw = jsonObject(value, 'grant') {
+    id = jsonString(raw['id'], 'grant.id');
+    accountId = raw['account_id']?.toString() ?? '';
+    achievementId = jsonString(raw['achievement_id'], 'grant.achievement_id');
+    name = jsonString(raw['name'], 'grant.name');
+    detail = raw['detail']?.toString() ?? '';
+    rarity = jsonInt(raw['rarity'], 'grant.rarity');
+    grantedAt = raw['granted_at']?.toString() ?? '';
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String accountId;
+  late final String achievementId;
+  late final String name;
+  late final String detail;
+  late final int rarity;
+  late final String grantedAt;
+}
+
+/// 佩戴中的成就：列表与对局内徽章只用到名字与稀有度。
+class EquippedAchievement {
+  EquippedAchievement.fromJson(Object? value)
+      : raw = jsonObject(value, 'equipped') {
+    id = jsonString(raw['id'], 'equipped.id');
+    name = jsonString(raw['name'], 'equipped.name');
+    rarity = jsonInt(raw['rarity'], 'equipped.rarity');
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String name;
+  late final int rarity;
+}
+
+/// 本局某个参与身份佩戴的成就：`/api/achievements/games/{id}/equipped` 的一行。
+class GameEquipped {
+  GameEquipped.fromJson(Object? value) : raw = jsonObject(value, 'equipped_row') {
+    participantId = jsonString(raw['participant_id'], 'equipped_row.participant_id');
+    accountId = raw['account_id']?.toString() ?? '';
+    equipped = raw['equipped'] == null
+        ? null
+        : EquippedAchievement.fromJson(raw['equipped']);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String participantId;
+  late final String accountId;
+  late final EquippedAchievement? equipped;
+}
+
+/// 主持人视角的玩家条目：成就总数、佩戴、最近参赛时间与全部成就。
+class AchievementPlayer {
+  AchievementPlayer.fromJson(Object? value)
+      : raw = jsonObject(value, 'achievement_player') {
+    accountId = jsonString(raw['account_id'], 'player.account_id');
+    name = raw['name']?.toString() ?? '';
+    avatarUrl = raw['avatar_url']?.toString() ?? '';
+    lastPlayedAt = raw['last_played_at']?.toString();
+    achievementCount = jsonInt(raw['achievement_count'], 'player.achievement_count');
+    equipped = raw['equipped'] == null
+        ? null
+        : EquippedAchievement.fromJson(raw['equipped']);
+    achievements = raw['achievements'] == null
+        ? const []
+        : jsonArray(raw['achievements'], 'player.achievements')
+            .map(AchievementGrant.fromJson)
+            .toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String accountId;
+  late final String name;
+  late final String avatarUrl;
+
+  /// 最近一次以玩家身份参赛的时间；为空表示只被授权过成就、还没参赛。
+  late final String? lastPlayedAt;
+  late final int achievementCount;
+  late final EquippedAchievement? equipped;
+  late final List<AchievementGrant> achievements;
+}
+
+/// 头像摘要：总成就数 + 最稀有的 5 个（名 + 详细）。
+class AchievementSummary {
+  AchievementSummary.fromJson(Object? value)
+      : raw = jsonObject(value, 'achievement_summary') {
+    accountId = jsonString(raw['account_id'], 'summary.account_id');
+    name = raw['name']?.toString() ?? '';
+    total = jsonInt(raw['total'], 'summary.total');
+    equipped = raw['equipped'] == null
+        ? null
+        : EquippedAchievement.fromJson(raw['equipped']);
+    top = raw['top'] == null
+        ? const []
+        : jsonArray(raw['top'], 'summary.top')
+            .map(AchievementGrant.fromJson)
+            .toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String accountId;
+  late final String name;
+  late final int total;
+  late final EquippedAchievement? equipped;
+  late final List<AchievementGrant> top;
+}
+
 /// 角色目录：`/api/catalog` 的裁剪结果。
 class RoleCatalog {
   RoleCatalog.fromJson(Object? value) : raw = jsonObject(value, 'catalog') {
@@ -440,6 +570,25 @@ class GameView {
 
   Map<String, dynamic> get public =>
       raw['public'] == null ? const {} : jsonObject(raw['public'], 'state.public');
+
+  /// 视图里出现的参与身份 id：席位占位者，加上主持人视图的参与者名单。
+  /// 成就是按参与身份下发佩戴徽章的，这里用来判断要不要重新拉一次。
+  Set<String> get participantIds {
+    final ids = <String>{};
+    for (final seat in seats) {
+      final id = seat['participant_id']?.toString();
+      if (id != null && id.isNotEmpty) ids.add(id);
+    }
+    final participants = host['participants'];
+    if (participants is List) {
+      for (final raw in participants) {
+        if (raw is! Map) continue;
+        final id = raw['id']?.toString();
+        if (id != null && id.isNotEmpty) ids.add(id);
+      }
+    }
+    return ids;
+  }
 
   /// 自由发言阶段已提交结束请求的席位 id。
   List<String> get discussionEndRequests => public['discussion_end_requests'] == null

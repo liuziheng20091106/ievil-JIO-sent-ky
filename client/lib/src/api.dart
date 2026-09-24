@@ -176,6 +176,111 @@ class GameApi {
     await _request('POST', '/api/logout');
   }
 
+  /// 成就目录：玩家用它对照自己获得的成就，主持人用它挑要授权的成就。
+  Future<List<AchievementDef>> achievementCatalog() async => jsonArray(
+        jsonObject(await _request('GET', '/api/achievements/catalog'))[
+            'achievements'],
+        'achievements',
+      ).map(AchievementDef.fromJson).toList(growable: false);
+
+  Future<AchievementDef> createAchievement({
+    required String name,
+    required String detail,
+    required int rarity,
+  }) async =>
+      AchievementDef.fromJson(await _request(
+        'POST',
+        '/api/achievements/defs',
+        body: {'name': name, 'detail': detail, 'rarity': rarity},
+      ));
+
+  Future<AchievementDef> updateAchievement(
+    String achievementId, {
+    required String name,
+    required String detail,
+    required int rarity,
+  }) async =>
+      AchievementDef.fromJson(await _request(
+        'POST',
+        '/api/achievements/defs/${Uri.encodeComponent(achievementId)}',
+        body: {'name': name, 'detail': detail, 'rarity': rarity},
+      ));
+
+  /// 删除定义会连同授权一起删掉，返回被移除的授权条数。
+  Future<int> deleteAchievement(String achievementId) async {
+    final body = jsonObject(await _request(
+      'DELETE',
+      '/api/achievements/defs/${Uri.encodeComponent(achievementId)}',
+    ));
+    return jsonInt(body['removed_grants'], 'removed_grants');
+  }
+
+  /// 总玩家列表（主持人）：最近的参赛顺序在前。
+  Future<List<AchievementPlayer>> achievementPlayers() async => jsonArray(
+        jsonObject(await _request('GET', '/api/achievements/players'))[
+            'players'],
+        'players',
+      ).map(AchievementPlayer.fromJson).toList(growable: false);
+
+  Future<AchievementGrant> grantAchievement(
+    String accountId,
+    String achievementId,
+  ) async =>
+      AchievementGrant.fromJson(await _request(
+        'POST',
+        '/api/achievements/players/${Uri.encodeComponent(accountId)}/grants',
+        body: {'achievement_id': achievementId},
+      ));
+
+  Future<void> revokeAchievement(String grantId) async {
+    await _request(
+      'DELETE',
+      '/api/achievements/grants/${Uri.encodeComponent(grantId)}',
+    );
+  }
+
+  /// 自己获得的成就与佩戴中的那一个。
+  Future<({List<AchievementGrant> achievements, EquippedAchievement? equipped})>
+      myAchievements() async {
+    final body = jsonObject(await _request('GET', '/api/achievements/me'));
+    return (
+      achievements: jsonArray(body['achievements'], 'achievements')
+          .map(AchievementGrant.fromJson)
+          .toList(growable: false),
+      equipped: body['equipped'] == null
+          ? null
+          : EquippedAchievement.fromJson(body['equipped']),
+    );
+  }
+
+  /// 佩戴成就；[grantId] 为空表示取消佩戴。返回佩戴后的结果。
+  Future<EquippedAchievement?> equipAchievement(String? grantId) async {
+    final body = jsonObject(await _request(
+      'POST',
+      '/api/achievements/me/equip',
+      body: {'grant_id': grantId},
+    ));
+    return body['equipped'] == null
+        ? null
+        : EquippedAchievement.fromJson(body['equipped']);
+  }
+
+  /// 任何账号的公开摘要：总成就数 + 最稀有的 5 个。
+  Future<AchievementSummary> achievementSummary(String accountId) async =>
+      AchievementSummary.fromJson(await _request(
+        'GET',
+        '/api/achievements/accounts/${Uri.encodeComponent(accountId)}',
+      ));
+
+  /// 本局每个参与身份佩戴的成就：对局内昵称旁直接显示。
+  Future<List<GameEquipped>> gameEquipped(String gameId) async => jsonArray(
+        jsonObject(await _request(
+          'GET',
+          '/api/achievements/games/${Uri.encodeComponent(gameId)}/equipped',
+        ))['participants'],
+        'participants',
+      ).map(GameEquipped.fromJson).toList(growable: false);
+
   Future<Object?> _request(
     String method,
     String path, {

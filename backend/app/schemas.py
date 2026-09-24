@@ -89,3 +89,21 @@ class Mute(Input):
 
 class Invite(Input):
     account_id: str = Field(min_length=1, max_length=64)
+
+
+class Achievement(Input):
+    """成就定义：名称、内容、稀有度 1-10（数字越大越稀有）。"""
+
+    name: str = Field(min_length=1, max_length=24)
+    detail: str = Field(min_length=1, max_length=200)
+    rarity: StrictInt = Field(ge=1, le=10)
+
+
+class AchievementGrant(Input):
+    achievement_id: str = Field(min_length=1, max_length=64)
+
+
+class AchievementEquip(Input):
+    """佩戴某个成就；grant_id 为空表示取消佩戴。"""
+
+    grant_id: str | None = Field(default=None, max_length=64)

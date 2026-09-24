@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'src/app_icons.dart';
+import 'src/achievement_pages.dart';
 import 'src/design.dart';
 import 'src/models.dart';
 import 'src/picks.dart';
@@ -824,6 +825,42 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
                 ),
               ),
+            // 成就：主持人在这里管理定义与授权，玩家在这里查看自己获得的成就并佩戴。
+            Card(
+              child: ListTile(
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
+                leading: Icon(
+                  Icons.emoji_events_outlined,
+                  color: store.actor!.isHost
+                      ? context.palette.host
+                      : context.palette.accent,
+                ),
+                title: Text(
+                  store.actor!.isHost ? '成就管理' : '我的成就',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: context.palette.text,
+                  ),
+                ),
+                subtitle: Text(
+                  store.actor!.isHost
+                      ? '自定义成就，授权给玩家'
+                      : '查看获得的成就并挑一个佩戴',
+                  style: TextStyle(
+                      fontSize: 12, color: context.palette.textTertiary),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => store.actor!.isHost
+                        ? AchievementAdminPage(store: store)
+                        : MyAchievementsPage(store: store),
+                  ),
+                ),
+              ),
+            ),
             const SectionTitle('在线玩家', subtitle: '最近一分钟内有活动的已登录账号。'),
             Card(
               child: Padding(

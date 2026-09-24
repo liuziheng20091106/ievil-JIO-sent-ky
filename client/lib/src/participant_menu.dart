@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'achievements.dart';
 import 'action_sheet.dart';
 import 'design.dart';
 import 'models.dart';
@@ -434,83 +435,102 @@ Future<void> showAvatarMenu(
     ],
   ];
 
+  // 该参与者的账号 id：用于读取公开的成就摘要（总成就数 + 最稀有的 5 个）。
+  final accountId = store.accountFor(ref.participantId);
+
   await showModalBottomSheet<void>(
     context: context,
     useSafeArea: true,
+    isScrollControlled: true,
     builder: (sheetContext) => SafeArea(
       top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.xl,
-              0,
-              AppSpacing.xl,
-              AppSpacing.md,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl,
+                0,
+                AppSpacing.xl,
+                AppSpacing.md,
+              ),
+              child: Row(
+                children: [
+                  RoleAvatar(
+                    roleId: ref.roleId,
+                    host: ref.isHost,
+                    size: 44,
+                    dead: ref.dead,
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          ref.seatId != null
+                              ? '${ref.seatId} 号 · ${ref.name}'
+                              : ref.name,
+                          style:  TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            color: context.palette.text,
+                          ),
+                        ),
+                        Text(
+                          ref.muted
+                              ? '已禁言'
+                              : ref.isHost
+                                  ? '主持人'
+                                  : '选择要执行的操作',
+                          style:  TextStyle(
+                            fontSize: 12,
+                            color: context.palette.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-            child: Row(
-              children: [
-                RoleAvatar(
-                  roleId: ref.roleId,
-                  host: ref.isHost,
-                  size: 44,
-                  dead: ref.dead,
+            for (final entry in entries)
+              ListTile(
+                leading: Icon(
+                  entry.icon,
+                  color:
+                      entry.danger ? context.palette.danger : context.palette.textSecondary,
                 ),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        ref.seatId != null
-                            ? '${ref.seatId} 号 · ${ref.name}'
-                            : ref.name,
-                        style:  TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: context.palette.text,
-                        ),
-                      ),
-                      Text(
-                        ref.muted
-                            ? '已禁言'
-                            : ref.isHost
-                                ? '主持人'
-                                : '选择要执行的操作',
-                        style:  TextStyle(
-                          fontSize: 12,
-                          color: context.palette.textTertiary,
-                        ),
-                      ),
-                    ],
+                title: Text(
+                  entry.label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: entry.danger ? context.palette.danger : context.palette.text,
                   ),
                 ),
-              ],
-            ),
-          ),
-          for (final entry in entries)
-            ListTile(
-              leading: Icon(
-                entry.icon,
-                color:
-                    entry.danger ? context.palette.danger : context.palette.textSecondary,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  entry.onTap();
+                },
               ),
-              title: Text(
-                entry.label,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: entry.danger ? context.palette.danger : context.palette.text,
+            // 成就摘要在菜单下方：总量与最稀有的几个都直接摊开，不用再点一次。
+            if (accountId != null && !ref.isHost) ...[
+              Divider(height: AppSpacing.xl, color: context.palette.border),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.xl,
+                  0,
+                  AppSpacing.xl,
+                  AppSpacing.lg,
                 ),
+                child: AchievementSummaryBlock(store: store, accountId: accountId),
               ),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                entry.onTap();
-              },
-            ),
-          const SizedBox(height: AppSpacing.lg),
-        ],
+            ],
+            const SizedBox(height: AppSpacing.lg),
+          ],
+        ),
       ),
     ),
   );

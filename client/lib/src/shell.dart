@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'action_sheet.dart';
+import 'achievements.dart';
 import 'app_icons.dart';
 import 'design.dart';
 import 'message_time.dart';
@@ -1381,6 +1382,8 @@ class MessageBubble extends StatelessWidget {
       );
     }
     final mine = self != null && message.raw['sender_id']?.toString() == self;
+    // 发送者佩戴的成就：服务端按参与者 id 下发，取不到就不显示徽章。
+    final badge = store?.equippedFor(message.senderId);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Row(
@@ -1423,7 +1426,25 @@ class MessageBubble extends StatelessWidget {
                                 fontSize: 12, color: context.palette.textTertiary),
                           ),
                         ),
+                        // 佩戴的成就紧跟在昵称右边，底色就是稀有度颜色。
+                        if (badge != null) ...[
+                          const SizedBox(width: 6),
+                          AchievementBadge(
+                            name: badge.name,
+                            rarity: badge.rarity,
+                            dense: true,
+                          ),
+                        ],
                       ],
+                    ),
+                  ),
+                if (mine && badge != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3, right: 2),
+                    child: AchievementBadge(
+                      name: badge.name,
+                      rarity: badge.rarity,
+                      dense: true,
                     ),
                   ),
                 Container(
