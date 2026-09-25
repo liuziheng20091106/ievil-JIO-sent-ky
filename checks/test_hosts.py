@@ -316,6 +316,41 @@ class HostFlow(unittest.TestCase):
         again = self.host_login("10003")
         self.assertEqual(self.create_game(again[0]).status_code, 200)
 
+    # ------------------------------------------------------------------ 主持人身份
+
+    def test_game_records_its_host_and_announces_other_hosts(self):
+        created = self.create_game(self.admin)
+        self.assertEqual(created.status_code, 200, created.text)
+        game_id = created.json()["id"]
+        # 建局时记下主持身份：对局内一律显示「主持人(昵称)」。
+        self.assertEqual(created.json()["host_name"], "主持人(主持10001)")
+
+        other, _ = self.host_login("10005")
+        entered = self.client.post(f"/api/games/{game_id}/host/enter", headers=other)
+        self.assertEqual(entered.status_code, 200, entered.text)
+        self.assertEqual(
+            entered.json(), {"owner": False, "announced": True, "owner_name": "主持人(主持10001)"}
+        )
+        # 全服通告：任何已登录身份在大厅都能看到，并写清是谁进了谁的对局。
+        lobby = self.client.get("/api/lobby", headers=other).json()
+        listed = [item for item in lobby["announcements"] if item["title"] == "有主持人进入了他人建立的对局"]
+        self.assertEqual(len(listed), 1)
+        self.assertIn("主持10005", listed[0]["body"])
+        self.assertIn("主持人(主持10001)", listed[0]["body"])
+
+        # 同一账号在同一局只通告一次，重复打开管理界面不刷屏。
+        again = self.client.post(f"/api/games/{game_id}/host/enter", headers=other)
+        self.assertEqual(again.json()["announced"], False)
+        lobby = self.client.get("/api/lobby", headers=other).json()
+        self.assertEqual(
+            len([item for item in lobby["announcements"] if item["title"] == "有主持人进入了他人建立的对局"]),
+            1,
+        )
+
+        # 建局主持人自己进入不算越权，不产生通告。
+        mine = self.client.post(f"/api/games/{game_id}/host/enter", headers=self.admin)
+        self.assertEqual(mine.json(), {"owner": True, "announced": False, "owner_name": "主持人(主持10001)"})
+
     def test_level_one_expires_on_reset_too(self):
         self.assertEqual(self.authorize("10003", 1).status_code, 200)
         headers, _ = self.host_login("10003")

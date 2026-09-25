@@ -5,7 +5,7 @@ import unittest
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
 from backend.app.game.actions import actions_for
 from backend.app.game.engine import sync_declarations
-from backend.app.game.state import DEAL_EXCLUDED_PAIRS, check_winner, upgrade_game
+from backend.app.game.state import DEAL_EXCLUDED_PAIRS, check_winner, deal_cards, upgrade_game
 
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
@@ -56,20 +56,35 @@ class SetupRules(unittest.TestCase):
 
     def test_upgrade_game_adds_the_new_rule_fields_without_replacing_history(self):
         game = create_game(DEFAULT_CODEX)
+        deal_cards(game)
         game.pop("rules_revision")
         game["night"].pop("reactions")
         game.pop("marg_love")
+        game.pop("duel")
+        game.pop("duel_approvals")
         game["water"] = {"holder": "1", "used": False}
         game["pending"].append({"id": "stale", "kind": "lower_entry", "card_id": "honoka"})
         game["information"].append({"id": "kept"})
+        # 第五版的旧局字段：布尔庇护改成日戳，安安后果从按牌改成按席位。
+        game["cards"]["millia"]["states"]["protected"] = True
+        game["spiritual"]["annan_penalty"]["annan"] = {"day": 3, "declaration_id": "old"}
+        annan_seat = next(s["id"] for s in game["seats"] if "annan" in s["cards"])
         self.assertTrue(upgrade_game(game))
-        self.assertEqual(game["rules_revision"], 3)
+        self.assertEqual(game["rules_revision"], 5)
         self.assertEqual(game["night"]["reactions"], [])
         self.assertIsNone(game["marg_love"])
+        self.assertIsNone(game["duel"])
+        self.assertEqual(game["duel_approvals"], {})
         self.assertEqual(game["information"], [{"id": "kept"}])
         # 旧局的单瓶13水迁为一个未使用的持有席位；旧待办直接作废。
         self.assertEqual(game["water"], {"holders": ["1"]})
         self.assertEqual(game["pending"], [])
+        self.assertNotIn("protected", game["cards"]["millia"]["states"])
+        self.assertEqual(game["cards"]["millia"]["states"]["protected_day"], game["day"])
+        self.assertEqual(
+            game["spiritual"]["annan_penalty"][annan_seat],
+            {"day": 3, "declaration_id": "old"},
+        )
         self.assertFalse(upgrade_game(game))
 
     def test_upgrade_game_moves_a_removed_balloon_phase_to_nomination(self):

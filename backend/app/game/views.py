@@ -6,15 +6,19 @@ from .actions import actions_for, outstanding_seats, puppet_action_panels
 from .catalog import PHASES, ROLES
 from .resolution import coco_seat
 from .state import (
+    annan_penalty_day,
     card_actionable,
     controlled_cards,
     current,
+    duel_cards,
     eligible_voters,
     fallen_upper_role,
+    host_label,
     pending_nominators,
     owner,
     player_seat,
     poison_sources,
+    protection_active,
     require,
     role_card,
     seat_operable,
@@ -158,10 +162,9 @@ def card_view(game, card, host=False):
             for k, v in states.items()
             if k
             in {
-                "protected",
+                "protected_day",
                 "no_vote",
                 "no_ability",
-                "learned_brainwash",
                 "evidence_allowed",
                 "evidence_used",
                 "treasure_protected_day",
@@ -198,7 +201,18 @@ def status_cards(game, own):
         None,
     )
     if protected:
-        add("treasure", "success", "寻宝保护", "魔女刀、蕾雅长矛和提名暂不能选择你；全场攻击仍有效。")
+        add("treasure", "success", "寻宝保护", "魔女刀、蕾雅决斗和提名暂不能选择你；全场攻击仍有效。")
+    protection_day = next(
+        (card["states"].get("protected_day") for card in cards if protection_active(game, card)),
+        None,
+    )
+    if protection_day is not None:
+        add(
+            "protection",
+            "success",
+            "庇护",
+            f"致命伤害改为负伤一次；到第{protection_day + 1}天夜里自动过期。",
+        )
     swap = next(
         (action for action in game["night"]["actions"] if action["seat_id"] == own["id"] and action["ability"] == "swap"),
         None,
@@ -211,14 +225,37 @@ def status_cards(game, own):
         add("nanoka_bullets", "info", "奈乃香子弹", f"剩余{nanoka['uses'].get('bullets', 0)}颗；下一枪命中率{min(misses + 1, 6)}/6。")
     if any(card["role_id"] == "marg" for card in cards) and game.get("marg_love"):
         love = game["marg_love"]
-        add("marg_love", "info", "玛格之爱", f"当前爱人：{love['seat_id']}号" + ("（已转爱自己）" if love.get("self") else ""))
+        pending = game["half"] != "night" and game["day"] <= love.get("day", 0)
+        add(
+            "marg_love",
+            "info",
+            "玛格之爱",
+            f"当前爱人：{love['seat_id']}号"
+            + (
+                "（当天夜里才开始生效）"
+                if pending
+                else "（已转爱自己）"
+                if love.get("self")
+                else "（免疫死亡与其他负伤）"
+            ),
+        )
+    duel = duel_cards(game)
+    if duel:
+        leia_seat = owner(game, duel[0])["id"]
+        target_seat = owner(game, duel[1])["id"]
+        add(
+            "duel",
+            "danger",
+            "蕾雅决斗",
+            f"今天所有人必须至少同意{leia_seat}号或{target_seat}号之一，"
+            "且这两张牌达到半数即可处决。",
+        )
     if any(card["role_id"] == "sherry" for card in cards) and game["spiritual"]["sherry_bound"]:
         add("sherry_bound", "info", "雪莉绑定", "胜负跟随汉娜，不能同意处决汉娜。")
+    penalty_day = annan_penalty_day(game, own["id"])
+    if penalty_day:
+        add("annan_penalty", "danger", "安安后果", f"第{penalty_day}天失去投票权并必须被处刑。")
     for card in cards:
-        penalty = game["spiritual"]["annan_penalty"].get(card["id"])
-        penalty_day = penalty.get("day") if isinstance(penalty, dict) else penalty
-        if penalty_day:
-            add("annan_penalty", "danger", "安安后果", f"第{penalty_day}天失去投票权并必须被处刑。")
         if card["states"].get("puppet"):
             add("puppet", "danger", "傀儡", "不能投票，也不能发动角色技能。")
         if card["role_id"] == "noah":
@@ -365,6 +402,9 @@ def game_view(game, actor):
         "half": game["half"],
         "phase": game["phase"],
         "phase_label": PHASES[game["phase"]],
+        # 本局主持人的展示名（主持人(昵称)）：对局内显示主持人时用它，
+        # 让玩家分得清主持这一局的是哪个账号。
+        "host_name": host_label(game),
         # 主持人警告只私下提醒被警告的席位（self.warning_deadline），不对全场暴露倒计时。
         "deadline": game["deadline"] if host else None,
         "seats": seats,
@@ -409,15 +449,16 @@ def game_view(game, actor):
         view["self"]["warning_deadline"] = game["warnings"].get(own_id)
         if game["status"] == "lobby" and game["phase"] == "ordering" and "honoka" in own["cards"]:
             # 穗乃香规则：开局前获知其他人的上层角色（仅文字角色名，不带头像）。
-            view["self"]["honoka_upper"] = [
-                {
-                    "seat_id": s["id"],
-                    "name": s["name"],
-                    "role_id": game["cards"][s["cards"][0]]["role_id"],
-                }
-                for s in game["seats"]
-                if s["ready"] and s["id"] != own_id and s["cards"]
-            ]
+            # 只列已准备的席位：准备即锁定上层牌，没准备的人还没定上层，无可告知。
+            # 这必然让她知道谁已准备（席位投影对其他人隐藏 ready），设计文档允许，别当泄露「修」掉。
+            known = []
+            for s in game["seats"]:
+                top = current(game, s)
+                if s["id"] != own_id and s["occupant_id"] and s["ready"] and top:
+                    known.append(
+                        {"seat_id": s["id"], "name": s["name"], "role_id": top["role_id"]}
+                    )
+            view["self"]["honoka_upper"] = known
     if host:
         view["host"] = {
             "codex": list(game["codex"]),
@@ -431,7 +472,6 @@ def game_view(game, actor):
             ],
             "water": deepcopy(game["water"]),
             "votes": deepcopy(game["votes"]),
-            "brainwash": deepcopy(game["brainwash"]),
             "deaths": deepcopy(game["deaths"]),
             "spiritual": deepcopy(game["spiritual"]),
             "winner_candidate": deepcopy(game["winner_candidate"]),

@@ -21,7 +21,7 @@ from . import (
 )
 from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
 from .game.catalog import night_half
-from .game.state import controlled_cards, owner
+from .game.state import controlled_cards, host_label, log_event, owner
 
 router = APIRouter(prefix="/api")
 
@@ -398,6 +398,12 @@ async def create(body: schemas.Create, request: Request):
             replaced = storage.current_game_id(db)
             storage.purge(db)
             game = create_game(body.codex)
+            # 记下建立这一局的主持人身份：对局内显示「主持人(昵称)」，
+            # 非本局主持人进入管理界面时也靠它识别（见 host_enter）。
+            game["host"] = {
+                "account_id": actor.get("account_id") or "",
+                "name": (actor.get("nickname") or "").strip(),
+            }
             db.execute(
                 "INSERT INTO games(id,state,version,status,created_at) VALUES(?,?,?,?,?)",
                 (
@@ -496,6 +502,28 @@ async def participate(game_id: str, body: schemas.Participation, request: Reques
         realtime.publish(game_id, [row] if row else [])
         refresh_connections()
         return auth.me(actor)
+
+
+@router.post("/games/{game_id}/leave")
+async def leave_game(game_id: str, request: Request):
+    """观战者主动退出本局：只解除自己的观战参与身份，不动对局与席位。
+
+    观战者不占席位，离开不会影响任何牌面；之后仍可再次入席观战。
+    玩家（占席）的退出仍属主持人裁量，走 room.kick，不能在这里自行脱落。
+    """
+    async with realtime.lock:
+        with storage.transaction() as db:
+            actor = auth.require_actor(db, request, game_id)
+            if actor["kind"] != "spectator":
+                raise HTTPException(403, "只有观战者可以主动退出对局")
+            game = require_game(db, game_id)
+            auth.revoke_participant(db, actor["id"])
+            row = storage.add_message(
+                db, game["id"], text="观战者【" + actor["name"] + "】已离开对局"
+            )
+        realtime.publish(game_id, [row])
+        refresh_connections()
+        return {"ok": True}
 
 
 @router.post("/games/{game_id}/invites")
@@ -600,6 +628,44 @@ async def state(game_id: str, request: Request):
         return current_view(game_id, auth.token_hash(request))
 
 
+@router.post("/games/{game_id}/host/enter")
+async def host_enter(game_id: str, request: Request):
+    """主持人进入本局管理界面：不是建立这一局的主持人时，向全服发一条通告。
+
+    主持人身份在建局时记录（见 :func:`create`），所以这里能认出「非当前主持人」。
+    同一账号在同一局只通告一次，避免每次打开管理页都刷屏；通告写进独立的公告库，
+    任何已登录身份都会在大厅看到。没有记录主持人身份的旧局不做判定。
+    """
+    async with realtime.lock:
+        with storage.transaction() as db:
+            actor = auth.require_actor(db, request, game_id, host=True)
+            game = require_game(db, game_id)
+            owner_account = (game.get("host") or {}).get("account_id") or ""
+            account_id = actor.get("account_id") or ""
+            if not owner_account or not account_id or account_id == owner_account:
+                return {"owner": True, "announced": False, "owner_name": host_label(game)}
+            announced = list(game.get("host_entry_notices") or [])
+            if account_id in announced:
+                return {"owner": False, "announced": False, "owner_name": host_label(game)}
+            announced.append(account_id)
+            game["host_entry_notices"] = announced
+            entrant = (actor.get("nickname") or "").strip() or account_id
+            log_event(
+                game,
+                "host",
+                f"主持人【{entrant}】进入本局管理界面；本局主持人：{host_label(game)}",
+            )
+            storage.save_game(db, game)
+            announcement_storage.create(
+                "有主持人进入了他人建立的对局",
+                f"主持人【{entrant}】进入了{host_label(game)}建立的对局管理界面。\n\n"
+                "本局只应由建立对局的主持人操作；如果这不是你安排的，请及时联系系统管理员。",
+                "",
+                "系统",
+            )
+    return {"owner": False, "announced": True, "owner_name": host_label(game)}
+
+
 def room_command(db, game, actor, action_id, payload):
     if actor["kind"] != "host":
         raise HTTPException(403, "仅主持人可以管理房间")
@@ -671,8 +737,8 @@ def room_command(db, game, actor, action_id, payload):
     return [storage.add_message(db, game["id"], text=text)]
 
 
-def channel_names(db, member_ids):
-    names = {"host": "主持人"}
+def channel_names(db, member_ids, host_name="主持人"):
+    names = {"host": host_name}
     if member_ids:
         placeholders = ",".join("?" for _ in member_ids)
         for row in db.execute(
@@ -682,43 +748,46 @@ def channel_names(db, member_ids):
     return names
 
 
-def channel_notice(db, game_id, row, ending=False):
+def channel_notice(db, game, row, ending=False):
     members = json.loads(row["participant_ids"])
     if len(members) == 2 and "host" in members:
         return None  # 主持人与玩家的双人私信不公告
-    names = channel_names(db, [member for member in members if member != "host"])
+    # 主持人用本局的展示名（主持人(昵称)）；玩家用席位号与昵称。
+    names = channel_names(db, members, host_label(game))
     creator = names.get(row["creator_id"], "参与者")
     others = "、".join(names.get(member, "参与者") for member in members if member != row["creator_id"])
     text = creator + "与" + others + "已结束私信" if ending else creator + "正在与" + others + "私信"
     # 私信开合只发给频道成员：全场公告会把记录刷满。
-    return storage.add_message(db, game_id, text=text, audience=members)
+    return storage.add_message(db, game["id"], text=text, audience=members)
 
 
-def end_channel(db, game_id, row, *, notice=True):
+def end_channel(db, game, row, *, notice=True):
     """结束一个私信频道：解除成员限制，并撤销该频道已发图片的授权。"""
     db.execute(
         "UPDATE channels SET status='ended',ended_at=? WHERE id=?",
         (storage.now_text(), row["id"]),
     )
     db.execute("UPDATE messages SET image_id=NULL WHERE channel_id=?", (row["id"],))
-    return channel_notice(db, game_id, row, ending=True) if notice else None
+    return channel_notice(db, game, row, ending=True) if notice else None
 
 
-def close_night_channels(db, game_id):
+def close_night_channels(db, game):
     """进入夜间：关闭全部私聊频道；夜间只允许与主持人建立私聊。"""
     rows = []
     closed = 0
     for row in db.execute(
-        "SELECT * FROM channels WHERE game_id=? AND status!='ended'", (game_id,)
+        "SELECT * FROM channels WHERE game_id=? AND status!='ended'", (game["id"],)
     ).fetchall():
         closed += 1
-        notice = end_channel(db, game_id, row)
+        notice = end_channel(db, game, row)
         if notice:
             rows.append(notice)
     if closed:
         rows.insert(
             0,
-            storage.add_message(db, game_id, text="天黑，全部私信频道已结束；夜间只能与主持人私聊。"),
+            storage.add_message(
+                db, game["id"], text="天黑，全部私信频道已结束；夜间只能与主持人私聊。"
+            ),
         )
     return rows
 
@@ -783,7 +852,7 @@ def channel_command(db, game, actor, action_id, payload):
         )
         if immediate:
             row = db.execute("SELECT * FROM channels WHERE id=?", (channel_id,)).fetchone()
-            notice = channel_notice(db, game["id"], row)
+            notice = channel_notice(db, game, row)
             if notice:
                 rows.append(notice)
     else:
@@ -812,18 +881,18 @@ def channel_command(db, game, actor, action_id, payload):
             )
             if active:
                 row = db.execute("SELECT * FROM channels WHERE id=?", (row["id"],)).fetchone()
-                notice = channel_notice(db, game["id"], row)
+                notice = channel_notice(db, game, row)
                 if notice:
                     rows.append(notice)
         elif action_id == "channel.reject":
             if row["status"] != "pending" or actor["id"] not in invited or actor["id"] in accepted:
                 raise HTTPException(409, "该邀请不再等待你的回应")
             # 拒绝者此后不得再读频道里发过的图片：结束频道时一并撤销图片授权。
-            end_channel(db, game["id"], row, notice=False)
+            end_channel(db, game, row, notice=False)
         elif action_id == "channel.end":
             if row["status"] != "active":
                 raise HTTPException(409, "该私信尚未开始或已经结束")
-            notice = end_channel(db, game["id"], row)
+            notice = end_channel(db, game, row)
             if notice:
                 rows.append(notice)
         else:
@@ -918,7 +987,7 @@ async def command(game_id: str, body: schemas.Command, request: Request):
                 rows = storage.add_events(db, game_id, events)
             if night_half(game) and not was_night:
                 # 进入夜间：关闭全部私聊频道，夜间只允许与主持人建立私聊。
-                rows.extend(close_night_channels(db, game_id))
+                rows.extend(close_night_channels(db, game))
             storage.save_game(db, game)
         # 先算出要返回的视图，再作废 1 级授权：否则这条已经成功的命令会因为
         # 令牌当场失效而回一个 401。

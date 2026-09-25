@@ -1686,7 +1686,6 @@ function HostSources() {
   const nominations = host.nominations ?? [];
   const voteRounds = host.vote_rounds ?? [];
   const photos = host.photos ?? [];
-  const brainwash = host.brainwash ?? {};
   const water = host.water;
   const warnings = host.warnings ?? {};
   const votes = host.votes ?? {};
@@ -1743,10 +1742,6 @@ function HostSources() {
             <RecordView value={votes} />
           </p>
         )}
-      </details>
-      <details className="record-section">
-        <summary>洗脑</summary>
-        <RecordView value={brainwash} />
       </details>
       <details className="record-section">
         <summary>13水与警告</summary>

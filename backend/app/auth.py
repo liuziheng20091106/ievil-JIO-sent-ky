@@ -8,6 +8,7 @@ import secrets
 from fastapi import HTTPException
 
 from . import auth_storage, storage
+from .game.state import host_display_name
 
 COOKIE = "seven_double_session"
 
@@ -74,8 +75,9 @@ def host_actor(account, db, game_id=None):
         "kind": "host",
         "game_id": game_id or storage.current_game_id(db),
         "seat_id": None,
-        # 对局里一律显示为「主持人」：QQ 昵称只出现在授权管理页。
-        "name": "主持人",
+        "name": host_display_name(account["nickname"]),
+        # 等级与展示名之外，客户端只再需要 QQ 昵称本身（授权页与通告文案）。
+        "nickname": account["nickname"],
         "qq_id": account["qq_id"],
         "avatar_url": account["avatar_url"],
         "host_level": host_level(account),

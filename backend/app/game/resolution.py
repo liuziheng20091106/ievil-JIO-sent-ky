@@ -5,6 +5,7 @@ from random import SystemRandom
 
 from .catalog import NIGHT_ABILITIES, ROLES
 from .state import (
+    apply_honoka_disguise,
     card_actionable,
     fallen_upper_role,
     check_winner,
@@ -17,6 +18,7 @@ from .state import (
     owner,
     pending,
     present,
+    protection_active,
     require,
     role_card,
     seat,
@@ -130,13 +132,81 @@ def target_allowed(game, target_card_id):
 
 
 def treasure_protected(game, target_card_id):
-    """这张牌当天是否受寻宝保护：魔女刀、蕾雅长矛与提名都不能选中它。"""
+    """这张牌当天是否受寻宝保护：魔女刀、蕾雅决斗与提名都不能选中它。"""
     return game["cards"][target_card_id]["states"].get("treasure_protected_day") == game["day"]
+
+
+def active_love(game):
+    """玛格的爱此刻是否已经生效。
+
+    声明当天白天不生效：爱要等当天夜里才开始起作用（因此当天处决不受它保护）。
+    """
+    love = game.get("marg_love")
+    if not love or not present(game, "marg"):
+        return None
+    if game["half"] != "night" and game["day"] <= love.get("day", 0):
+        return None
+    return love
+
+
+def loved_card_id(game):
+    """玛格当前爱人的当前牌；爱人整席出局后玛格转爱自己。
+
+    玛格的爱在结算顺序里优先级最高，见 damage_preview 与 millia_substitute。
+    """
+    love = active_love(game)
+    if not love:
+        return None
+    loved = seat(game, love["seat_id"])
+    if not current(game, loved):
+        loved = owner(game, "marg")
+    card = current(game, loved) if loved else None
+    return card["id"] if card else None
+
+
+def force_millia_swap(game, events):
+    """米莉亚的换血是强制 debuff：忘交或超时的时候由系统随机指定一名玩家。
+
+    没有任何合法目标（除自己外没有别的当前牌）时免于强制，避免整夜无人推进。
+    """
+    millia = role_card(game, "millia")
+    night = game["night"]
+    sid = owner(game, "millia")["id"]
+    actors = night.get("actors") or {}
+    if not millia["alive"] or not isinstance(actors, dict) or actors.get(sid) != millia["id"]:
+        return
+    if any(a["seat_id"] == sid and a["ability"] == "swap" for a in night["actions"]):
+        return
+    options = [s["id"] for s in game["seats"] if s["id"] != sid and current(game, s)]
+    if not options:
+        return
+    target = SystemRandom().choice(options)
+    target_card = current(game, seat(game, target))
+    game["millia_swap"] = {"seat": target, "day": game["day"]}
+    night["actions"].append(
+        {
+            "id": uid(),
+            "seat_id": sid,
+            "participant_id": seat(game, sid)["occupant_id"],
+            "card_id": millia["id"],
+            "ability": "swap",
+            "target_seat": target,
+            "target_card": target_card["id"],
+            "confirmed": True,
+            "by_host": True,
+            "forced": True,
+            "title": f"{sid}号夜间选择",
+        }
+    )
+    log_event(game, "system", f"米莉亚未提交换血，系统随机指定{target}号。")
+    notify(game, events, f"你本夜未提交换血，系统已随机指定{target}号为目标。", [sid], "换血强制")
+
 
 def lock_night(game, events):
     night = game["night"]
     require(not night["locked"], "本夜已经锁定")
     require(set(night["actors"]).issubset(night["confirmed"]), "仍有玩家未确认；可先警告并等待30秒")
+    force_millia_swap(game, events)
     night["locked"] = True
     for action in night["actions"]:
         card = game["cards"][action["card_id"]]
@@ -189,26 +259,36 @@ def damage_preview(game, attacks, protection=()):
     injured = {c["id"]: c["injured"] for c in game["cards"].values()}
     dead = {}
     guarded_seats = {sid for sid, key in game["half_exits"].items() if key == half_key(game)}
-    for attack in attacks:
+    loved = loved_card_id(game)
+    for index, attack in enumerate(attacks):
         cid = attack["target_card"]
         if cid not in game["cards"] or not game["cards"][cid]["alive"]:
             continue
         sid = owner(game, cid)["id"]
         if sid in guarded_seats or cid in dead:
             continue
+        if cid == loved:
+            # 玛格的爱优先级最高：爱人只吃玛格自己每夜那一次负伤，免疫其他死亡与负伤。
+            if attack.get("cause") == "love":
+                injured[cid] = True
+            continue
         if current(game, sid)["id"] != cid and not attack.get("allow_lower"):
             continue
-        protected = cid in protection or game["cards"][cid]["states"].get("protected")
-        if attack.get("once_injury"):
-            injured[cid] = True
-        elif attack.get("injury") or (protected and not attack.get("unconditional")):
+        protected = cid in protection or protection_active(game, game["cards"][cid])
+        # attack_index 只给米莉亚替死用来定位「哪一击真的造成了这次出局」，不进公告。
+        if (
+            attack.get("once_injury")
+            or attack.get("injury")
+            or (protected and not attack.get("unconditional"))
+        ):
+            # 负伤没有「只负伤一次、永不升级」的例外：已有负伤时再次负伤无条件死亡。
             if injured[cid]:
-                dead[cid] = {**attack, "seat_id": sid}
+                dead[cid] = {**attack, "seat_id": sid, "attack_index": index}
                 guarded_seats.add(sid)
             else:
                 injured[cid] = True
         else:
-            dead[cid] = {**attack, "seat_id": sid}
+            dead[cid] = {**attack, "seat_id": sid, "attack_index": index}
             guarded_seats.add(sid)
     if (
         game["spiritual"]["sherry_bound"]
@@ -236,11 +316,13 @@ def millia_swap_effective(game):
     return swap
 
 
-def millia_substitute(game, attacks):
-    """米莉亚替死：指向当前换血目标的普通死亡改由米莉亚牌承担。
+def millia_substitute(game, attacks, protection=()):
+    """米莉亚替死：换血目标这一批里真的会出局时，才把致死的那一击转给米莉亚牌。
 
     换血目标存在状态里并一直生效（跨白天），直到下一次有效换血覆盖它；
-    处刑、殉情与质疑整席出局显式不走替死。
+    处刑、殉情、质疑整席出局与寻宝地雷显式不走替死（临刑开枪可以替死）。
+    玛格的爱与庇护优先于替死：爱人免疫一切伤害、或被庇护的这一次伤害不至于
+    出局时都不会「即将死亡」，因此也不转移给米莉亚。
     """
     at_night = game["phase"] in {"night", "night_coco", "night_review"}
     night = game["night"]
@@ -253,31 +335,29 @@ def millia_substitute(game, attacks):
     ):
         return attacks
     target = current(game, seat(game, swap["seat"]))
-    if not target:
+    if not target or target["id"] == loved_card_id(game):
         return attacks
-    substituted = False
-    rewritten = []
-    for attack in attacks:
-        if (
-            attack["target_card"] == target["id"]
-            and not substituted
-            and not attack.get("once_injury")
-            and attack.get("cause") not in {"devotion", "execution", "shoot", "challenge"}
-        ):
-            attack = {**attack, "target_card": "millia"}
-            substituted = True
-        rewritten.append(attack)
-    if substituted and at_night:
+    # 先按「不替死」做一次纯试算：只有换血目标确实会在这一批出局时，才转移那一击。
+    probe = damage_preview(game, attacks, protection)
+    death = next(
+        (item for item in probe["deaths"] if item["target_card"] == target["id"]), None
+    )
+    if death is None or death.get("cause") in {"devotion", "execution", "challenge", "treasure"}:
+        return attacks
+    index = death.get("attack_index")
+    if index is None or not 0 <= index < len(attacks):
+        return attacks
+    rewritten = [dict(attack) for attack in attacks]
+    # 转移的是「致死的那一击」：抹掉负伤标记，让米莉亚按死亡结算（她自己的庇护仍可把它降级）。
+    lethal = {
+        key: value
+        for key, value in rewritten[index].items()
+        if key not in {"injury", "once_injury"}
+    }
+    rewritten[index] = {**lethal, "target_card": "millia"}
+    if at_night:
         night["reactions"].append("millia")
     return rewritten
-
-
-def day_damage_preview(game, attacks, protection=()):
-    """白天的非处刑伤害：先让米莉亚替死，再按标准规则预结算。
-
-    处刑与质疑整席出局不走这里，因此显式绕过替死。
-    """
-    return damage_preview(game, millia_substitute(game, attacks), protection)
 
 
 def prepare_night_preview(game):
@@ -318,8 +398,17 @@ def night_damage(game):
                 {"target_card": target_id, "source_card": action["card_id"], "cause": ability, "once_injury": True}
                 for target_id in action.get("injuries", [])
             )
-    love = game.get("marg_love")
-    if love and present(game, "marg"):
+        elif ability == "treasure" and action.get("mine"):
+            # 寻宝触发地雷：伤害并入本夜预结算，不替死（见 millia_substitute 的排除死因）。
+            attacks.append(
+                {
+                    "target_card": action["card_id"],
+                    "source_card": action["card_id"],
+                    "cause": "treasure",
+                }
+            )
+    love = active_love(game)
+    if love:
         loved = seat(game, love["seat_id"])
         if not current(game, loved):
             loved = owner(game, "marg")
@@ -329,7 +418,7 @@ def night_damage(game):
         if target:
             attacks.append({"target_card": target["id"], "source_card": "marg", "cause": "love", "once_injury": True})
     attacks.extend(night.get("extra_attacks", []))
-    attacks = millia_substitute(game, attacks)
+    attacks = millia_substitute(game, attacks, protection)
     preview = damage_preview(game, attacks, protection)
     return preview, {death["target_card"] for death in preview["deaths"]}
 
@@ -424,7 +513,13 @@ def death_batch(game, events, preview):
         if cid in {"sherry", "hanna"} and game.get("day_binding"):
             game["day_binding"]["intact"] = False
         game["half_exits"][s["id"]] = half_key(game)
-        record = {"id": uid(), "day": game["day"], "half": game["half"], **deepcopy(death)}
+        record = {
+            "id": uid(),
+            "day": game["day"],
+            "half": game["half"],
+            # attack_index 只服务于替死定位，不进对局记录与主持人视图。
+            **{k: v for k, v in deepcopy(death).items() if k != "attack_index"},
+        }
         game["deaths"].append(record)
         killed.append(record)
         source = death.get("source_card")
@@ -495,7 +590,12 @@ def death_batch(game, events, preview):
                 s["avatar_role_id"] = lower["role_id"]
                 text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
                 if lower["id"] == "honoka":
-                    text += "你可以选择一次示人角色。"
+                    shown = apply_honoka_disguise(game, s)
+                    text += (
+                        f"按先前选择示人为{ROLES[shown]['name']}。"
+                        if shown
+                        else "你可以选择一次示人角色。"
+                    )
                 notify(game, events, text, [s["id"]], "下层登场")
         if card["states"].pop("puppet", None):
             # 傀儡当前牌出局：控制关系解除；该席下层牌仍存活则本人重新回到游戏。

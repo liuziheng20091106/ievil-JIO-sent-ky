@@ -176,7 +176,12 @@ async def account_summary(account_id: str, request: Request):
 
 @router.get("/games/{game_id}/equipped")
 async def game_equipped(game_id: str, request: Request):
-    """本局每个参与身份佩戴的成就：按参与者 id 给，对局内昵称旁直接显示。"""
+    """本局每个参与身份佩戴的成就：按参与者 id 给，对局内昵称旁直接显示。
+
+    主持人不是本局的参与身份，但主持账号与它的玩家身份本来就是同一个 QQ 账号，
+    成就（含佩戴）完全同步，所以这里额外补一行 participant_id 为 "host" 的记录，
+    让对局内的主持人也有徽章与可点开的成就摘要。
+    """
     with storage.connect() as db:
         auth.require_actor(db, request, game_id)
         rows = db.execute(
@@ -184,13 +189,22 @@ async def game_equipped(game_id: str, request: Request):
                WHERE game_id=? AND active=1 AND blocked=0""",
             (game_id,),
         ).fetchall()
-    return {
-        "participants": [
+        game = storage.load_game(db, game_id)
+    participants = [
+        {
+            "participant_id": row["id"],
+            "account_id": row["account_id"],
+            "equipped": achievement_storage.equipped(row["account_id"]),
+        }
+        for row in rows
+    ]
+    host_account = ((game or {}).get("host") or {}).get("account_id") or ""
+    if host_account:
+        participants.append(
             {
-                "participant_id": row["id"],
-                "account_id": row["account_id"],
-                "equipped": achievement_storage.equipped(row["account_id"]),
+                "participant_id": "host",
+                "account_id": host_account,
+                "equipped": achievement_storage.equipped(host_account),
             }
-            for row in rows
-        ]
-    }
+        )
+    return {"participants": participants}

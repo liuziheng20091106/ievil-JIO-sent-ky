@@ -15,6 +15,8 @@ from .state import (
     card_actionable,
     controlled_cards,
     current,
+    duel_cards,
+    duel_vote_required,
     eligible_voters,
     hanna_witch_window,
     living,
@@ -22,6 +24,7 @@ from .state import (
     pending_nominators,
     owner,
     player_seat,
+    present,
     role_card,
     seat,
     seat_operable,
@@ -84,7 +87,7 @@ DESCRIPTIONS = {
     "host.warn": "对当前卡住的席位启动30秒倒计时，到期按未操作处理；掉线不会自动放弃行动。",
     "host.water": "在夜间或预结算阶段把一瓶13水私下交给一个存活席位；同夜可发多瓶，各自使用，夜末未用会过期收回。",
     "host.damage": "裁定伤害或直接出局：死亡应用庇护，无条件出局忽略庇护；夜间提交的伤害并入本夜预结算。",
-    "host.state": "直接增删角色牌状态（魔女化、中毒、庇护、负伤、投票权、傀儡、生死）；不勾选公开时只通知该席位。",
+    "host.state": "直接增删角色牌状态（魔女化、中毒、庇护、负伤、投票权、傀儡、生死）；庇护按天记账，第 N 天获得后到第 N+1 天夜里过期；不勾选公开时只通知该席位。",
     "host.information": "向全员或指定席位发放信息与照片；不公开时只有选中的席位能看到。",
     "host.madness": "对某个席位的疯狂行为发起裁定，随后由主持人选择警告、符合要求或执行不利裁定。",
     "host.codex_order": "手动指定11名角色的最终顺序，用于特殊裁定。",
@@ -102,7 +105,7 @@ DESCRIPTIONS = {
     "day.challenge": "质疑他人的白天技能声明；质疑失败本局个人判负。",
     "honoka.disguise": "穗乃香选择一个示人角色：只改别人看到的角色名，不获得该角色的技能。",
     "honoka.witness": "选择本次目击名单里显示的角色；这是穗乃香的魔女化技能。",
-    "hiro.exit": "希罗主动出局：夜间提交时并入本夜预结算，白天则立即结算。",
+    "hiro.exit": "魔女化希罗主动出局：夜间提交时并入本夜预结算，白天则立即结算；若魔女回溯额度还没用，会先触发回溯并撤销这次出局。",
     "speech.done": "结束本次发言推进顺序；还没轮到你时是「本轮不发言」，轮到时自动略过。",
     "speech.speak": "提前写下发言内容，轮到你时由系统以本人身份公开，并自动略过你的顺序。",
     "vote.nominate": "提名一名候选人，提交即生效；提名过同一候选的玩家之后自动投同意票。",
@@ -144,8 +147,8 @@ NIGHT_ABILITY_DESCRIPTIONS = {
     "protect": "庇护一张当前牌：该牌当夜死亡改为负伤；再次受到普通伤害则出局。",
     "rain": "下雨：本局一次，此后夜间死者会公开凶手座位号的方向线索。",
     "scapegoat": "替罪凶手：本局一次，指定之后自己造成死亡时对外显示的凶手。",
-    "swap": "换血：必须选择一名玩家；其即将死亡时由你代替其死亡。",
-    "treasure": "寻宝：提交即清空本席其他夜间选择并锁定全夜，1/5概率触发地雷。",
+    "swap": "换血：每晚必须选择一名玩家（未提交时由系统随机指定）；其即将死亡时由你代替其死亡。",
+    "treasure": "寻宝：清空本席其他夜间选择，1/5概率触发地雷；当天地雷以外的致命手段不能选中你。",
     "witch_scan": "查看全员当前魔女化状态，结果只发给你。",
     "arisa_injure": "令环形左右邻座各以1/2概率负伤；该效果不会把已有负伤升级为死亡。",
 }
@@ -153,11 +156,10 @@ NIGHT_ABILITY_DESCRIPTIONS = {
 # 白天技能：真实与伪装走同一条描述，伪装的说明另外点出「可被质疑」。
 DAY_ABILITY_DESCRIPTIONS = {
     "interrupt": "立即打断指定席位的发言，每个白天一次；艾玛在下层也可使用。",
-    "brainwash": "秘密洗脑一人，该人本轮投票自动弃票；与玛格同时洗脑会互相抵消。",
     "mass_brainwash": "洗脑全场处决一名角色；使用后失去该技能，并在下一天失去投票权且必须被处刑。",
-    "love": "宣布爱上一人或移情；此后每夜令爱人席当前牌负伤一次。",
+    "love": "宣布爱上一人或移情（从当天夜里开始生效）；此后每夜令爱人席当前牌负伤一次。",
     "gaze": "查看本日处决名单是否含魔女，结果只发给你。",
-    "spear": "长矛令一张当前牌立即进入标准出局预结算，你同时加入本日处决名单。",
+    "duel": "白天宣布与一张当前牌决斗：你失去本技能，今天所有人必须至少同意你或决斗对象之一，且这两张牌达到半数即可处决。",
     "photo": "赠送无图像信物；受赠者可授权你查看其夜间行动。",
 }
 
@@ -287,25 +289,13 @@ def target_field(game, night=False, exclude=None, avoid_treasure=False):
 def day_fields(game, ability, exclude=None):
     if ability == "gaze":
         return []
-    return [target_field(game, avoid_treasure=ability == "spear")]
+    return [target_field(game, avoid_treasure=ability == "duel")]
 
 
 def can_day_ability(game, card, ability):
     phase = game["phase"]
     role = card["role_id"]
     witch = card["witch"]
-    if ability == "brainwash":
-        return (
-            phase == "voting"
-            and (
-                role == "annan"
-                and not witch
-                or role == "marg"
-                and witch
-                and card["states"].get("learned_brainwash")
-            )
-            and card["id"] not in game["brainwash"]
-        )
     if ability == "mass_brainwash":
         return (
             phase in {"discussion", "nomination", "voting"}
@@ -321,24 +311,28 @@ def can_day_ability(game, card, ability):
         )
     if ability == "gaze":
         return role == "nanoka" and phase == "execution" and card["uses"].get("gaze_day") != game["day"]
+    if ability == "duel":
+        # 决斗必须在投票开始前宣布，且当天只能有一场：两张决斗牌要排在轮次表最前面。
+        return (
+            role == "leia"
+            and phase in {"speech", "discussion", "nomination"}
+            and card["uses"].get("duel_day") is None
+            and (game.get("duel") or {}).get("day") != game["day"]
+        )
     if phase not in {"speech", "discussion", "nomination", "voting"}:
         return False
     if DAY_ABILITIES[ability][0] != role:
         return False
     if ability == "love":
         return card["uses"].get("love_day") != game["day"]
-    if ability == "spear":
-        return card["uses"].get("spear_day") != game["day"]
     return ability == "photo"
 
 
 def claimable(role):
-    """该示人身份可以声称的白天技能：本角色的技能，魔女玛格另含学到的洗脑。"""
+    """该示人身份可以声称的白天技能：本角色自己的技能。"""
     if not role:
         return set()
-    return {ability for ability, (owner, _) in DAY_ABILITIES.items() if owner == role} | (
-        {"brainwash"} if role == "marg" else set()
-    )
+    return {ability for ability, (owner, _) in DAY_ABILITIES.items() if owner == role}
 
 
 def challengeable(game, declaration):
@@ -354,7 +348,6 @@ def day_fake_allowed(game, card, ability):
         return False
     phase = game["phase"]
     phases = {
-        "brainwash": {"voting"},
         "mass_brainwash": {"discussion", "nomination", "voting"},
         "interrupt": {"speech", "discussion"},
     }.get(ability, {"speech", "discussion", "nomination", "voting"})
@@ -363,13 +356,6 @@ def day_fake_allowed(game, card, ability):
         return False
     if card["id"] == "honoka":
         return True
-    if ability == "brainwash":
-        return not (
-            card["role_id"] == "annan" and not card["witch"]
-            or card["role_id"] == "marg"
-            and card["witch"]
-            and card["states"].get("learned_brainwash")
-        )
     return ability == "mass_brainwash" and not (
         card["role_id"] == "annan" and card["witch"]
     )
@@ -379,9 +365,11 @@ def night_abilities(game, card):
     role, witch, uses = card["role_id"], card["witch"], card["uses"]
     abilities = ["knife"] if witch else []
     if role == "emma":
-        abilities.append("treasure")
+        # 寻宝是未魔女化时的普通技能：魔女化后只剩全场攻击（不能放弃）。
         if witch:
             abilities.append("massacre")
+        else:
+            abilities.append("treasure")
     if role == "hanna" and witch and not uses.get("extra_kill"):
         abilities.append("extra_kill")
     if role == "meruru":
@@ -408,7 +396,10 @@ def pending_action(game, item):
     elif kind == "suspects":
         source = item.get("source_card")
         killer = game["cards"][source]["states"].get("display_killer", source) if source else None
-        suggested = list(dict.fromkeys(role for role in (killer, "hanna") if role))
+        # 汉娜在场时才必须出现在名单里；她不在场就不强塞，余位随机补齐到 4 人。
+        suggested = list(
+            dict.fromkeys(role for role in (killer, "hanna" if present(game, "hanna") else None) if role)
+        )
         suggested.extend(role for role in ROLES if role not in suggested and len(suggested) < 4)
         fields = [
             field(
@@ -968,7 +959,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                     day_fields(game, ability, sid),
                     payload,
                     "私密伪装选择" if fake else "白天技能",
-                    danger=ability == "spear",
+                    danger=ability == "duel",
                     description=DAY_ABILITY_DESCRIPTIONS.get(ability, "")
                     + (
                         "这是伪装声明：不产生技能效果，技能条目已公开，其他人可质疑。"
@@ -997,15 +988,24 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             )
         )
     honoka = game["cards"]["honoka"]
-    if card and card["id"] == "honoka" and not honoka["states"].get("disguise_locked"):
+    if (
+        not puppet_controlled
+        and honoka["alive"]
+        and owner(game, "honoka")["id"] == sid
+        and not honoka["states"].get("disguise_locked")
+    ):
+        # 未登场的穗乃香也能先选示人角色：登场时由 apply_honoka_disguise 自动套用并锁定。
         result.append(
             action(
                 "honoka.disguise",
-                "选择示人角色",
+                "选择示人角色（登场时生效）"
+                if card is None or card["id"] != "honoka"
+                else "选择示人角色",
                 [field("role", "示人身份", "select", role_options())],
             )
         )
     if card and card["role_id"] == "hiro" and card["witch"]:
+        # 主动出局是魔女化希罗的技能；未魔女化时只能等即将死亡时的自动回溯。
         result.append(action("hiro.exit", "主动出局", danger=True))
     if game["half"] == "day" and not lost_by_challenge(game, active_seat):
         for declaration in game["declarations"]:
@@ -1075,7 +1075,13 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             )
         )
         result.append(action("vote.pass", "放弃本次提名", group="投票", blocking=True))
-    elif game["half"] == "day" and card and sid not in game.get("nomination_done", []):
+    elif (
+        # 「白天随时可提名」只覆盖发言、讨论与投票；处决与天黑阶段再提名不会被结算，
+        # 因此不再提供按钮（提交即生效的窗口在进入处决前就已经关闭）。
+        phase in {"speech", "discussion", "voting"}
+        and card
+        and sid not in game.get("nomination_done", [])
+    ):
         result.append(
             action(
                 "vote.nominate",
@@ -1091,25 +1097,34 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         candidate = votes.get("candidate")
         name = seat(game, candidate)["name"] if candidate else ""
         voters = len(eligible_voters(game))
+        duel_seats = {owner(game, cid)["id"] for cid in duel_cards(game)}
+        duel_round = bool(candidate) and candidate in duel_seats
+        forced_choice = duel_vote_required(game, sid)
+        requirement = (
+            "这是蕾雅决斗的候选：同意票达到有投票权存活玩家的一半即可处决"
+            f"（至少{(voters + 1) // 2}票）；今天所有人必须至少同意两张决斗牌之一。"
+            if duel_round
+            else "同意票需严格超过有投票权存活玩家的一半，"
+            f"即至少{voters // 2 + 1}票，候选才会进入处决前响应。"
+        )
+        choices = (
+            [("yes", "同意")]
+            if forced_choice
+            else [("yes", "同意"), ("no", "不同意"), ("abstain", "弃票")]
+        )
         result.append(
             action(
                 "vote.cast",
                 f"对{candidate}号 · {name}投票" if candidate else "提交本候选选票",
-                [
-                    field(
-                        "choice",
-                        "选票",
-                        "select",
-                        [("yes", "同意"), ("no", "不同意"), ("abstain", "弃票")],
-                    )
-                ],
+                [field("choice", "选票", "select", choices)],
                 group="投票",
                 blocking=True,
                 description=(
                     f"本轮候选：{candidate}号 · {name}"
                     f"（第{votes.get('round', 1)}/{votes.get('total', 1)}轮）。"
-                    f"同意票需严格超过有投票权存活玩家的一半，即至少{voters // 2 + 1}票，"
-                    "候选才会进入处决前响应；弃票与不同意都不会通过。"
+                    + requirement
+                    + ("今天你还没同意任何一张决斗牌，本轮只能投同意。" if forced_choice else "")
+                    + "弃票与不同意都不会通过。"
                     if candidate
                     else "同意票需严格超过有投票权存活玩家的一半，候选才会进入处决前响应。"
                 ),

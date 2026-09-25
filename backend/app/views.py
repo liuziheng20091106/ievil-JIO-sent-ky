@@ -6,6 +6,7 @@ from . import storage
 from .game import game_view
 from .game.actions import action, field, outstanding_seats
 from .game.catalog import night_half
+from .game.state import host_label
 from .game.views import seat_chat
 
 
@@ -144,7 +145,7 @@ def puppet_channel_view(db, game, seat):
             {
                 "id": row["id"],
                 "as_seat": seat["id"],
-                "label": f"*私密 · {puppet_channel_title(db, members)}",
+                "label": f"*私密 · {puppet_channel_title(db, members, host_label(game))}",
                 "status": row["status"],
                 "creator_id": row["creator_id"],
                 "members": [
@@ -162,9 +163,9 @@ def puppet_channel_view(db, game, seat):
     return result
 
 
-def channel_names(db, member_ids):
+def channel_names(db, member_ids, host_name="主持人"):
     """频道显示用的参与者称呼（views 自己的实现，避免与 api 层循环依赖）。"""
-    names = {"host": "主持人"}
+    names = {"host": host_name}
     if member_ids:
         placeholders = ",".join("?" for _ in member_ids)
         for row in db.execute(
@@ -174,15 +175,17 @@ def channel_names(db, member_ids):
     return names
 
 
-def puppet_channel_title(db, members):
-    names = channel_names(db, [member for member in members if member != "host"])
-    return "、".join("主持人" if member == "host" else names.get(member, "参与者") for member in members)
+def puppet_channel_title(db, members, host_name="主持人"):
+    names = channel_names(db, [member for member in members if member != "host"], host_name)
+    return "、".join(host_name if member == "host" else names.get(member, "参与者") for member in members)
 
 
 def channels_for(db, game, actor, domain_view):
     ended = game["status"] == "ended"
     participants = participant_rows(db, game["id"])
     by_id = {row["id"]: row for row in participants}
+    # 对局内的「主持人」一律带上本局主持人的昵称，玩家才分得清是谁在主持。
+    host_name = host_label(game)
     public_reason = storage.channel_send_reason(db, game, actor, "public") or domain_view.get(
         "chat_reason", ""
     )
@@ -223,12 +226,12 @@ def channels_for(db, game, actor, domain_view):
         summaries = []
         for member_id in members:
             if member_id == "host":
-                summaries.append({"id": "host", "name": "主持人", "kind": "host", "seat_id": None})
+                summaries.append({"id": "host", "name": host_name, "kind": "host", "seat_id": None})
             elif member_id in by_id:
                 summaries.append(participant_summary(by_id[member_id]))
-        # 频道名统一按成员生成：玩家用号位，主持人用「主持人」；观战者与未知身份回退名字。
+        # 频道名统一按成员生成：玩家用号位，主持人用「主持人(昵称)」；观战者与未知身份回退名字。
         title = "、".join(
-            "主持人"
+            host_name
             if member["kind"] == "host"
             else f"{member['seat_id']}号"
             if member["kind"] == "player" and member["seat_id"]
@@ -279,7 +282,7 @@ def channel_create_descriptor(db, game, actor, participants):
     night = night_half(game)
     options = []
     if not host:
-        options.append(("host", "主持人"))
+        options.append(("host", host_label(game)))
     if host or not night:
         options.extend(
             (row["id"], row["name"] + ("（观战）" if row["kind"] == "spectator" else ""))

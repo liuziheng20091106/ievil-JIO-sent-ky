@@ -324,8 +324,10 @@ class HeuristicPolicy:
         cast = client.action("vote.cast")
         if cast is None:
             return None
-        choice = self.random.choice(["yes", "no", "abstain"])
-        return Decision("vote.cast", {"choice": choice}, "投票")
+        # 只投服务端给出的选项：蕾雅决斗当天没同意过任何一张决斗牌的席位，
+        # 选项里只剩「同意」，随机投「不同意」会被判为非法提交。
+        options = option_values(cast, "choice") or ["yes", "no", "abstain"]
+        return Decision("vote.cast", {"choice": self.random.choice(options)}, "投票")
 
     # ------------------------------------------------------------------ 处决
 
@@ -438,7 +440,10 @@ class ScriptedPolicy(HeuristicPolicy):
         cast = client.action("vote.cast")
         if cast is None:
             return None
-        return Decision("vote.cast", {"choice": self.votes}, "投票")
+        # 决斗强制票这一轮服务端只给「同意」，固定偏好也不能把它投成非法值。
+        options = option_values(cast, "choice")
+        choice = self.votes if not options or self.votes in options else options[0]
+        return Decision("vote.cast", {"choice": choice}, "投票")
 
     def _night_payload(self, client, descriptor, ability):
         payload = super()._night_payload(client, descriptor, ability)

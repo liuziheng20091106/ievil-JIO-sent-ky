@@ -25,12 +25,12 @@ from .catalog import (
 from .resolution import (
     begin_night,
     damage_preview,
-    day_damage_preview,
     death_batch,
     eliminate_seat,
     false_witness,
     information,
     lock_night,
+    millia_substitute,
     prepare_night_preview,
     publish_witness,
     revive,
@@ -43,6 +43,7 @@ from .resolution import (
 from .state import (
     DEAL_LOWER_ROLES,
     GameError,
+    apply_honoka_disguise,
     audience,
     card_actionable,
     chat_event,
@@ -50,6 +51,8 @@ from .state import (
     clear_seat_actions,
     current,
     deal_cards,
+    duel_cards,
+    duel_vote_required,
     eligible_voters,
     effect_effective,
     finish,
@@ -301,16 +304,15 @@ def speech_plan(game, dead_first):
     return ascending if rank(ascending) <= rank(descending) else descending
 
 
-def brainwash_targets(game):
-    active = game["brainwash"]
-    if "annan" in active and "marg" in active:
-        return set()
-    return set(active.values())
-
-
 def nomination_rounds(game):
-    """同一张牌被多人提名只投一轮，先提名者排在前面。"""
+    """同一张牌被多人提名只投一轮，先提名者排在前面。
+
+    蕾雅决斗当天的两张牌直接排在最前面，不需要任何人提名。
+    """
     rounds, seen = [], set()
+    for cid in duel_cards(game):
+        seen.add(cid)
+        rounds.append({"seat_id": owner(game, cid)["id"], "card_id": cid, "by": None})
     for item in game["nominations"]:
         if item["card_id"] in seen:
             continue
@@ -322,10 +324,9 @@ def nomination_rounds(game):
 def nomination_votes(game, nominee):
     """提名过本候选的玩家直接投同意票，省掉一次重复点击。"""
     voters = {s["id"] for s in eligible_voters(game)}
-    forced = brainwash_targets(game)
     bound = game["spiritual"]["sherry_bound"] and nominee["card_id"] == "hanna"
     return {
-        item["by"]: "abstain" if item["by"] in forced else "yes"
+        item["by"]: "yes"
         for item in game["nominations"]
         if item["card_id"] == nominee["card_id"]
         and item["by"] in voters
@@ -335,12 +336,19 @@ def nomination_votes(game, nominee):
 
 def open_vote(game, events):
     rounds = nomination_rounds(game)
+    if duel_cards(game):
+        # 投票一开始就把当天的决斗固定下来：轮次表排定后不再随出局变化。
+        game["duel"]["locked"] = True
     index = len(game["vote_rounds"])
     if index >= len(rounds):
-        for cid, penalty in game["spiritual"]["annan_penalty"].items():
+        # 安安后果按席位记账：次日该席的当前牌直接进处决名单，换过当前牌也一样。
+        for seat_id, penalty in game["spiritual"]["annan_penalty"].items():
             day = penalty.get("day") if isinstance(penalty, dict) else penalty
-            if day == game["day"] and game["cards"][cid]["alive"] and cid not in game["execution"]:
-                game["execution"].append(cid)
+            if day != game["day"]:
+                continue
+            card = current(game, seat_id) if any(s["id"] == seat_id for s in game["seats"]) else None
+            if card and card["id"] not in game["execution"]:
+                game["execution"].append(card["id"])
         game["phase"] = "execution"
         game["execution_ready"] = []
         game["execution_shots"] = []
@@ -368,7 +376,12 @@ def open_vote(game, events):
     notify(
         game,
         events,
-        f"开始对{nominee['seat_id']}号候选投票；严格超过有投票权存活玩家的一半方可处决。",
+        f"开始对{nominee['seat_id']}号候选投票；"
+        + (
+            "这是蕾雅决斗的候选，达到有投票权存活玩家的一半即可处决。"
+            if nominee["card_id"] in duel_cards(game)
+            else "严格超过有投票权存活玩家的一半方可处决。"
+        ),
         alert=True,
     )
 
@@ -376,11 +389,9 @@ def open_vote(game, events):
 def close_vote(game, events):
     voters = eligible_voters(game)
     require(all(s["id"] in game["votes"] for s in voters), "仍有玩家未投票，可先警告")
-    forced = brainwash_targets(game)
     nominee = nomination_rounds(game)[len(game["vote_rounds"])]
     yes = sum(
         game["votes"].get(s["id"]) == "yes"
-        and s["id"] not in forced
         and not (
             game["spiritual"]["sherry_bound"]
             and current(game, s)["id"] == "sherry"
@@ -389,12 +400,16 @@ def close_vote(game, events):
         for s in voters
     )
     n = len(voters)
-    passed = yes * 2 > n
+    # 蕾雅决斗当天的两张牌门槛降为「恰好达到半数即可通过」（偶数人取一半、奇数人仍需过半），
+    # 其他候选仍严格过半；通知里的门槛必须与记录用同一个值。
+    duel = nominee["card_id"] in duel_cards(game)
+    threshold = (n + 1) // 2 if duel else n // 2 + 1
+    passed = yes >= threshold
     record = {
         "candidate": nominee["seat_id"],
         "yes": yes,
         "denominator": n,
-        "threshold": n // 2 + 1,
+        "threshold": threshold,
         "passed": passed,
     }
     game["vote_rounds"].append(record)
@@ -408,7 +423,7 @@ def close_vote(game, events):
     notify(
         game,
         events,
-        f"{nominee['seat_id']}号：同意{yes}/{n}，门槛{n // 2 + 1}，{'通过处决' if passed else '未通过'}。",
+        f"{nominee['seat_id']}号：同意{yes}/{n}，门槛{threshold}，{'通过处决' if passed else '未通过'}。",
         alert=True,
     )
     open_vote(game, events)
@@ -446,7 +461,12 @@ def advance(game, events):
             s["avatar_role_id"] = lower["role_id"]
             text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
             if lower["id"] == "honoka":
-                text += "你可以选择一次示人角色。"
+                shown = apply_honoka_disguise(game, s)
+                text += (
+                    f"按先前选择示人为{ROLES[shown]['name']}。"
+                    if shown
+                    else "你可以选择一次示人角色。"
+                )
             notify(game, events, text, [s["id"]], "下层登场")
         game["day_binding"] = (
             {"day": game["day"], "intact": True}
@@ -471,7 +491,6 @@ def advance(game, events):
         game["public"]["speaker"] = next_speaker(game, None, events)
         game["queued_notices"] = []
         game["queued_reveals"] = []
-        game["brainwash"] = {}
         game["nominations"] = []
         game["nomination_done"] = []
         game["vote_rounds"] = []
@@ -507,11 +526,18 @@ def advance(game, events):
         }
         require(awaiting.issubset(game["execution_ready"]), "临刑开枪响应尚未确认，可先警告")
         attacks = [
-            {"target_card": cid, "cause": "execution", "source_card": None}
+            # 处决不吃庇护降级：进名单即出局，庇护与当夜 protect 都不能把它改成负伤。
+            {
+                "target_card": cid,
+                "cause": "execution",
+                "source_card": None,
+                "unconditional": True,
+            }
             for cid in game["execution"]
         ]
         attacks.extend(game.get("execution_shots", []))
-        preview = damage_preview(game, attacks)
+        # 白天只有奈乃香的枪会替死：处决死亡因 cause=execution 被排除，命中枪可以被米莉亚顶掉。
+        preview = damage_preview(game, millia_substitute(game, attacks))
         apply_damage(game, events, preview)
         if game.get("rewound_night"):
             return
@@ -532,6 +558,8 @@ def advance(game, events):
         game["half"] = "night"
         game["phase"] = "witch"
         game["public"]["speaker"] = None
+        # 打断标记属于当天：不清理会留到第二天的顺序发言里，把发言人拉回旧席位。
+        game["public"].pop("interrupted_speaker", None)
         game["public"]["speech_order"] = []
         game["speech_passed"] = []
         game["speech_queued"] = {}
@@ -590,42 +618,69 @@ def execute_declaration(game, events, declaration):
         require(target != sid, "不能打断自己的发言")
         if game["phase"] == "speech":
             require(game["public"]["speaker"] == target, "只能打断当前发言者")
-        game["public"]["interrupted_speaker"] = target
-        game["public"]["speaker"] = sid
+            game["public"]["interrupted_speaker"] = target
+            game["public"]["speaker"] = sid
+            declaration["effects"] = {"interrupted_speaker": target, "speaker": sid}
     elif ability == "love":
         card["uses"]["love_day"] = game["day"]
+        # 爱从当天夜里才开始生效，见 resolution.active_love。
         game["marg_love"] = {"seat_id": target, "day": game["day"]}
-    elif ability == "spear":
-        card["uses"]["spear_day"] = game["day"]
-        apply_damage(
+    elif ability == "duel":
+        # 蕾雅决斗：宣布即失去本技能，当天两张牌强制进入投票并降为半数门槛。
+        card["uses"]["duel_day"] = game["day"]
+        game["duel"] = {"day": game["day"], "leia_card": cid, "target_card": target_card["id"]}
+        game["duel_approvals"] = {}
+        declaration["effects"] = {"duel": cid}
+        notify(
             game,
             events,
-            day_damage_preview(
-                game, [{"target_card": target_card["id"], "source_card": cid, "cause": "spear"}]
-            ),
+            f"{sid}号与{target}号决斗：今天所有人必须至少同意这两张牌之一，"
+            "且它们达到半数即可处决。",
+            alert=True,
         )
-        if game.get("rewound_night"):
-            return
-        if cid not in game["execution"]:
-            game["execution"].append(cid)
-    elif ability == "brainwash":
-        game["brainwash"][cid] = target
-        if cid == "annan" and not card["witch"]:
-            marg = role_card(game, "marg")
-            if present(game, "marg") and marg["witch"]:
-                marg["states"]["learned_brainwash"] = True
-                notify(game, events, "普通安安已发动洗脑，你已学会洗脑；同时发动时互相抵消。", [owner(game, "marg")["id"]])
     elif ability == "mass_brainwash":
         card["uses"]["mass_brainwash"] = True
         if target_card["id"] not in game["execution"]:
             game["execution"].append(target_card["id"])
-        game["spiritual"]["annan_penalty"][cid] = {"day": game["day"] + 1, "declaration_id": declaration["id"]}
+        game["spiritual"]["annan_penalty"][sid] = {
+            "day": game["day"] + 1,
+            "declaration_id": declaration["id"],
+        }
+        declaration["effects"] = {
+            "execution_card": target_card["id"],
+            "penalty_seat": sid,
+        }
         notify(game, events, f"{target}号进入本轮处决名单。")
     elif ability == "photo":
         photo = {"id": uid(), "sender": sid, "target": target, "day": game["day"], "allowed": False}
         game["photos"].append(photo)
         notify(game, events, "收到信物，可自愿授权发送者查看你的夜间行动。", [target], "收到信物")
     declaration["executed"] = True
+
+
+def revert_declaration(game, declaration):
+    """质疑成功：只撤销这次声明已经生效的那部分效果，其他声明不受影响。"""
+    effects = declaration.get("effects") or {}
+    if "duel" in effects and (game.get("duel") or {}).get("leia_card") == effects["duel"]:
+        game["duel"] = None
+        game["duel_approvals"] = {}
+    if (
+        effects.get("interrupted_speaker")
+        and game["public"].get("interrupted_speaker") == effects["interrupted_speaker"]
+        and game["public"].get("speaker") == effects.get("speaker")
+    ):
+        game["public"]["speaker"] = game["public"].pop("interrupted_speaker")
+    if "execution_card" in effects:
+        cid = effects["execution_card"]
+        seat_id = owner(game, cid)["id"]
+        voted_out = any(
+            record.get("passed") and record.get("candidate") == seat_id
+            for record in game["vote_rounds"]
+        )
+        if not voted_out:
+            game["execution"] = [item for item in game["execution"] if item != cid]
+    if "penalty_seat" in effects:
+        game["spiritual"]["annan_penalty"].pop(effects["penalty_seat"], None)
 
 
 def resolve_pending(game, events, data):
@@ -641,7 +696,7 @@ def resolve_pending(game, events, data):
         shown_source = (
             game["cards"][source]["states"].get("display_killer", source) if source else None
         )
-        require("hanna" in suspects, "名单必须包含汉娜")
+        require(not present(game, "hanna") or "hanna" in suspects, "名单必须包含在场的汉娜")
         require(not shown_source or shown_source in suspects, "名单必须包含技能处理后的真凶")
         if not item.get("truthful", True):
             # 死者中毒、目击信息骰失败：主持人照常填含真凶的完整名单，发出去的是假名单。
@@ -740,13 +795,9 @@ def host_command(game, events, action, data):
         )
         for s in game["seats"]:
             s["avatar_role_id"] = current(game, s)["role_id"]
-        honoka = role_card(game, "honoka")
         honoka_seat = owner(game, "honoka")
-        if current(game, honoka_seat)["id"] == "honoka" and honoka["states"].get("disguise"):
-            honoka_seat["avatar_role_id"] = honoka["states"]["disguise"]
-            honoka["states"]["disguise_locked"] = True
-        else:
-            honoka["states"].pop("disguise", None)
+        # 未登场的穗乃香保留已选的示人角色，等她登场时再自动套用（见 state.apply_honoka_disguise）。
+        apply_honoka_disguise(game, honoka_seat)
         game["status"] = "playing"
         game["phase"] = "witch"
         # 汉娜与雪莉开局即各自上层：立即绑定，不再等共同度过一个白天。
@@ -762,18 +813,15 @@ def host_command(game, events, action, data):
                 "雪莉绑定",
             )
         sid = honoka_seat["id"]
+        # 穗乃香的「开局前获知上层牌」是普通技能，不吃中毒/信息骰：这里恒发真表。
+        # 与排序阶段预览（views.game_view 的 honoka_upper）同源，不许出现假值分支。
         upper = [(s["id"], current(game, s)["role_id"]) for s in game["seats"] if s["id"] != sid]
-        shifted = [role for _, role in upper[-1:]] + [role for _, role in upper[:-1]]
-        information(
+        notify(
             game,
             events,
-            honoka,
-            "开局上层角色",
             "；".join(f"{seat_id}号：{ROLES[role]['name']}" for seat_id, role in upper),
-            "；".join(
-                f"{seat_id}号：{ROLES[role]['name']}"
-                for (seat_id, _), role in zip(upper, shifted, strict=True)
-            ),
+            [sid],
+            "开局上层角色",
         )
         save_snapshot(game)
         notify(game, events, "所有上下牌已锁定，对局开始。")
@@ -924,6 +972,16 @@ def host_command(game, events, action, data):
                 )
         elif state == "injured":
             card["injured"] = value
+        elif state == "protected":
+            # 庇护按天记账：开启时写日戳，到次日夜里自动过期（见 state.protection_active）。
+            if value:
+                card["states"]["protected_day"] = game["day"]
+            else:
+                card["states"].pop("protected_day", None)
+            if data.get("persistent"):
+                game["spiritual"]["persistent_states"].setdefault(cid, {})["protected_day"] = (
+                    card["states"].get("protected_day")
+                )
         else:
             if state == "puppet":
                 require(not value or data.get("master"), "傀儡需指定主人")
@@ -1051,13 +1109,11 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             **deepcopy({k: v for k, v in data.items() if k != "ability"}),
         }
         if ability == "treasure":
-            # 寻宝不吃中毒效果骰：选择即锁定全夜并直接抽地雷结果。
-            entry["effective"] = True
-            entry["resolved"] = True
-            game["night"]["actions"] = [entry]
-            game["night"]["confirmed"] = list(game["night"]["actors"])
-            game["night"]["locked"] = True
-            game["phase"] = "night_review"
+            # 寻宝只清空本席的其他夜间选择，不替其他席位锁夜；地雷伤害并入本夜预结算，
+            # 且不接入替死。
+            game["night"]["actions"] = [
+                a for a in game["night"]["actions"] if a["seat_id"] != sid
+            ]
             card["states"]["treasure_protected_day"] = game["day"]
             roll = SystemRandom().randrange(5)
             mine = roll == 0
@@ -1073,17 +1129,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                 "寻宝结果",
             )
             if mine:
+                # 自己踩雷时当天的寻宝保护作废。
                 card["states"].pop("treasure_protected_day", None)
-                apply_damage(
-                    game,
-                    events,
-                    damage_preview(
-                        game,
-                        [{"target_card": card["id"], "source_card": card["id"], "cause": "treasure"}],
-                    ),
-                )
-            game["night"]["preview"] = damage_preview(game, [])
-            return
         if ability == "swap":
             require(target is not None, "米莉亚每晚必须选择一名玩家换血")
             # 换血目标持久保存：跨白天继续替死，直到下一次有效换血覆盖。
@@ -1124,6 +1171,21 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                     )
                 else:
                     game["spiritual"]["hiro_exception"] = True
+        if card["id"] == "emma" and card["witch"]:
+            # 魔女化艾玛必须杀光全场，不能「放弃并确认」。
+            require(
+                any(a["ability"] == "massacre" for a in actions),
+                "魔女化艾玛必须提交全场攻击",
+            )
+        if card["id"] == "millia":
+            # 换血是强制 debuff：还有合法目标时必须先选一个换血对象。
+            has_target = any(
+                s["id"] != sid and current(game, s) for s in game["seats"]
+            )
+            require(
+                any(a["ability"] == "swap" for a in actions) or not has_target,
+                "米莉亚每晚必须选择一名玩家换血",
+            )
         for selected in actions:
             selected["confirmed"] = True
         game["night"]["confirmed"].append(sid)
@@ -1174,13 +1236,15 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         require(not lost_by_challenge(game, s), "质疑失败后不能再质疑")
         if d["fake"]:
             d["status"] = "stopped"
-            for card_id, penalty in list(game["spiritual"]["annan_penalty"].items()):
+            # 只撤销这次声明自己已经生效的那部分效果，其他声明与已通过的投票不受影响。
+            revert_declaration(game, d)
+            for seat_id, penalty in list(game["spiritual"]["annan_penalty"].items()):
                 if isinstance(penalty, dict) and penalty.get("declaration_id") == d["id"]:
-                    del game["spiritual"]["annan_penalty"][card_id]
+                    del game["spiritual"]["annan_penalty"][seat_id]
             notify(
                 game,
                 events,
-                f"{sid}号质疑成功：伪装技能尚未完成的部分停止，已执行部分不撤销。",
+                f"{sid}号质疑成功：这次伪装技能已经生效的部分一并撤销。",
                 alert=True,
             )
         else:
@@ -1201,16 +1265,28 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             notify(
                 game,
                 events,
-                f"开局前示人选择已记录：{ROLES[data['role']]['name']}（仅当穗乃香在上层时生效）。",
+                f"开局前示人选择已记录：{ROLES[data['role']]['name']}（穗乃香登场时生效）。",
                 [sid],
                 "穗乃香示人",
             )
         else:
-            require(card is not None and card["id"] == "honoka", "只有穗乃香登场时可以选择示人角色")
+            require(hc["alive"], "穗乃香已经出局")
             require(not hc["states"].get("disguise_locked"), "示人角色已经确定，不能再更改")
-            hc["states"]["disguise_locked"] = True
-            s["avatar_role_id"] = data["role"]
-            notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
+            hc["states"]["disguise"] = data["role"]
+            if card and card["id"] == "honoka":
+                # 已经登场：立刻示人并锁定。
+                hc["states"]["disguise_locked"] = True
+                s["avatar_role_id"] = data["role"]
+                notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
+            else:
+                # 还没登场：只登记，登场时自动生效；未登场期间可以继续改。
+                notify(
+                    game,
+                    events,
+                    f"示人选择已记录：{ROLES[data['role']]['name']}（登场时生效）。",
+                    [sid],
+                    "穗乃香示人",
+                )
     elif action == "honoka.witness":
         item = next(
             pending_item
@@ -1271,6 +1347,9 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         game["public"]["nominations"] = [
             {"seat_id": n["seat_id"], "by": n["by"]} for n in game["nominations"]
         ]
+        if game["phase"] == "voting":
+            # 投票中新增的提名会多出一轮，立即刷新总轮数，避免显示停在旧值。
+            game["public"]["votes"]["total"] = len(nomination_rounds(game))
         notify(game, events, f"{sid}号提名{data['target']}号。")
         game.setdefault("nomination_done", []).append(sid)
     elif action == "vote.pass":
@@ -1287,17 +1366,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             ),
             "雪莉不能同意处决绑定的汉娜",
         )
-        cast = "abstain" if sid in brainwash_targets(game) else data["choice"]
+        cast = data["choice"]
+        duel = duel_cards(game)
+        if duel and target in duel:
+            # 决斗当天每个人必须至少同意两张决斗牌之一：第一张没同意的人，
+            # 在第二张上必须投同意。雪莉对汉娜的限制优先豁免。
+            required = duel_vote_required(game, sid)
+            if cast == "yes":
+                game["duel_approvals"][sid] = True
+            elif required:
+                require(False, "今天必须至少同意蕾雅或决斗对象之一")
         game["votes"][sid] = cast
-        if cast != data["choice"]:
-            labels = {"yes": "同意", "no": "不同意", "abstain": "弃票"}
-            notify(
-                game,
-                events,
-                f"受洗脑影响，你选择的「{labels[data['choice']]}」已按弃票记录。",
-                [sid],
-                "洗脑投票",
-            )
     elif action == "execution.shoot":
         card["uses"]["bullets"] -= 1
         threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)

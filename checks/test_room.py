@@ -199,6 +199,30 @@ class BackendFlow(unittest.TestCase):
         evidence = self.client.post(self.root + "/evidence", headers=eighth, json={"text": "x"})
         self.assertEqual(evidence.status_code, 403, evidence.text)
 
+    def test_spectator_leaves_by_itself_but_player_cannot(self):
+        self.open_join()
+        player, _, _ = self.join("11101")
+        spectator, spectator_actor, _ = self.join("11102", "spectator")
+
+        # 占席玩家的退出仍由主持人裁量（room.kick），不能自己脱落。
+        refused = self.client.post(self.root + "/leave", headers=player)
+        self.assertEqual(refused.status_code, 403, refused.text)
+
+        left = self.client.post(self.root + "/leave", headers=spectator)
+        self.assertEqual(left.status_code, 200, left.text)
+        # 离开即不再是本局参与身份，但重新观战仍然可以（参与身份只是置为不活跃）。
+        self.assertEqual(
+            self.client.get(self.root + "/state", headers=spectator).status_code, 401
+        )
+        notice = self.client.get(self.root + "/messages", headers=self.host).json()["messages"]
+        self.assertTrue(any("已离开对局" in message["text"] for message in notice))
+        rejoined = self.client.post(
+            self.root + "/participations", headers=spectator, json={"kind": "spectator"}
+        )
+        self.assertEqual(rejoined.status_code, 200, rejoined.text)
+        self.assertEqual(rejoined.json()["actor"]["id"], spectator_actor["id"])
+        self.assertIsNone(rejoined.json()["actor"]["seat_id"])
+
     def test_private_channel_lifecycle_locks_actions_and_history(self):
         self.open_join()
         first, first_actor, _ = self.join("12001")
@@ -374,7 +398,8 @@ class BackendFlow(unittest.TestCase):
             if item["id"] == "channel.create"
         )
         self.assertEqual(
-            [option["label"] for option in offered["fields"][0]["options"]], ["主持人"]
+            [option["label"] for option in offered["fields"][0]["options"]],
+            ["主持人(主持10001)"],
         )
 
         # 兜底：夜间残留的不含主持人的 active 频道既不能发言，也不锁住玩家行动。
@@ -635,7 +660,7 @@ class BackendFlow(unittest.TestCase):
         lobby = self.client.get("/api/lobby", headers=guest).json()
         self.assertEqual(len(lobby["invites"]), 1)
         self.assertEqual(lobby["invites"][0]["id"], invite_id)
-        self.assertEqual(lobby["invites"][0]["from_name"], "主持人")
+        self.assertEqual(lobby["invites"][0]["from_name"], "主持人(主持10001)")
         self.assertFalse(lobby["invites"][0]["game"]["can_join_player"])
         blocked = self.client.post(
             f"/api/invites/{invite_id}/accept", headers=guest

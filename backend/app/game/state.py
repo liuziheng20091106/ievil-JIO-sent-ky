@@ -20,6 +20,21 @@ def uid():
     return uuid4().hex
 
 
+def host_display_name(nickname):
+    """对局内主持人的展示名：主持人(QQ 昵称)；昵称缺失时退回「主持人」。
+
+    拥有主持权限的账号不止一个，只写「主持人」分不清是谁在主持，所以对局内
+    一律带上昵称。
+    """
+    text = (nickname or "").strip()
+    return f"主持人({text})" if text else "主持人"
+
+
+def host_label(game):
+    """本局记录的主持人展示名；没记录主持人身份的旧局退回「主持人」。"""
+    return host_display_name((game.get("host") or {}).get("name"))
+
+
 def seat(game, seat_id):
     found = next((s for s in game["seats"] if s["id"] == seat_id), None)
     require(found is not None, "席位不存在")
@@ -43,6 +58,35 @@ def role_card(game, role):
 def present(game, role):
     c = role_card(game, role)
     return c["alive"] and current(game, owner(game, c["id"])) == c
+
+
+def apply_honoka_disguise(game, seat):
+    """下层穗乃香登场时套用先前选定的示人角色，并就此锁定。
+
+    返回套用的角色 id；没有选择（或她已经不是当前牌、已经锁定）时返回 None，
+    由本人登场后再选一次。
+    """
+    card = game["cards"]["honoka"]
+    if current(game, seat) != card or card["states"].get("disguise_locked"):
+        return None
+    role = card["states"].get("disguise")
+    if not role:
+        return None
+    card["states"]["disguise_locked"] = True
+    seat["avatar_role_id"] = role
+    return role
+
+
+def protection_active(game, card):
+    """主持人裁定的「庇护」是否仍生效。
+
+    庇护按天记账：第 N 天获得后，第 N 天白天/夜里与第 N+1 天白天仍然有效，
+    到了第 N+1 天夜里（「第二天夜里」）自动过期。
+    """
+    day = card["states"].get("protected_day")
+    if day is None:
+        return False
+    return game["day"] < day + 1 or (game["day"] == day + 1 and game["half"] == "day")
 
 
 def witch_faction(game):
@@ -220,11 +264,20 @@ def pending_nominators(game):
     ]
 
 
+def annan_penalty_day(game, seat_id):
+    """该席位当天的安安后果日；旧局按牌记账的整数或字典都能读。"""
+    penalty = game["spiritual"]["annan_penalty"].get(seat_id)
+    if isinstance(penalty, dict):
+        return penalty.get("day")
+    return penalty
+
+
 def eligible_voters(game):
     """有投票权的席位。
 
     傀儡自身无投票权，但控制它的魔女梅露露可以用该席位投票：
     控制者缺位（出局或不再是当前牌）时该席不再计票。
+    安安后果按席位记账，因此该席换当前牌也不会洗掉「次日失去投票权」。
     """
     return [
         s
@@ -234,13 +287,62 @@ def eligible_voters(game):
             or puppet_master(game, card) is not None
         )
         and not current(game, s)["states"].get("no_vote")
-        and (
-            game["spiritual"]["annan_penalty"].get(current(game, s)["id"], {}).get("day")
-            if isinstance(game["spiritual"]["annan_penalty"].get(current(game, s)["id"]), dict)
-            else game["spiritual"]["annan_penalty"].get(current(game, s)["id"])
-        )
-        != game["day"]
+        and annan_penalty_day(game, s["id"]) != game["day"]
     ]
+
+
+def active_duel(game):
+    """当天仍然有效的蕾雅决斗。
+
+    决斗只在宣布当天有效。投票开始时由 open_vote 打上 locked：轮次表一旦排定就
+    不再随出局变化，否则中途有人出局会让最后一轮索引错位；真正出局的牌由预结算
+    按「已不在场」跳过。还没开始投票时，有一张先出局则整场决斗失效，不会留下
+    投不动的候选。
+    """
+    duel = game.get("duel")
+    if not duel or duel["day"] != game["day"]:
+        return None
+    if duel.get("locked"):
+        return duel
+    if not all(game["cards"][cid]["alive"] for cid in (duel["leia_card"], duel["target_card"])):
+        return None
+    return duel
+
+
+def duel_cards(game):
+    """当天决斗的两张牌，蕾雅在前、决斗对象在后。"""
+    duel = active_duel(game)
+    return [duel["leia_card"], duel["target_card"]] if duel else []
+
+
+def duel_vote_exempt(game, card, duel):
+    """决斗强制投票的豁免。
+
+    雪莉不能同意处决绑定的汉娜，这条优先级高于「必须至少投一个」：
+    汉娜是决斗对象时雪莉可以整轮弃票。
+    """
+    return card["id"] == "sherry" and game["spiritual"]["sherry_bound"] and "hanna" in duel
+
+
+def duel_vote_required(game, seat_id):
+    """本轮是否强制该席位投同意。
+
+    决斗当天的两张牌都排在投票轮次最前面：第一张投完之后，
+    还没同意过任何一张的人，在第二张上必须投同意。雪莉对汉娜的
+    限制优先豁免，所以那种情况不会强制。
+    """
+    if game["phase"] != "voting":
+        return False
+    duel = duel_cards(game)
+    if len(duel) < 2 or game["duel_approvals"].get(seat_id):
+        return False
+    candidate = (game.get("public", {}).get("votes") or {}).get("candidate")
+    if candidate is None or candidate != owner(game, duel[-1])["id"]:
+        return False
+    card = current(game, seat_id)
+    if card is None:
+        return False
+    return not duel_vote_exempt(game, card, duel)
 
 
 def poison_sources(game, card):
@@ -395,9 +497,9 @@ def deal_cards(game):
 
 
 def upgrade_game(game):
-    """就地补齐第三版规则字段；保留旧局的全部历史数据。"""
-    changed = game.get("rules_revision") != 3
-    game["rules_revision"] = 3
+    """就地补齐第五版规则字段；保留旧局的全部历史数据。"""
+    changed = game.get("rules_revision") != 5
+    game["rules_revision"] = 5
 
     def add(mapping, key, value):
         nonlocal changed
@@ -418,6 +520,9 @@ def upgrade_game(game):
         add(night, key, value)
     # 「汉娜魔化」是主持人开关，默认关闭；旧局补齐为关。
     add(game, "hanna_witch", False)
+    # 主持人身份快照与越权进入通告记录：旧局没有这些字段，补齐为「没有记录」。
+    add(game, "host", None)
+    add(game, "host_entry_notices", [])
     legacy_actions = [action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES]
     if legacy_actions:
         night.setdefault("legacy_actions", []).extend(legacy_actions)
@@ -445,6 +550,9 @@ def upgrade_game(game):
         "marg_love": None,
         "witness": None,
         "log": [],
+        # 第四版：蕾雅白天决斗当天的投票状态；旧局补齐为「今天没有决斗」。
+        "duel": None,
+        "duel_approvals": {},
     }.items():
         add(game, key, value)
     for photo in game["photos"]:
@@ -503,6 +611,27 @@ def upgrade_game(game):
     if any(p.get("kind") in stale_kinds for p in game.get("pending", [])):
         game["pending"] = [p for p in game["pending"] if p.get("kind") not in stale_kinds]
         changed = True
+    # 第五版：庇护改为按天记账（第 N 天获得，第 N+1 天夜里过期），旧的布尔状态按当前日补日戳；
+    # 安安后果由按牌记账迁移为按席位记账，换当前牌不再洗掉处罚。
+    for card in game.get("cards", {}).values():
+        states = card.setdefault("states", {})
+        if states.pop("protected", None):
+            states.setdefault("protected_day", game.get("day", 1))
+            changed = True
+    seat_ids = {s["id"] for s in game.get("seats", [])}
+    penalty = spiritual.get("annan_penalty") or {}
+    if any(key not in seat_ids for key in penalty):
+        migrated = {}
+        for key, value in penalty.items():
+            seat_id = owner(game, key)["id"] if key in game.get("cards", {}) else key
+            if seat_id in seat_ids:
+                migrated.setdefault(seat_id, value)
+        spiritual["annan_penalty"] = migrated
+        changed = True
+    for states in (spiritual.get("persistent_states") or {}).values():
+        if states.pop("protected", None):
+            states.setdefault("protected_day", game.get("day", 1))
+            changed = True
     return changed
 
 
@@ -518,7 +647,12 @@ def create_game(codex):
     SystemRandom().shuffle(shuffled_codex)
     return {
         "id": uid(),
-        "rules_revision": 3,
+        "rules_revision": 5,
+        # 建立这一局的主持人身份快照：对局内显示「主持人(昵称)」，
+        # 也让非本局主持人进入管理界面时能被认出来（见 api.host_enter）。
+        "host": None,
+        # 已经通告过的越权进入账号：同一账号同一局只通告一次。
+        "host_entry_notices": [],
         "version": 0,
         "status": "lobby",
         "join_open": False,
@@ -577,7 +711,6 @@ def create_game(codex):
         "queued_reveals": [],
         "votes": {},
         "vote_rounds": [],
-        "brainwash": {},
         "execution": [],
         "execution_ready": [],
         "water": {"holders": []},
@@ -585,6 +718,9 @@ def create_game(codex):
         "discussion_end_requests": [],
         "photos": [],
         "marg_love": None,
+        # 蕾雅当天宣布的决斗：{day, leia_card, target_card}；当天投票用它强制候选与半数门槛。
+        "duel": None,
+        "duel_approvals": {},
         "declarations": [],
         "witness": None,
         "log": [],
@@ -772,6 +908,9 @@ def clear_seat_actions(game, seat_id):
     night = game["night"]
     night["actions"] = [a for a in night["actions"] if a["seat_id"] != seat_id]
     night["confirmed"] = [s for s in night["confirmed"] if s != seat_id]
+    # 米莉亚清除本夜选择时，正在生效的换血目标也一并作废，避免留下没有行动记录的替死。
+    if game.get("millia_swap") and owner(game, "millia")["id"] == seat_id:
+        game["millia_swap"] = None
     if night.get("locked") and game["phase"] == "night_review":
         from .resolution import prepare_night_preview
 

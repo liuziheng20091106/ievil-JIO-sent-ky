@@ -333,10 +333,14 @@ class AchievementFlow(unittest.TestCase):
         equipped = self.client.get(
             f"/api/achievements/games/{self.game_id}/equipped", headers=self.host
         ).json()["participants"]
-        self.assertEqual(len(equipped), 1)
-        self.assertEqual(equipped[0]["participant_id"], participant_id)
-        self.assertEqual(equipped[0]["equipped"]["name"], "神秘黑幕女")
-        self.assertEqual(equipped[0]["equipped"]["rarity"], 2)
+        # 参与身份一行 + 主持人一行：主持人不是参与身份，但账号与它的玩家身份共用成就。
+        self.assertEqual(len(equipped), 2)
+        by_id = {item["participant_id"]: item for item in equipped}
+        self.assertEqual(by_id[participant_id]["equipped"]["name"], "神秘黑幕女")
+        self.assertEqual(by_id[participant_id]["equipped"]["rarity"], 2)
+        host_row = by_id["host"]
+        self.assertEqual(host_row["account_id"], self.host_actor["account_id"])
+        self.assertIsNone(host_row["equipped"], "主持人自己没佩戴时不该凭空有徽章")
 
         # 不在本局的已登录账号读不到本局的佩戴信息。
         stranger, _ = self.account("10011")
@@ -344,6 +348,31 @@ class AchievementFlow(unittest.TestCase):
             f"/api/achievements/games/{self.game_id}/equipped", headers=stranger
         )
         self.assertEqual(outside.status_code, 401, outside.text)
+
+    def test_host_badge_is_the_same_account_player_identity(self):
+        # 同一个 QQ 账号既主持也当玩家：成就是账号级的，佩戴后对局内主持人也要显示。
+        player_headers, player_actor = self.account("10001")
+        self.assertEqual(player_actor["account_id"], self.host_actor["account_id"])
+        definition = self.define("神秘黑幕女", "在一局内控制傀儡未被识破", 2).json()
+        granted = self.client.post(
+            f"/api/achievements/players/{player_actor['account_id']}/grants",
+            headers=self.host,
+            json={"achievement_id": definition["id"]},
+        ).json()
+        equipped = self.client.post(
+            "/api/achievements/me/equip", headers=player_headers, json={"grant_id": granted["id"]}
+        )
+        self.assertEqual(equipped.status_code, 200, equipped.text)
+
+        rows = self.client.get(
+            f"/api/achievements/games/{self.game_id}/equipped", headers=self.host
+        ).json()["participants"]
+        host_row = next(item for item in rows if item["participant_id"] == "host")
+        self.assertEqual(host_row["equipped"]["id"], granted["id"])
+        self.assertEqual(host_row["equipped"]["name"], "神秘黑幕女")
+        # 对局内下发的展示名也带上主持人昵称，两端才能把徽章挂在同一个人身上。
+        state = self.client.get(self.root + "/state", headers=self.host).json()
+        self.assertEqual(state["host_name"], "主持人(主持10001)")
 
     def test_achievements_survive_game_reset(self):
         player_headers, actor = self.account("10012")

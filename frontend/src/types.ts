@@ -238,7 +238,6 @@ export interface GameView {
     }[];
     votes?: Record<string, string>;
     photos?: HostPhoto[];
-    brainwash?: Record<string, string>;
     water?: { holders: string[] };
     discussion_end_requests?: string[];
     warnings?: Record<string, number>;
