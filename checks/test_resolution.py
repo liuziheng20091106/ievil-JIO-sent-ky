@@ -879,6 +879,40 @@ class PlaytestFixes(unittest.TestCase):
             command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
         self.assertIn("day.challenge", [a["id"] for a in actions_for(game, player(game, "4"))])
 
+    def test_failed_challenge_seat_shows_no_duplicate_upper_avatar(self):
+        """质疑失败整席出局：下层牌从未公示过，不得把上层牌当下牌标记重复显示。
+
+        公开头像一直是上层牌（质疑失败不换头像），若仍下发 previous_role_id，
+        状态页的双头像会渲染成两张一样的上层牌；下层牌只能显示中性占位。
+        """
+        game = arranged_game("discussion")
+        # 走一次真实的开局：公开头像由开局锁定，之后质疑失败不换头像。
+        # 开局进入的是第1夜魔女化阶段，这里把对局拨回第2天白天再质疑。
+        game.update(status="lobby", phase="ordering", day=1, half="night")
+        for seat in game["seats"]:
+            seat["ready"] = True
+        command(game, HOST, "host.start")
+        game.update(status="playing", phase="discussion", half="day", day=2)
+        game["seats"][0]["cards"] = ["emma", "millia"]
+        command(game, player(game, "1"), "day.skill", {"ability": "interrupt", "target": "2"})
+        declaration = game["declarations"][0]
+        command(game, player(game, "3"), "day.challenge", {"declaration_id": declaration["id"]})
+        seats = {seat["id"]: seat for seat in game_view(game, player(game, "1"))["seats"]}
+        self.assertIsNone(seats["3"]["previous_role_id"])
+        self.assertEqual(seats["3"]["avatar_role_id"], "meruru")
+        self.assertFalse(seats["3"]["alive"])
+        # 对照：正常的单牌出局（上层牌出局、下层登场）仍保留“上层→下层”两个名字。
+        game2 = arranged_game()
+        command(
+            game2,
+            HOST,
+            "host.damage",
+            {"targets": ["meruru"], "effect": "death", "source": "coco", "reason": "测试白天出局"},
+        )
+        seats2 = {seat["id"]: seat for seat in game_view(game2, player(game2, "1"))["seats"]}
+        self.assertEqual(seats2["3"]["previous_role_id"], "meruru")
+        self.assertEqual(seats2["3"]["avatar_role_id"], "hanna")
+
     def test_must_notice_events_are_marked_as_alerts_only_when_needed(self):
         game = arranged_game("discussion")
         game["seats"][0]["cards"] = ["emma", "millia"]

@@ -113,6 +113,10 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       ) === index,
   );
   const lastId = rows.at(-1)?.id ?? 0;
+  // 距底部多少像素内仍算「停在最新消息」：约三条消息的高度。
+  // 只有停在最新消息附近才自动跟随滚动；往上翻历史时，
+  // 发消息与收消息都不再把列表拽回底部，打断阅读。
+  const FOLLOW_THRESHOLD = 160;
   const scrollBottom = () => {
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
@@ -231,8 +235,16 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       mergeMessages([message]);
       clearDraft();
       if (feed.current === state.id) {
-        nearBottom.current = true;
-        requestAnimationFrame(scrollBottom);
+        // 发送后只在原本就停在最新消息附近时才滚到底；往上翻历史时不拽回底部。
+        const node = scroller.current;
+        if (
+          node &&
+          node.scrollHeight - node.scrollTop - node.clientHeight <
+            FOLLOW_THRESHOLD
+        ) {
+          nearBottom.current = true;
+          requestAnimationFrame(scrollBottom);
+        }
       }
     } catch (failure) {
       if (feed.current === state.id)

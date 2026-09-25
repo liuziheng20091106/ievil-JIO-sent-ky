@@ -325,6 +325,12 @@ def game_view(game, actor):
     for s in game["seats"]:
         ready_count += bool(s["ready"])
         pub = held.get(s["id"])
+        # 质疑失败是整席出局：公开头像从未换人（一直是上层牌），下层牌从未公示过。
+        # 这时不再下发 previous_role_id，否则双头像会渲染成两张一样的上层牌；
+        # 未公示过的下牌交给客户端按无权限处理，显示中性占位而不是真实角色。
+        fallen = fallen_upper_role(game, s)
+        if fallen == s["avatar_role_id"]:
+            fallen = None
         entry = {
             "id": s["id"],
             "name": s["name"],
@@ -337,7 +343,7 @@ def game_view(game, actor):
             if lobby
             else pub["previous_role_id"]
             if pub
-            else fallen_upper_role(game, s),
+            else fallen,
             "occupied": bool(s["occupant_id"]),
             # 行动选项里的人物用的是参与者 id，客户端需要它把选项关联到席位与角色，
             # 否则选择界面只能显示座位号而无法显示头像与角色。

@@ -672,6 +672,11 @@ class _ChatActionPageState extends State<ChatActionPage> {
   int lastCount = 0;
   bool emojiOpen = false;
 
+  /// 距底部多少像素内仍算「停在最新消息」：约三条消息的高度。
+  /// 只有停在最新消息附近才自动跟随滚动；往上翻历史时，
+  /// 发消息与收消息都不再把列表拽回底部，打断阅读。
+  static const double _followThreshold = 160;
+
   /// 上一次布局时消息视口的高度（由消息列表外的 LayoutBuilder 量得）。
   double? viewportHeight;
 
@@ -727,10 +732,18 @@ class _ChatActionPageState extends State<ChatActionPage> {
     });
   }
 
+  bool get _atLatestMessage {
+    if (!scroll.hasClients) return true;
+    final position = scroll.position;
+    return position.pixels >= position.maxScrollExtent - _followThreshold;
+  }
+
   void onStore() {
     final count = widget.store.messages.length;
     if (count != lastCount) {
       lastCount = count;
+      // 停在最新消息附近才跟随滚动；往上翻历史时不拽回底部。
+      if (!_atLatestMessage) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) scrollToLatest();
       });
