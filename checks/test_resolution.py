@@ -2288,6 +2288,23 @@ class RuleRevisions(unittest.TestCase):
         self.assertIsNotNone(game["witness"])
         self.assertNotIn("汉娜", game["witness"]["text"])
 
+    def test_witness_form_default_fill_prefers_present_roles(self):
+        game = arranged_game("night_review", "night")
+        # 第4席（玛格+雪莉）整席出局，汉娜沉在第3席下层：三名角色都不在场。
+        for cid in ("marg", "sherry"):
+            game["cards"][cid]["alive"] = False
+        item = pending(
+            game, "suspects", "填写名单", seat_id="2", victim="meruru", source_card="coco"
+        )
+        form = next(a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"])
+        default = form["fields"][0]["default"]
+        self.assertEqual(len(default), 4)
+        # 真凶必勾；补位只勾当前在场角色（按魔典顺序）：
+        # 出局的玛格、雪莉与未登场的汉娜都不进默认勾选。
+        self.assertEqual(default[0], "coco")
+        for absent in ("marg", "sherry", "hanna"):
+            self.assertNotIn(absent, default)
+
     def test_nominating_during_voting_refreshes_the_round_total(self):
         game = arranged_game("voting", "day")
         game["nominations"] = [{"seat_id": "3", "card_id": "meruru", "by": "2"}]
