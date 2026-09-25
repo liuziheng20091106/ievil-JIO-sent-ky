@@ -666,13 +666,6 @@ class ChatActionPage extends StatefulWidget {
 }
 
 class _ChatActionPageState extends State<ChatActionPage> {
-  static const scopes = {
-    'all': ('全部', Icons.all_inbox_outlined),
-    'public': ('公屏', Icons.campaign_outlined),
-    'private': ('私信', Icons.lock_outline),
-    'system': ('系统', Icons.info_outline),
-    'host': ('主持人', Icons.workspace_premium_outlined),
-  };
   final message = EmojiEditingController();
   final scroll = ScrollController();
   String? sendError;
@@ -781,6 +774,24 @@ class _ChatActionPageState extends State<ChatActionPage> {
         if (seen.add(item.protocolKey)) item
     ];
   }
+
+  /// 观战者独享观战频道：不显示私信与主持人筛选。
+  Map<String, (String, IconData)> get scopes {
+    if (widget.store.actor?.isSpectator != true) return _scopes;
+    return {
+      'all': _scopes['all']!,
+      'public': ('观战', Icons.campaign_outlined),
+      'system': _scopes['system']!,
+    };
+  }
+
+  static const _scopes = {
+    'all': ('全部', Icons.all_inbox_outlined),
+    'public': ('公屏', Icons.campaign_outlined),
+    'private': ('私信', Icons.lock_outline),
+    'system': ('系统', Icons.info_outline),
+    'host': ('主持人', Icons.workspace_premium_outlined),
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -1258,11 +1269,12 @@ class _ChannelButton extends StatelessWidget {
   }
 }
 
-IconData _channelIcon(String? channelId) => channelId == 'public'
-    ? Icons.campaign_outlined
-    : channelId == 'system'
-        ? Icons.info_outline
-        : Icons.lock_outline;
+IconData _channelIcon(String? channelId) =>
+    channelId == 'public' || channelId == 'spectator'
+        ? Icons.campaign_outlined
+        : channelId == 'system'
+            ? Icons.info_outline
+            : Icons.lock_outline;
 
 /// 傀儡席玩家的常驻提示：本次行动由魔女梅露露代为执行，自己只读旁观。
 /// 与主持人警告共用 dangerSoft 卡片样式。
@@ -1778,7 +1790,9 @@ class MessageBubble extends StatelessWidget {
                               Icon(
                                 message.channelId == 'information'
                                     ? Icons.info_outline
-                                    : Icons.lock_outline,
+                                    : message.channelId == 'spectator'
+                                        ? Icons.campaign_outlined
+                                        : Icons.lock_outline,
                                 size: 12,
                                 color: mine
                                     ? Colors.white70
@@ -1788,7 +1802,9 @@ class MessageBubble extends StatelessWidget {
                               Text(
                                 message.channelId == 'information'
                                     ? '系统信息'
-                                    : '私信',
+                                    : message.channelId == 'spectator'
+                                        ? '观战频道'
+                                        : '私信',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: mine
@@ -2737,6 +2753,16 @@ class ProfilePage extends StatelessWidget {
                   card:
                       raw.map((key, value) => MapEntry(key.toString(), value)),
                   isCurrent: raw['id']?.toString() == currentId,
+                  // 点击双牌打开角色教程卡片：内容与登场介绍、角色详情同源。
+                  onTap: () => showRoleIntro(
+                    context,
+                    store,
+                    raw['role_id']?.toString() ?? '',
+                    headerLabel: '双牌教程 · ${raw['id']?.toString() == currentId ? '当前上层' : '下层牌'}',
+                    footerText: raw['id']?.toString() == currentId
+                        ? '这张是你当前使用的上层牌；上层牌出局后，你才开始使用下层牌。'
+                        : '这张是你的下层牌；上层牌出局后，你才开始使用它的技能。',
+                  ),
                 ),
               ),
         // 可可魔典、玛格破译、雪莉绑定、13水、证物等私密情报都在 view.information 里；
@@ -2879,9 +2905,12 @@ class ProfilePage extends StatelessWidget {
 }
 
 class _OwnCard extends StatelessWidget {
-  const _OwnCard({required this.card, required this.isCurrent});
+  const _OwnCard({required this.card, required this.isCurrent, this.onTap});
   final Map<String, dynamic> card;
   final bool isCurrent;
+
+  /// 点击整张牌打开角色教程卡片；为空时不可点。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2889,15 +2918,18 @@ class _OwnCard extends StatelessWidget {
     final alive = card['alive'] != false;
     final uses = card['uses'];
     return Card(
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(AppRadius.card),
-          border: Border.all(
-              color: isCurrent ? context.palette.accent : Colors.transparent,
-              width: 2),
-        ),
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Row(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(
+                color: isCurrent ? context.palette.accent : Colors.transparent,
+                width: 2),
+          ),
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Row(
           children: [
             RoleAvatar(
                 roleId: card['role_id']?.toString(), size: 56, dead: !alive),
@@ -2954,6 +2986,7 @@ class _OwnCard extends StatelessWidget {
               ),
             ),
           ],
+          ),
         ),
       ),
     );

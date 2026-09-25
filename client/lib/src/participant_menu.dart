@@ -113,19 +113,28 @@ bool _deadOf(GameStore store, String? seatId) {
 /// 内容就是该角色的公开技能说明，和点头像看到的角色详情同源。
 /// [opening] 为真时是开局那一次：宿主在候场转入进行中时锁定上层牌，
 /// 换的只是标题与收尾文案，技能说明仍与角色详情同源。
+/// [headerLabel]/[footerText] 可覆盖默认的栏头与收尾文案；传值时视为一次
+/// 主动查看（例如「我的」页点双牌打开教程卡片），不再用登场介绍的口吻。
 /// 发牌不在此列——那时玩家正在「我的双牌」里自己选上下牌，不需要弹窗遮挡。
 Future<void> showRoleIntro(
   BuildContext context,
   GameStore store,
   String roleId, {
   bool opening = false,
+  String? headerLabel,
+  String? footerText,
 }) =>
     showPredictiveSheet<void>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,
-      builder: (context) =>
-          _RoleIntroSheet(store: store, roleId: roleId, opening: opening),
+      builder: (context) => _RoleIntroSheet(
+        store: store,
+        roleId: roleId,
+        opening: opening,
+        headerLabel: headerLabel,
+        footerText: footerText,
+      ),
     );
 
 class _RoleIntroSheet extends StatelessWidget {
@@ -133,6 +142,8 @@ class _RoleIntroSheet extends StatelessWidget {
     required this.store,
     required this.roleId,
     this.opening = false,
+    this.headerLabel,
+    this.footerText,
   });
 
   final GameStore store;
@@ -140,6 +151,10 @@ class _RoleIntroSheet extends StatelessWidget {
 
   /// 开局的上层牌教程：说明这一张就是开局起使用的牌。
   final bool opening;
+
+  /// 主动查看时的栏头与收尾文案；为空时按登场介绍口吻显示。
+  final String? headerLabel;
+  final String? footerText;
 
   @override
   Widget build(BuildContext context) {
@@ -167,7 +182,8 @@ class _RoleIntroSheet extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        opening ? '开局 · 上层牌' : '新角色登场',
+                        headerLabel ??
+                            (opening ? '开局 · 上层牌' : '新角色登场'),
                         style: TextStyle(
                           fontSize: 12,
                           color: context.palette.accent,
@@ -211,9 +227,10 @@ class _RoleIntroSheet extends StatelessWidget {
             ],
             const SizedBox(height: AppSpacing.md),
             Text(
-              opening
-                  ? '开局起你使用上层牌；上层牌出局后，你才开始使用下层牌。私密信息只在本机显示。'
-                  : '此刻起你使用这张牌的技能；私密信息只在本机显示。',
+              footerText ??
+                  (opening
+                      ? '开局起你使用上层牌；上层牌出局后，你才开始使用下层牌。私密信息只在本机显示。'
+                      : '此刻起你使用这张牌的技能；私密信息只在本机显示。'),
               style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],
