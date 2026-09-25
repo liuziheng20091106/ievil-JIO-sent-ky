@@ -658,6 +658,21 @@ function Room({
   const seenInfoCount = useRef<number | null>(null);
   const puppetKey = `puppet-tutorial:${state?.id}:${session.actor?.id ?? "anon"}`;
   const controlledSeats = state?.self.puppet_controls ?? [];
+  // 主持人要先确认进入本局管理界面，服务端才下发主持级数据与操作。原生客户端有
+  // 单独的确认页；网页端没有这一页，打开对局即视为进入（服务端登记后会立刻把
+  // 完整主持投影推回来，所以这里不需要手动刷新状态）。
+  const hostEntryKey = useRef("");
+  useEffect(() => {
+    if (!state || state.host_entry_required !== true) return;
+    if (session.actor?.kind !== "host") return;
+    const key = `host-entry:${state.id}`;
+    if (hostEntryKey.current === key) return;
+    hostEntryKey.current = key;
+    api(`/games/${state.id}/host/enter`, {}).catch(() => {
+      // 失败就继续用只读投影，下一次状态刷新会再试一次。
+      hostEntryKey.current = "";
+    });
+  }, [state?.id, state?.host_entry_required, session.actor?.kind]);
   useEffect(() => {
     // 首次出现傀儡控制关系时只弹一次教程，按对局与身份隔离。
     if (!controlledSeats.length) return;

@@ -6,7 +6,7 @@ from . import storage
 from .game import game_view
 from .game.actions import action, field, outstanding_seats
 from .game.catalog import night_half
-from .game.state import host_label
+from .game.state import host_capable, host_label
 from .game.views import seat_chat
 
 
@@ -206,11 +206,11 @@ def channels_for(db, game, actor, domain_view):
     ]
     for row in db.execute("SELECT * FROM channels WHERE game_id=? ORDER BY rowid", (game["id"],)):
         members = json.loads(row["participant_ids"])
-        if actor["kind"] != "host" and not set(actor["access_ids"]).intersection(members):
+        if not host_capable(actor) and not set(actor["access_ids"]).intersection(members):
             continue
         invited = json.loads(row["invited_ids"])
         accepted = json.loads(row["accepted_ids"])
-        current = actor["kind"] == "host" or actor["id"] in members
+        current = host_capable(actor) or actor["id"] in members
         invitation = (
             "accepted"
             if actor["id"] in accepted
@@ -278,7 +278,7 @@ def channels_for(db, game, actor, domain_view):
 def channel_create_descriptor(db, game, actor, participants):
     if game["status"] == "ended" or storage.active_private_channel(db, game, actor["id"]):
         return None
-    host = actor["kind"] == "host"
+    host = host_capable(actor)
     night = night_half(game)
     options = []
     if not host:
@@ -448,7 +448,7 @@ def view(db, game, actor, online):
         ]
     collected_channel_actions = [item for channel in result["channels"] for item in channel["actions"]]
     active_private = storage.active_private_channel(db, game, actor["id"])
-    if active_private and actor["kind"] != "host":
+    if active_private and not host_capable(actor):
         result["actions"] = collected_channel_actions
     else:
         create_action = channel_create_descriptor(db, game, actor, participants)
@@ -460,10 +460,10 @@ def view(db, game, actor, online):
         # 傀儡席由控制者代操作：原玩家只读旁观，连私信类行动也不下发。
         result["actions"] = []
     if not puppet_spectator:
-        prompt = action_prompt(game, actor, bool(active_private) and actor["kind"] != "host")
+        prompt = action_prompt(game, actor, bool(active_private) and not host_capable(actor))
         if prompt:
             result["action_prompt"] = prompt
-    if actor["kind"] == "host":
+    if host_capable(actor):
         result.setdefault("host", {})["participants"] = [
             participant_summary(row)
             | {
@@ -477,4 +477,8 @@ def view(db, game, actor, online):
         ]
         if game["status"] != "ended":
             result["actions"].extend(runtime_actions(game, participants))
+    if actor.get("kind") == "host" and not host_capable(actor):
+        # 未确认进入本局管理界面：连私信入口都不给，主持人这一步只能去确认。
+        # 客户端的确认页也不依赖这些行动，所以清空不会挡住进入流程。
+        result["actions"] = []
     return result

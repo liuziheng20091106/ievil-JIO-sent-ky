@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from . import storage
 from .game import game_view
+from .game.state import host_capable
 
 MAX_IMAGE = 2 * 1024 * 1024
 
@@ -102,7 +103,7 @@ def get_permitted(db, game, actor, evidence_id):
     ).fetchone()
     if not row:
         raise HTTPException(404, "证物不存在或你无权查看")
-    if actor["kind"] == "host" or row["owner_id"] in actor["access_ids"]:
+    if host_capable(actor) or row["owner_id"] in actor["access_ids"]:
         return row
     if any(
         item.get("image_id") == evidence_id

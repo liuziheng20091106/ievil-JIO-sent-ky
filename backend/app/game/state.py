@@ -35,6 +35,29 @@ def host_label(game):
     return host_display_name((game.get("host") or {}).get("name"))
 
 
+def host_capable(actor):
+    """该身份现在是否按主持人放行：主持级投影、主持管理操作与私聊可见性都看它。
+
+    主持授权只说明「有资格主持」；进入某一局还要主持人自己确认一次（见
+    ``api.host_enter``），``auth.actor_for_token`` 每次请求都在身份上标出
+    ``host_entered``。未确认时这里返回 False，于是确认之前既看不到别人的上下牌，
+    也拿不到主持人面板、私聊历史和任何管理操作（禁言、移人、代操作都不行）。
+    手写的身份（检查与模拟器里的旧夹具）不带这个字段时按已确认处理。
+    """
+    return actor.get("kind") == "host" and bool(actor.get("host_entered", True))
+
+
+def host_view_actor(actor):
+    """生成行动表时用的身份：未确认进入的主持人按观察者处理（拿不到任何行动）。
+
+    投影（game_view）与命令校验（engine.validate_command）共用它，避免只在一处
+    收紧、另一处仍按主持人列出 host.* 与 room.* 行动。
+    """
+    if actor.get("kind") == "host" and not host_capable(actor):
+        return {**actor, "kind": "observer"}
+    return actor
+
+
 def seat(game, seat_id):
     found = next((s for s in game["seats"] if s["id"] == seat_id), None)
     require(found is not None, "席位不存在")
@@ -520,9 +543,14 @@ def upgrade_game(game):
         add(night, key, value)
     # 「汉娜魔化」是主持人开关，默认关闭；旧局补齐为关。
     add(game, "hanna_witch", False)
-    # 主持人身份快照与越权进入通告记录：旧局没有这些字段，补齐为「没有记录」。
+    # 主持人身份快照与「已确认进入管理界面」的主持账号：旧局补齐为「没有记录」。
     add(game, "host", None)
-    add(game, "host_entry_notices", [])
+    add(game, "host_entries", [])
+    # 旧字段名只是同一份记录的前身（当时只用来给通告去重），合并后丢掉。
+    legacy_entries = game.pop("host_entry_notices", None)
+    if legacy_entries:
+        game["host_entries"] = list(dict.fromkeys([*game["host_entries"], *legacy_entries]))
+        changed = True
     legacy_actions = [action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES]
     if legacy_actions:
         night.setdefault("legacy_actions", []).extend(legacy_actions)
@@ -651,8 +679,9 @@ def create_game(codex):
         # 建立这一局的主持人身份快照：对局内显示「主持人(昵称)」，
         # 也让非本局主持人进入管理界面时能被认出来（见 api.host_enter）。
         "host": None,
-        # 已经通告过的越权进入账号：同一账号同一局只通告一次。
-        "host_entry_notices": [],
+        # 已经确认进入本局管理界面的主持账号；未确认前不下发主持级数据，
+        # 也是「非建局主持人进入」通告的去重依据（见 api.host_enter）。
+        "host_entries": [],
         "version": 0,
         "status": "lobby",
         "join_open": False,

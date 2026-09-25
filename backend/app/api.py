@@ -71,6 +71,8 @@ def authorized_as_seat(db, game, actor, seat_id):
     返回 (代操作 actor, 是否主持人代操作)；非主持人只能指定自己控制的傀儡席。
     """
     if actor["kind"] == "host":
+        # 未确认进入本局管理界面的主持人没有代操作权（也没有任何管理动作）。
+        auth.require_host_capable(actor)
         return impersonated_actor(db, game, seat_id), True
     if actor["kind"] != "player":
         raise HTTPException(403, "当前身份不能代理席位操作")
@@ -531,6 +533,7 @@ async def create_invite(game_id: str, body: schemas.Invite, request: Request):
     async with realtime.lock:
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
+            auth.require_host_capable(actor)
             if actor["kind"] == "spectator":
                 raise HTTPException(403, "观战者不能邀请玩家")
             game = require_game(db, game_id)
@@ -630,45 +633,56 @@ async def state(game_id: str, request: Request):
 
 @router.post("/games/{game_id}/host/enter")
 async def host_enter(game_id: str, request: Request):
-    """主持人进入本局管理界面：不是建立这一局的主持人时，向全服发一条通告。
+    """主持人确认进入本局管理界面：服务端从这一步起才下发主持级数据与操作。
 
-    主持人身份在建局时记录（见 :func:`create`），所以这里能认出「非当前主持人」。
-    同一账号在同一局只通告一次，避免每次打开管理页都刷屏；通告写进独立的公告库，
-    任何已登录身份都会在大厅看到。没有记录主持人身份的旧局不做判定。
+    未确认之前，任何主持账号拿到的都是最窄的观察者投影：没有全席上下牌、没有主持人
+    面板与私聊历史，也不能执行禁言、移人、代操作等管理动作（见 game.state.host_capable）。
+    确认成功后立刻把完整主持投影推给这一局的所有连接，客户端不必再刷新。
+
+    不是建立这一局的主持人时，另外向全服发一条通告；同一账号在同一局只发一次。
+    没有记录主持人身份的旧局不做越权判定。
     """
     async with realtime.lock:
         with storage.transaction() as db:
-            actor = auth.require_actor(db, request, game_id, host=True)
+            # 这里不能要求 host=True：那已经蕴含「已确认」了，会把自己锁死。
+            actor = auth.require_actor(db, request, game_id)
+            if actor.get("kind") != "host":
+                raise HTTPException(403, "仅主持人可以进入管理界面")
             game = require_game(db, game_id)
-            owner_account = (game.get("host") or {}).get("account_id") or ""
             account_id = actor.get("account_id") or ""
-            if not owner_account or not account_id or account_id == owner_account:
-                return {"owner": True, "announced": False, "owner_name": host_label(game)}
-            announced = list(game.get("host_entry_notices") or [])
-            if account_id in announced:
-                return {"owner": False, "announced": False, "owner_name": host_label(game)}
-            announced.append(account_id)
-            game["host_entry_notices"] = announced
-            entrant = (actor.get("nickname") or "").strip() or account_id
-            log_event(
-                game,
-                "host",
-                f"主持人【{entrant}】进入本局管理界面；本局主持人：{host_label(game)}",
-            )
-            storage.save_game(db, game)
-            announcement_storage.create(
-                "有主持人进入了他人建立的对局",
-                f"主持人【{entrant}】进入了{host_label(game)}建立的对局管理界面。\n\n"
-                "本局只应由建立对局的主持人操作；如果这不是你安排的，请及时联系系统管理员。",
-                "",
-                "系统",
-            )
-    return {"owner": False, "announced": True, "owner_name": host_label(game)}
+            owner_account = (game.get("host") or {}).get("account_id") or ""
+            owner = not owner_account or not account_id or account_id == owner_account
+            entries = list(game.get("host_entries") or [])
+            announced = False
+            if account_id and account_id not in entries:
+                # 记下「这个账号已经确认进入本局」：主持级数据从这里开始放行。
+                game["host_entries"] = [*entries, account_id]
+                entrant = (actor.get("nickname") or "").strip() or account_id
+                log_event(
+                    game,
+                    "host",
+                    f"主持人【{entrant}】进入本局管理界面；本局主持人：{host_label(game)}",
+                )
+                storage.save_game(db, game)
+                if not owner:
+                    announcement_storage.create(
+                        "有主持人进入了他人建立的对局",
+                        f"主持人【{entrant}】进入了{host_label(game)}建立的对局管理界面。\n\n"
+                        "本局只应由建立对局的主持人操作；如果这不是你安排的，请及时联系系统管理员。",
+                        "",
+                        "系统",
+                    )
+                    announced = True
+        # 登记成功后立刻重推状态：这一份就是升级后的完整主持投影。
+        realtime.publish(game_id)
+        return {"owner": owner, "announced": announced, "owner_name": host_label(game)}
 
 
 def room_command(db, game, actor, action_id, payload):
     if actor["kind"] != "host":
         raise HTTPException(403, "仅主持人可以管理房间")
+    # 房间管理是管理权：未确认进入本局管理界面的主持人同样不许禁言、移人或替补。
+    auth.require_host_capable(actor)
     text = ""
     if action_id == "room.open_join":
         body = schemas.OpenJoin.model_validate(payload)
@@ -948,6 +962,8 @@ async def command(game_id: str, body: schemas.Command, request: Request):
     async with realtime.lock:
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
+            # 未确认进入管理界面的主持人不能执行任何命令（含房间管理与私信）。
+            auth.require_host_capable(actor)
             game = copy.deepcopy(require_game(db, game_id, mutable=True))
             was_night = night_half(game)
             controller, host_delegated, puppet_seat = actor, False, None
@@ -1070,6 +1086,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
     async with realtime.lock:
         with storage.transaction() as db:
             controller = auth.require_actor(db, request, game_id)
+            auth.require_host_capable(controller)
             game = require_game(db, game_id, mutable=True)
             actor, host_delegated = controller, False
             if body.as_seat:
@@ -1119,6 +1136,7 @@ async def upload_evidence(game_id: str, body: schemas.Evidence, request: Request
     async with realtime.lock:
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
+            auth.require_host_capable(actor)
             game = require_game(db, game_id, mutable=True)
             if actor["kind"] == "spectator" or storage.active_private_channel(db, game, actor["id"]):
                 raise HTTPException(403, "当前身份不能提交游戏证物")
@@ -1132,6 +1150,7 @@ async def get_evidence(game_id: str, evidence_id: str, request: Request):
             actor = auth.require_actor(db, request, game_id)
             if actor["kind"] == "spectator":
                 raise HTTPException(403, "观战者不能读取游戏证物")
+            # 未确认进入的主持人由 get_permitted 按空访问名单过滤（只放行公开证物）。
             row = evidence.get_permitted(db, require_game(db, game_id), actor, evidence_id)
             headers = {
                 "Cache-Control": "private, no-store",

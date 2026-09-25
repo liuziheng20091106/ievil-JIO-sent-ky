@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:seven_double_client/src/achievement_pages.dart';
 import 'package:seven_double_client/src/achievements.dart';
 import 'package:seven_double_client/src/api.dart';
 import 'package:seven_double_client/src/design.dart';
@@ -153,7 +154,8 @@ void main() {
         Object payload;
         if (path == '/api/achievements/catalog') {
           payload = {
-            'achievements': [definitionJson(2)],
+            // 两个定义：ach-2 已授权给 a1，ach-5 还没有——一览必须把两个都列出来。
+            'achievements': [definitionJson(2), definitionJson(5)],
             'max_rarity': 10,
           };
         } else if (path == '/api/achievements/me') {
@@ -248,9 +250,10 @@ void main() {
     test('目录、我的成就与佩戴/取消佩戴', () async {
       final api = GameApi(endpoint, token: 'token-abc');
       final catalog = await api.achievementCatalog();
-      expect(catalog.single.name, '成就2');
-      expect(catalog.single.rarity, 2);
-      expect(catalog.single.grantedCount, 1);
+      expect(catalog, hasLength(2));
+      expect(catalog.first.name, '成就2');
+      expect(catalog.first.rarity, 2);
+      expect(catalog.first.grantedCount, 1);
 
       final mine = await api.myAchievements();
       expect(mine.achievements.single.id, 'grant-1');
@@ -387,6 +390,29 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(equippedCalls(), hasLength(2));
+    });
+
+    testWidgets('我的成就底部有成就一览，全部成就都列出来（含未获得）', (tester) async {
+      final store = await previewStore();
+      store.api = GameApi(endpoint, token: 'token-abc');
+      await tester.runAsync(() async {
+        await tester.pumpWidget(MaterialApp(
+          theme: buildAppTheme(),
+          home: MyAchievementsPage(store: store),
+        ));
+        // /me 与 /catalog 是真实回环请求：runAsync 里等它们回来再检查界面。
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.text('成就一览'), findsOneWidget);
+      expect(find.textContaining('全部 2 个成就'), findsOneWidget);
+      // 已获得的成就在「获得的成就」与一览里各一次；未获得的只在一览里。
+      expect(find.text('成就2'), findsNWidgets(2));
+      expect(find.text('成就5'), findsOneWidget);
+      expect(find.text('未获得'), findsOneWidget);
+      // 没有佩戴任何成就时，未获得的那些不能被当成「已佩戴」。
+      expect(find.text('已佩戴'), findsNothing);
     });
   });
 

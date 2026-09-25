@@ -183,7 +183,9 @@ async def game_equipped(game_id: str, request: Request):
     让对局内的主持人也有徽章与可点开的成就摘要。
     """
     with storage.connect() as db:
-        auth.require_actor(db, request, game_id)
+        actor = auth.require_actor(db, request, game_id)
+        # 未确认进入本局管理界面的主持人还不算本局身份，不给本局的佩戴信息。
+        auth.require_host_capable(actor)
         rows = db.execute(
             """SELECT id, account_id FROM participants
                WHERE game_id=? AND active=1 AND blocked=0""",

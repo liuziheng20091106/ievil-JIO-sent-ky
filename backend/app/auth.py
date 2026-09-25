@@ -8,7 +8,7 @@ import secrets
 from fastapi import HTTPException
 
 from . import auth_storage, storage
-from .game.state import host_display_name
+from .game.state import host_capable, host_display_name
 
 COOKIE = "seven_double_session"
 
@@ -68,7 +68,12 @@ def host_level(account):
     return auth_storage.host_level(account["id"])
 
 
-def host_actor(account, db, game_id=None):
+def host_actor(account, db, game_id=None, *, entered=True):
+    """主持人身份。``entered`` 表示是否已确认进入本局管理界面。
+
+    未确认时身份仍然是主持人（客户端要能识别出「我该去确认」），但访问名单为空、
+    也不给主持级放行：具体判据见 :func:`backend.app.game.state.host_capable`。
+    """
     return {
         "id": "host",
         "account_id": account["id"],
@@ -81,7 +86,9 @@ def host_actor(account, db, game_id=None):
         "qq_id": account["qq_id"],
         "avatar_url": account["avatar_url"],
         "host_level": host_level(account),
-        "access_ids": ["host"],
+        # 未确认进入就不属于本局任何频道：私聊与消息历史按空名单过滤。
+        "access_ids": ["host"] if entered else [],
+        "host_entered": bool(entered),
     }
 
 
@@ -94,7 +101,11 @@ def actor_for_token(db, hashed, game_id=None):
         # 授权被取消或用完（1 级）之后，旧令牌立即不再有效。
         if not account or host_level(account) < auth_storage.HOST_LEVEL_MIN:
             return None
-        return host_actor(account, db, game_id)
+        target_game = game_id or storage.current_game_id(db)
+        # 主持授权只说明「有资格主持」：进入某一局还要先确认一次，否则拿到的
+        # 只是最窄的观察者投影，也不能执行任何管理操作。
+        entered = not target_game or storage.host_entered(db, target_game, account["id"])
+        return host_actor(account, db, game_id, entered=entered)
     account = auth_storage.account(token["account_id"])
     if not account:
         return None
@@ -138,8 +149,22 @@ def require_actor(db, connection, game_id=None, host=False, level=1):
     if host:
         if actor["kind"] != "host":
             raise HTTPException(403, "仅主持人可以进行此操作")
+        # 「确认进入」只约束针对某一局的接口（如席位视角）：建局、一键初始化、
+        # 主持授权、发布公告都是账号级功能，不该被某一局是否确认过挡住。
+        if game_id and not host_capable(actor):
+            raise HTTPException(403, "请先确认进入本局管理界面")
         if int(actor.get("host_level", 0)) < level:
             raise HTTPException(403, f"此操作需要 {level} 级主持权限")
+    return actor
+
+
+def require_host_capable(actor):
+    """主持人必须先确认进入本局管理界面，才拥有主持级数据与操作。
+
+    玩家、观战者不受影响；只有「有主持授权但还没确认进入」这一个状态被挡下。
+    """
+    if actor.get("kind") == "host" and not host_capable(actor):
+        raise HTTPException(403, "请先确认进入本局管理界面")
     return actor
 
 

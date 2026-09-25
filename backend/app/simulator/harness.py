@@ -68,6 +68,8 @@ class Harness:
         # 主持人必须是被授权的 QQ 账号（检查里默认把 host_qq 配成 GAME_ADMIN_QQ）。
         self.host.login_host(self.authenticate, host_qq, "测试主持人", group_id=group_id)
         self.host.create_game(codex or DEFAULT_CODEX_ROLES)
+        # 与真实客户端一致：主持人要先确认进入管理界面，服务端才下发完整主持投影。
+        self.host.enter_host_admin()
         self.host.refresh()
         self.seats = self._seat_players(seed, policies)
         self.roster = Roster(self.seats, self.host, log=self.log)

@@ -525,6 +525,29 @@ Future<void> leaveSpectating(BuildContext context, GameStore store) async {
   }
 }
 
+/// 退出登录前确认一次：登出会清掉本机会话，误触的代价是重新用群登录码登录。
+/// 确认页上放这个入口，是为了让误入主持端的人能直接换玩家身份。
+Future<void> confirmLogout(BuildContext context, GameStore store) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('退出登录？'),
+      content: const Text('退出后回到登录页；想以玩家身份进来，需要重新用 QQ 群登录码登录。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('退出登录'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true) await store.logout();
+}
+
 /// 阶段变化的整屏动画；首次进入与重连不重复旧动画。
 class PhaseOverlay extends StatefulWidget {
   const PhaseOverlay({super.key, required this.store});
@@ -743,6 +766,9 @@ class _ChatActionPageState extends State<ChatActionPage> {
                 )
               : ListView.builder(
                   controller: scroll,
+                  // 软键盘、表情面板与长高的输入框都会顶矮消息视口：偏移量跟着补上
+                  // 同样的高度差，消息与输入框的相对位置保持不变（见该 physics）。
+                  physics: const _ComposerFollowingScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(AppSpacing.lg,
                       AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
                   itemCount:
@@ -824,6 +850,52 @@ class _ChatActionPageState extends State<ChatActionPage> {
     } on ApiException catch (failure) {
       if (mounted) setState(() => sendError = failure.message);
     }
+  }
+}
+
+/// 消息列表跟着输入区一起动：视口高度变化（软键盘弹出/收起、表情面板开合、
+/// 输入框长高）时，把视口下沿重新钉在内容里的同一处，输入框与消息的相对位置保持不变。
+///
+/// 系统默认的 RangeMaintainingScrollPhysics 只在偏移越界时才纠正，停在底部也照样保留
+/// 原偏移：键盘一弹出来，视口被顶矮，最新几条消息就被压到输入框下面，用户得自己再滚
+/// 一下。
+///
+/// 这里按「旧下沿在内容里的位置」直接算出新偏移，而不是在现有偏移上累加高度差：惰性
+/// 列表一次布局会跑好几轮 correctForNewDimensions（每轮的旧度量都是同一份），累加会被
+/// 成倍放大。锚点法每轮都算出同一个目标值，天然幂等。
+class _ComposerFollowingScrollPhysics extends ScrollPhysics {
+  const _ComposerFollowingScrollPhysics({super.parent});
+
+  @override
+  _ComposerFollowingScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _ComposerFollowingScrollPhysics(parent: buildParent(ancestor));
+
+  @override
+  double adjustPositionForNewDimensions({
+    required ScrollMetrics oldPosition,
+    required ScrollMetrics newPosition,
+    required bool isScrolling,
+    required double velocity,
+  }) {
+    final corrected = super.adjustPositionForNewDimensions(
+      oldPosition: oldPosition,
+      newPosition: newPosition,
+      isScrolling: isScrolling,
+      velocity: velocity,
+    );
+    // 视口下沿在内容坐标里的位置：旧的那一处就是新视口下沿要守住的位置。
+    final anchor = oldPosition.extentBefore + oldPosition.viewportDimension;
+    final shift =
+        anchor - (newPosition.extentBefore + newPosition.viewportDimension);
+    if (shift == 0) return corrected;
+    final shifted = corrected + shift;
+    // 内容比视口还短时没有可滚动的余量，只能夹回合法范围，否则会被推出边界。
+    if (newPosition.minScrollExtent.isFinite &&
+        newPosition.maxScrollExtent.isFinite) {
+      return shifted.clamp(
+          newPosition.minScrollExtent, newPosition.maxScrollExtent);
+    }
+    return shifted;
   }
 }
 
@@ -2968,6 +3040,13 @@ class _HostEntryGateState extends State<HostEntryGate> {
                         )
                       : const Icon(Icons.admin_panel_settings_outlined, size: 18),
                   label: Text(busy ? '正在进入' : '确认进入管理界面'),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                // 误入主持端时的退路：直接登出，换玩家身份重新用群登录码进来。
+                OutlinedButton.icon(
+                  onPressed: busy ? null : () => confirmLogout(context, store),
+                  icon: const Icon(Icons.logout, size: 18),
+                  label: const Text('退出登录（改用玩家身份）'),
                 ),
               ],
             ),

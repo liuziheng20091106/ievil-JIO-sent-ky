@@ -152,8 +152,12 @@ Android 玩家端收到新的定向对局邀请时额外发一条系统通知（
 - 内置管理员的等级来自配置，界面既不能改也不能取消（409）；4 级看不到也管不了比自己高的授权。授权页显示 QQ 号以便区分同名账号，其余名单仍不含 QQ 号。
 - 一个服务实例仍只主持一局，但持主持授权（或内置管理员）的账号不止一个，所以建立对局时把主持身份写进对局状态（账号 id + QQ 昵称快照，字段 host）：对局内一律显示「主持人(昵称)」，玩家分得清当前主持的是哪个账号。
 - 主持人不是参与身份，所以对局内的「主持人」是固定 id host：频道成员、私信标题与发给玩家的 channel.create 选项都用本局记录的展示名。
-- 非本局主持人进入管理界面时，POST /api/games/{game_id}/host/enter 会在服务端留档并往公告库写一条全服通告（谁进了谁建立的对局）；同一账号在同一局只通告一次，建局主持人自己进入不通告，没有记录主持身份的旧局不判定。通告只是公开与留痕，不改变主持权限本身。
-- 原生客户端启动或进入对局后不直接展开管理界面，先给一页「进入对局管理界面」的确认；确认要等服务端登记成功才放行，因此通告一定早于主持人看到任何私密内容。
+- 主持授权只说明「有资格主持」：持授权（或内置管理员）的账号进入某一局还要先确认一次。POST /api/games/{game_id}/host/enter 把这个账号记进对局状态（字段 host_entries），服务端从这一刻起才按主持人放行；未确认时任何主持账号拿到的都只是最窄的观察者投影。
+- 未确认进入时拿不到：全席上下牌与 current_card_id、主持人面板（待办/夜间行动/投票/日志/魔典）、本局私聊频道与消息历史、挂在自己名下的私密情报；也执行不了任何命令，禁言、移人、替补、席位代操作、终止对局全部拒绝（403「请先确认进入本局管理界面」），客户端因此也不会显示禁言等房间管理入口。玩家与观战者的可见范围不受影响。
+- 判据只有一处：game.state.host_capable(actor) 读身份上的 host_entered（auth.actor_for_token 每个请求重算），投影（game/views、app/views）、消息可见性（storage）、证物（evidence）、成就佩戴（achievements_api）与命令授权（api.command/room_command/authorized_as_seat）都走它，避免漏掉某条路径。
+- 确认成功时服务端立刻把升级后的完整主持投影推给这一局的连接，所以原生客户端确认后无需刷新；网页端没有独立确认页，主持人在网页上打开对局即视为确认进入。
+- 不是建立这一局的主持人进入时，另外往公告库写一条全服通告（谁进了谁建立的对局）；同一账号在同一局只发一次，建局主持人自己进入不通告，没有记录主持身份的旧局不做越权判定。
+- 原生客户端启动或进入对局后不直接展开管理界面，先给一页「进入对局管理界面」的确认；确认要等服务端登记成功才放行，所以通告与放行一定早于主持人看到任何私密内容。
 - 主持人与玩家共用同一个 QQ 账号，成就（含佩戴）本来就是账号级的：对局内主持人头像旁也显示佩戴徽章，点开头像能看同一个账号的成就摘要。
 
 四、玩家页面与聊天
@@ -397,11 +401,11 @@ WebSocket使用 sync、state、message、ping 消息，客户端回复pong。持
 
 5. 成就系统
 
-成就由主持人授权，所有成就都可以自定义：名称（不超过24字）、内容（不超过200字）、稀有度1-10（数字越大越稀有，客户端按档位取十种不同的底色）。新建、修改、删除定义，以及给谁授权、撤销哪条授权，都只有主持人令牌能做；玩家只能读自己的成就并佩戴其中一个，且只能佩戴自己名下的记录——这些边界在服务端判定，界面隐藏不能代替授权。
+成就由主持人授权，所有成就都可以自定义：名称（不超过24字）、内容（不超过200字）、稀有度1-10（数字越大越稀有，客户端按档位取十种不同的底色）。新建、修改、删除定义，以及给谁授权、撤销哪条授权，都只有主持人令牌能做；玩家只能读公开的成就目录（全部定义）与自己名下的授权记录，并且只能佩戴自己名下的记录——这些边界在服务端判定，界面隐藏不能代替授权。
 
 删除定义会连同授权一起删除并清空对应佩戴（界面先提示已授予多少人），撤销单条授权同样清空佩戴；同一玩家同一个成就只记一次，重复授权返回冲突。玩家列表取自成就库的 players 表：以玩家身份参局或获得过成就的账号才在其中，按最近一次参赛时间倒序、从未参赛的排在最后（观战不计入参赛）。头像摘要是公开展示数据（总成就数 + 最稀有的5个），任何已登录身份可读；对局内的佩戴信息只发给该局的主持人、参与者与观战者。
 
-界面上：大厅一张卡片进入「我的成就」（玩家）或「成就管理」（主持人，分成就定义与玩家授权两页）；对局内玩家发言时昵称右边显示其佩戴的成就（底色即稀有度颜色），点击玩家头像在快捷菜单下方展开该玩家的成就摘要。
+界面上：大厅一张卡片进入「我的成就」（玩家）或「成就管理」（主持人，分成就定义与玩家授权两页）；「我的成就」在自己获得的成就下方还有一份「成就一览」，把服务器上的全部成就都列出来——没获得的用淡色徽章标「未获得」，已获得的一行可以直接佩戴；对局内玩家发言时昵称右边显示其佩戴的成就（底色即稀有度颜色），点击玩家头像在快捷菜单下方展开该玩家的成就摘要。
 
 6. 公告
 
@@ -443,7 +447,7 @@ POST /api/games/{game_id}/messages            channel_id、text；返回发送�
 GET  /api/games/{game_id}/messages            按游标分页读取获准记录，支持 scope 筛选
 POST /api/games/{game_id}/evidence            提交文本或图片证物；私信锁定或观战身份一律拒绝
 GET  /api/games/{game_id}/evidence/{id}       检查权限后返回材料或图片
-GET  /api/achievements/catalog                成就目录：名称、内容、稀有度与已授予人数
+GET  /api/achievements/catalog                成就目录：名称、内容、稀有度与已授予人数（任何已登录身份）
 POST /api/achievements/defs                   主持人新建成就定义
 POST /api/achievements/defs/{id}              主持人修改成就定义
 DELETE /api/achievements/defs/{id}            主持人删除定义（连同授权，返回移除条数）
@@ -538,7 +542,7 @@ QQ登录：复制 gateway\.env.example 为 gateway\.env 并填写 NapCat 地址�
 可用环境变量GAME_DATA_DIR指定独立数据目录，联调曾使用data/verification，交付时清除此测试目录。退出浏览器不会结束对局；须由主持人结算或终止当前局后才能创建下一局。
 对局结束后数据仍可只读查看，直到建立下一局为止：建立新对局会自动清除上一局对局库的全部数据（含结算与聊天），主持人也可在管理面板点「一键初始化」立即清空；两种方式都保留QQ账号、玩家登录令牌与主持人登录，下一局重新开放加入即可参局。
 前端开发：保持后端8000端口运行，在frontend目录执行npm run dev；正式使用前执行npm run build。开发服务器不是第二套游戏后端。重新构建后无需让玩家清缓存：index.html 每次回源校验，带哈希的资源长期缓存。
-发行版本标签：后端 /api/health 下发 GAME_CLIENT_LATEST 与 GAME_CLIENT_MINIMUM（三段数字，未配置则不下发）；客户端把内置的 ReleaseMonitor.currentVersion 与之比较，低于 latest 顶部横幅提示可更新，低于 minimum 横幅要求必须更新后才能继续使用。这两条提示与安卓保活提示都只在大厅显示，对局中不打断牌局；可更新与保活提示能按「知道了 / 忽略」关掉，关闭结果记在 shared_preferences（版本提示按被关掉的 latest 标签记忆，服务端下发更新的版本才重新提示）。发版流程是先把 client/lib/src/release.dart 的 currentVersion 与 client/pubspec.yaml 的版本名同步提高，再把 GAME_CLIENT_LATEST / GAME_CLIENT_MINIMUM 改成新版本（部署环境的标签已随 1.0.6 定为 latest=1.0.6、minimum=1.0.6，即 1.0.6 之前的客户端一律强制更新——1.0.6 起规则补丁改了结算口径，不允许旧客户端混用；要放过某个旧版本就把 minimum 留在那个版本）；安卓 versionCode/versionName 不随之变动，更新与否完全由这两个环境变量与内置版本号决定。
+发行版本标签：后端 /api/health 下发 GAME_CLIENT_LATEST 与 GAME_CLIENT_MINIMUM（三段数字，未配置则不下发）；客户端把内置的 ReleaseMonitor.currentVersion 与之比较，低于 latest 顶部横幅提示可更新，低于 minimum 横幅要求必须更新后才能继续使用。这两条提示与安卓保活提示都只在大厅显示，对局中不打断牌局；可更新与保活提示能按「知道了 / 忽略」关掉，关闭结果记在 shared_preferences（版本提示按被关掉的 latest 标签记忆，服务端下发更新的版本才重新提示）。发版流程是先把 client/lib/src/release.dart 的 currentVersion 与 client/pubspec.yaml 的版本名同步提高，再把 GAME_CLIENT_LATEST / GAME_CLIENT_MINIMUM 改成新版本（部署环境的标签已随 1.0.7 定为 latest=1.0.7、minimum=1.0.7，即 1.0.7 之前的客户端一律强制更新——1.0.6 起规则补丁改了结算口径，不允许旧客户端混用；要放过某个旧版本就把 minimum 留在那个版本）；安卓 versionCode/versionName 不随之变动，更新与否完全由这两个环境变量与内置版本号决定。
 原生客户端：在client目录执行flutter pub get、flutter analyze、flutter test；产物用flutter build apk --debug或flutter build windows --debug。Android 构建需要 Android SDK（platform 与 build-tools 36）与 JDK 21；Flutter 3.47 的模板用 AGP 9.1，因此 Gradle wrapper 固定为 9.3.1。Windows 构建需要 Visual Studio 的 C++ 桌面工作负载与 ATL 组件（flutter_secure_storage 依赖 atlstr.h）。
 检查依赖：.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 规则/访问检查：.venv\Scripts\python.exe -m unittest discover -s checks -v

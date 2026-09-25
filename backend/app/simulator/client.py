@@ -214,6 +214,16 @@ class ProtocolClient:
         self.view = payload
         return payload
 
+    def enter_host_admin(self):
+        """主持人确认进入本局管理界面：服务端从这一步起才下发主持级数据与操作。
+
+        真实客户端在管理页确认后才调用它；模拟器走同一条路径，否则拿到的只是
+        最窄的观察者投影（没有上下牌、没有主持人行动）。
+        """
+        return self.call(
+            "POST", f"/api/games/{self.game_id}/host/enter", action="host_enter"
+        )
+
     def open_join(self, open=True):
         """开放/关闭主动参局。
 

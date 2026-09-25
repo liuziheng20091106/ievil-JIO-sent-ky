@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .game.catalog import night_half
+from .game.state import host_capable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("GAME_DATA_DIR", PROJECT_ROOT / "data")).resolve()
@@ -152,6 +153,18 @@ def current_game_id(db):
     return row["id"] if row else None
 
 
+def host_entered(db, game_id, account_id):
+    """该账号是否已确认进入这一局的管理界面。
+
+    未确认的主持人只拿到最窄的观察者投影（主持级判据见
+    :func:`backend.app.game.state.host_capable`），所以每个请求都要核一次。
+    """
+    if not game_id or not account_id:
+        return False
+    game = load_game(db, game_id)
+    return bool(game) and account_id in set(game.get("host_entries") or [])
+
+
 def save_game(db, game):
     db.execute(
         "UPDATE games SET state=?,version=?,status=? WHERE id=?",
@@ -239,7 +252,7 @@ def add_events(db, game_id, events):
 
 def visible_message(row, actor):
     return (
-        actor["kind"] == "host"
+        host_capable(actor)
         or row["audience"] is None
         or bool(set(actor["access_ids"]).intersection(json.loads(row["audience"])))
     )
@@ -287,7 +300,7 @@ def channel_members(row):
 
 
 def channel_visible(row, actor):
-    return actor["kind"] == "host" or actor["id"] in channel_members(row)
+    return host_capable(actor) or actor["id"] in channel_members(row)
 
 
 def channel_send_reason(db, game, actor, channel_id):
@@ -296,13 +309,13 @@ def channel_send_reason(db, game, actor, channel_id):
     participant = db.execute("SELECT muted FROM participants WHERE id=?", (actor["id"],)).fetchone()
     if participant and participant["muted"]:
         return "主持人已将你禁言"
-    if actor["kind"] != "host" and night_half(game) and channel_id not in {"public", "information"}:
+    if not host_capable(actor) and night_half(game) and channel_id not in {"public", "information"}:
         # 夜间只允许与主持人私聊：不含主持人的频道（旧数据或异常路径遗留）一律不能再发言。
         row = db.execute("SELECT participant_ids FROM channels WHERE id=?", (channel_id,)).fetchone()
         if row and "host" not in json.loads(row["participant_ids"]):
             return "夜间只能与主持人私聊"
     active = active_private_channel(db, game, actor["id"])
-    if actor["kind"] != "host" and active and channel_id != active["id"]:
+    if not host_capable(actor) and active and channel_id != active["id"]:
         return "私信期间只能在当前私信频道发言"
     return ""
 
@@ -314,13 +327,17 @@ def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, sc
         placeholders = ",".join("?" for _ in channel_ids)
         clauses.append(f"m.kind='chat' AND m.channel_id IN ({placeholders})")
         args.extend(channel_ids)
-    elif actor["kind"] != "host":
+    elif not host_capable(actor):
         ids = actor["access_ids"]
-        placeholders = ",".join("?" for _ in ids)
-        clauses.append(
-            f"(m.audience IS NULL OR EXISTS (SELECT 1 FROM json_each(m.audience) WHERE value IN ({placeholders})))"
-        )
-        args.extend(ids)
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            clauses.append(
+                f"(m.audience IS NULL OR EXISTS (SELECT 1 FROM json_each(m.audience) WHERE value IN ({placeholders})))"
+            )
+            args.extend(ids)
+        else:
+            # 访问名单为空的身份（例如还没确认进入本局的主持人）只能看公开消息。
+            clauses.append("m.audience IS NULL")
     if before is not None:
         clauses.append("m.id < ?")
         args.append(before)

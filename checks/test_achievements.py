@@ -49,6 +49,9 @@ class AchievementFlow(unittest.TestCase):
         self.created.raise_for_status()
         self.game_id = self.created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
+        # 与真实客户端一致：主持人先确认进入管理界面，服务端才下发主持级数据与操作。
+        entered = self.client.post(self.root + "/host/enter", headers=self.host)
+        entered.raise_for_status()
 
     def host_login(self, qq_id):
         challenge = self.client.post("/api/native/auth/host/challenges").json()

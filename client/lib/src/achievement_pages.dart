@@ -25,6 +25,7 @@ class MyAchievementsPage extends StatefulWidget {
 
 class _MyAchievementsPageState extends State<MyAchievementsPage> {
   List<AchievementGrant> grants = const [];
+  List<AchievementDef> catalog = const [];
   EquippedAchievement? equipped;
   String? error;
   bool loading = true;
@@ -48,10 +49,13 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
     setState(() => loading = true);
     try {
       final result = await api.myAchievements();
+      // 成就一览要列出全部定义，所以顺带拉一次公开目录（任何登录身份可读）。
+      final definitions = await api.achievementCatalog();
       if (!mounted) return;
       setState(() {
         grants = result.achievements;
         equipped = result.equipped;
+        catalog = definitions;
         error = null;
         loading = false;
       });
@@ -97,6 +101,8 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
   @override
   Widget build(BuildContext context) {
     final mine = equipped;
+    // 一览里每行按成就定义找自己名下的授权：有就是已获得，可佩戴。
+    final owned = {for (final grant in grants) grant.achievementId: grant};
     return Scaffold(
       appBar: AppBar(
         title: const Text('我的成就'),
@@ -206,6 +212,30 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
                       busy: busyGrantId != null,
                       onEquip: () => equip(grant.id),
                     ),
+                  SectionTitle(
+                    '成就一览',
+                    subtitle: catalog.isEmpty
+                        ? '主持人还没有创建成就定义。'
+                        : '全部 ${catalog.length} 个成就；你已经获得 ${owned.length} 个，'
+                            '淡色的是还没有获得的。',
+                  ),
+                  if (catalog.isEmpty && error == null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
+                      child: EmptyState(
+                        icon: Icons.emoji_events_outlined,
+                        title: '还没有成就定义',
+                        detail: '主持人在「成就管理」里新建成就后，这里会列出全部成就。',
+                      ),
+                    ),
+                  for (final definition in catalog)
+                    _AchievementCatalogRow(
+                      definition: definition,
+                      grant: owned[definition.id],
+                      equippedGrantId: equipped?.id,
+                      busy: busyGrantId != null,
+                      onEquip: () => equip(owned[definition.id]!.id),
+                    ),
                 ],
               ),
       ),
@@ -287,6 +317,109 @@ class _AchievementCard extends StatelessWidget {
               style:
                   TextStyle(fontSize: 11, color: context.palette.textTertiary),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「成就一览」里的一行：全部成就都列出来，没获得的用淡色徽章标出来。
+class _AchievementCatalogRow extends StatelessWidget {
+  const _AchievementCatalogRow({
+    required this.definition,
+    required this.grant,
+    required this.equippedGrantId,
+    required this.busy,
+    required this.onEquip,
+  });
+
+  final AchievementDef definition;
+
+  /// 自己名下的授权记录；为空表示还没获得这个成就。
+  final AchievementGrant? grant;
+
+  /// 当前佩戴的授权 id：只在 [grant] 存在且对得上时才算这一行佩戴中。
+  final String? equippedGrantId;
+  final bool busy;
+  final VoidCallback onEquip;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final rarity = AchievementRarity.of(definition.rarity);
+    final owned = grant != null;
+    final equipped = grant?.id == equippedGrantId && owned;
+    return Card(
+      color: owned
+          ? rarity.background.withValues(alpha: equipped ? .16 : .07)
+          : palette.surfaceMuted,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        side: BorderSide(
+          color: equipped ? rarity.background : palette.border,
+          width: equipped ? 1.4 : 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.md,
+          AppSpacing.md,
+          AppSpacing.md,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Flexible(
+                  child: Opacity(
+                    // 未获得的成就不给彩色徽章，用淡色表示「还差这一个」。
+                    opacity: owned ? 1 : .45,
+                    child: AchievementBadge(
+                      name: definition.name,
+                      rarity: definition.rarity,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  '稀有度 ${definition.rarity}',
+                  style: TextStyle(fontSize: 11, color: palette.textTertiary),
+                ),
+                const Spacer(),
+                if (equipped)
+                  Tag(
+                    '已佩戴',
+                    color: rarity.background,
+                    background: rarity.background.withValues(alpha: .16),
+                  )
+                else if (owned)
+                  TextButton(
+                    onPressed: busy ? null : onEquip,
+                    child: const Text('佩戴'),
+                  )
+                else
+                  Tag(
+                    '未获得',
+                    color: palette.textTertiary,
+                    background: palette.surfaceStrong,
+                  ),
+              ],
+            ),
+            // 已获得的详情在上面那条里（带着获得时间），这里只补未获得的内容。
+            if (!owned) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                definition.detail,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: palette.textTertiary,
+                ),
+              ),
+            ],
           ],
         ),
       ),

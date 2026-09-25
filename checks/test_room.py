@@ -48,6 +48,14 @@ class BackendFlow(unittest.TestCase):
         created.raise_for_status()
         self.game_id = created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
+        # 主持人同真实客户端一样先确认进入管理界面：服务端从这一步起才下发
+        # 主持级数据与操作（未确认时只有最窄的观察者投影）。
+        self.enter_host_admin(self.host)
+
+    def enter_host_admin(self, headers):
+        response = self.client.post(self.root + "/host/enter", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
 
     def host_login(self, qq_id):
         """主持人入口的 QQ 登录：与玩家共用登录码，只是换成主持人挑战端点。"""
@@ -222,6 +230,106 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(rejoined.status_code, 200, rejoined.text)
         self.assertEqual(rejoined.json()["actor"]["id"], spectator_actor["id"])
         self.assertIsNone(rejoined.json()["actor"]["seat_id"])
+
+    def test_unconfirmed_host_sees_no_cards_and_no_private_history(self):
+        """未确认进入管理界面的主持人只有观察者投影：没有全席双牌，也读不到本局私聊。
+
+        这是「确认进入」真正的边界：客户端上的确认页不能只是遮罩，服务端必须同时
+        收回牌面、主持人面板、私聊历史与管理操作。
+        """
+        self.open_join()
+        players = [self.join(str(13001 + index)) for index in range(7)]
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        dealt = self.client.get(self.root + "/state", headers=self.host).json()
+        self.assertTrue(all(seat.get("cards") for seat in dealt["seats"]), "七人准备后应已发牌")
+
+        # 主持人与 1 号席的私聊：未确认进入的主持人连这段历史都不该读到。
+        created = self.command(
+            self.host, "channel.create", {"participant_ids": [players[0][1]["id"]]}
+        ).json()
+        channel = next(item for item in created["channels"] if item["id"].startswith("private:"))
+        self.assertEqual(channel["status"], "active")
+        self.client.post(
+            self.root + "/messages",
+            headers=self.host,
+            json={"channel_id": channel["id"], "text": "私下确认一件事"},
+        ).raise_for_status()
+
+        # 第二个主持账号（5 级）：登录后先不确认进入。
+        _, other_account = self.account("13099")
+        granted = self.client.post(
+            f"/api/hosts/{other_account['account_id']}", headers=self.host, json={"level": 5}
+        )
+        self.assertEqual(granted.status_code, 200, granted.text)
+        other, _ = self.host_login("13099")
+
+        view = self.client.get(self.root + "/state", headers=other).json()
+        self.assertTrue(view["host_entry_required"])
+        self.assertNotIn("host", view)
+        self.assertTrue(all("cards" not in seat for seat in view["seats"]))
+        self.assertTrue(all("current_card_id" not in seat for seat in view["seats"]))
+        self.assertEqual(view["actions"], [], "未确认进入不该有任何行动入口")
+        for scope in ("all", "private", "host"):
+            page = self.client.get(
+                self.root + "/messages", headers=other, params={"scope": scope}
+            ).json()
+            self.assertFalse(
+                any("私下确认一件事" in item["text"] for item in page["messages"]),
+                f"未确认进入的主持人不该读到本局私聊（scope={scope}）",
+            )
+        # 也不能在别人的私聊里发言，或执行房间管理（禁言等）。
+        self.assertEqual(
+            self.client.post(
+                self.root + "/messages",
+                headers=other,
+                json={"channel_id": channel["id"], "text": "偷看"},
+            ).status_code,
+            403,
+        )
+        state = self.client.get(self.root + "/state", headers=other).json()
+        self.assertEqual(
+            self.client.post(
+                self.root + "/commands",
+                headers=other,
+                json={
+                    "expected_version": state["version"],
+                    "action": "room.mute",
+                    "payload": {"participant_id": players[0][1]["id"], "muted": True},
+                },
+            ).status_code,
+            403,
+        )
+
+        # 确认进入后服务端立刻重推状态：原生客户端与网页端都不必再手动刷新。
+        with self.client.websocket_connect("/api/live", headers=other) as socket:
+            sync = socket.receive_json()
+            self.assertEqual(sync["type"], "sync")
+            self.assertNotIn("host", sync["state"])
+            pushed = self.client.post(self.root + "/host/enter", headers=other)
+            self.assertEqual(pushed.status_code, 200, pushed.text)
+            frame = None
+            # 连接建立时还会推一份未确认的投影，这里要等到确认之后的那一份。
+            for _ in range(10):
+                candidate = socket.receive_json()
+                if candidate["type"] != "state" or "host" not in candidate["state"]:
+                    continue
+                frame = candidate["state"]
+                break
+            self.assertIsNotNone(frame, "确认进入后要推送升级后的状态")
+            self.assertTrue(all(seat.get("cards") for seat in frame["seats"]))
+
+        # 确认进入之后，同一批请求就拿到牌面、主持人面板与那段私聊。
+        entered = self.client.post(self.root + "/host/enter", headers=other)
+        self.assertEqual(entered.status_code, 200, entered.text)
+        after = self.client.get(self.root + "/state", headers=other).json()
+        self.assertFalse(after["host_entry_required"])
+        self.assertIn("host", after)
+        self.assertTrue(all(seat.get("cards") for seat in after["seats"]))
+        page = self.client.get(
+            self.root + "/messages", headers=other, params={"scope": "private"}
+        ).json()
+        self.assertTrue(any("私下确认一件事" in item["text"] for item in page["messages"]))
 
     def test_private_channel_lifecycle_locks_actions_and_history(self):
         self.open_join()

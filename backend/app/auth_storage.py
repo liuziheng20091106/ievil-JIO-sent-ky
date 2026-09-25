@@ -11,6 +11,10 @@ from . import storage
 TOKEN_DAYS = 180
 CHALLENGE_MINUTES = 5
 
+# 过期登录码的宽限期：登录码本身只活 5 分钟，但「已经扫完码、客户端晚一点才来取令牌」
+# 还会用到它，所以过期后先留一天再清，别让晚到的轮询拿到 410。
+CHALLENGE_GRACE_HOURS = 24
+
 # 主持等级：1 级只主持 1 局，5 级是系统管理员。等级本身由服务端判定，
 # 客户端只按等级显示入口。
 HOST_LEVEL_MIN = 1
@@ -94,6 +98,27 @@ def initialize():
                 "ALTER TABLE login_challenges ADD COLUMN client_kind TEXT NOT NULL DEFAULT 'web'"
             )
         db.commit()
+    cleanup()
+
+
+def cleanup():
+    """清掉不可能再被用到的登录码与令牌，返回各自删掉的行数。
+
+    登录挑战和令牌从不失效删除，只有轮询到的那一条会顺手标成过期，所以时间一长
+    库里全是死行。启动时清一次，只删三类确定无用的记录：已经换出过令牌的登录码
+    （consumed_at 已置位，再轮询本来也只会得到 410）、过期超过宽限期的登录码、
+    以及已撤销或已过期的令牌。未过期的令牌与宽限期内的登录码一律保留。
+    """
+    cutoff = (now() - timedelta(hours=CHALLENGE_GRACE_HOURS)).isoformat()
+    with transaction() as db:
+        challenges = db.execute(
+            "DELETE FROM login_challenges WHERE consumed_at IS NOT NULL OR expires_at<=?",
+            (cutoff,),
+        ).rowcount
+        tokens = db.execute(
+            "DELETE FROM login_tokens WHERE valid=0 OR expires_at<=?", (now_text(),)
+        ).rowcount
+    return {"challenges": challenges, "tokens": tokens}
 
 
 def issue_token(db, kind, account_id=None):

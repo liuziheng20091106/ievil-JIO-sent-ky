@@ -180,8 +180,10 @@ Map<String, dynamic> playerViewJson() => {
       'chat_reason': '',
     };
 
-Map<String, dynamic> hostViewJson() {
+Map<String, dynamic> hostViewJson({bool hostEntryRequired = false}) {
   final view = playerViewJson();
+  // 服务端说这个账号还没确认进入本局管理界面：客户端据此显示确认页。
+  view['host_entry_required'] = hostEntryRequired;
   // 主持人视角能看到全席双牌；夹具必须补上，否则选择器只能显示「?」。
   view['seats'] = [
     for (final seat in (view['seats'] as List).cast<Map<String, dynamic>>())
@@ -384,6 +386,22 @@ List<GameMessage> messagesJson() => [
       }),
     ];
 
+/// 一长串公屏历史：把消息列表撑到真的可以滚动，
+/// 用来验证「软键盘弹出时消息跟着输入框一起上滑」。
+List<GameMessage> longChatJson([int count = 30]) => [
+      for (var index = 0; index < count; index++)
+        GameMessage.fromJson({
+          'id': 100 + index,
+          'kind': 'chat',
+          'sender_id': 'p2',
+          'sender_name': 'kiwi',
+          'avatar_role_id': 'hiro',
+          'channel_id': 'public',
+          'text': '第 ${100 + index} 条公屏讨论内容',
+          'created_at': stampAgo(index % 5),
+        }),
+    ];
+
 Actor actorJson({required bool host}) => Actor.fromJson(
       host
           ? {
@@ -430,14 +448,19 @@ List<RoleInfo> catalogRoles() => [
       }),
     ];
 
-Future<GameStore> previewStore({required bool host}) async {
+Future<GameStore> previewStore({
+  required bool host,
+  bool hostEntryRequired = false,
+}) async {
   SharedPreferences.setMockInitialValues({});
   final preferences = await SharedPreferences.getInstance();
   return GameStore.forPreview(
     preferences: preferences,
     endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
     actor: actorJson(host: host),
-    view: GameView.fromJson(host ? hostViewJson() : playerViewJson()),
+    view: GameView.fromJson(
+      host ? hostViewJson(hostEntryRequired: hostEntryRequired) : playerViewJson(),
+    ),
     gameId: 'game-demo',
     messages: messagesJson(),
     roles: catalogRoles(),
@@ -582,9 +605,9 @@ void main() {
 
   testWidgets('主持人进管理界面前先确认', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
-      final store = await previewStore(host: true);
+      // 服务端说这个账号还没确认进入本局：客户端显示确认页。
+      final store = await previewStore(host: true, hostEntryRequired: true);
       await pumpAt(tester, store, const Size(480, 1200));
-      // 启动/进局后停在「对局」页：不自动进管理界面，等主持人自己确认。
       expect(store.hostAdminEntered, isFalse);
 
       await tester.tap(find.text('管理'));
@@ -592,6 +615,8 @@ void main() {
       expect(find.byType(HostEntryGate), findsOneWidget);
       expect(find.byType(HostManagementPage), findsNothing);
       expect(find.text('确认进入管理界面'), findsOneWidget);
+      // 误入主持端时能直接退出登录去换玩家身份。
+      expect(find.text('退出登录（改用玩家身份）'), findsOneWidget);
       await expectLater(
         find.byType(GameShell),
         matchesGoldenFile('goldens/host_entry_gate.png'),
@@ -604,6 +629,25 @@ void main() {
       expect(find.byType(HostManagementPage), findsNothing);
       expect(find.byType(HostEntryGate), findsOneWidget);
     });
+  });
+
+  test('确认状态以服务端为准：本局确认过就不再拦', () async {
+    final store = await previewStore(host: true);
+    // 只验证状态推导，不触发佩戴信息补拉等网络请求。
+    store.api = null;
+    store.applyView(GameView.fromJson(hostViewJson(hostEntryRequired: true)));
+    expect(store.hostAdminEntered, isFalse, reason: '服务端要求确认时显示确认页');
+
+    // 重新打开应用/换令牌都算：服务端按账号+对局记，确认过就不再要求。
+    store.applyView(GameView.fromJson(hostViewJson()));
+    expect(store.hostAdminEntered, isTrue, reason: '本局确认过就直接进管理页');
+
+    // 换成全新对局则重新要求确认。
+    store.applyView(GameView.fromJson({
+      ...hostViewJson(hostEntryRequired: true),
+      'id': 'game-next',
+    }));
+    expect(store.hostAdminEntered, isFalse);
   });
 
   testWidgets('软键盘打开时对局页只留输入区', (tester) async {
@@ -652,6 +696,64 @@ void main() {
       tester.view.viewInsets = FakeViewPadding.zero;
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('打了一半的草稿'), findsOneWidget, reason: '收键盘不能清草稿');
+    });
+  });
+
+  // 回归：软键盘弹出时消息列表要跟着输入框一起上滑，两者的相对位置保持不变。
+  // 系统默认的 RangeMaintainingScrollPhysics 只在偏移越界时才纠正，视口被键盘顶矮
+  // 也会保留原偏移：底部的消息被压到输入框下面，边打字边看上下文就得自己再滚一下。
+  testWidgets('软键盘弹出时消息列表跟着输入框同步上滑', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      // 进局前就有一长串历史，消息列表真的可以滚动。
+      store.mergeMessagesForTest(longChatJson());
+      await pumpAt(tester, store, const Size(420, 880));
+
+      final field = find.byType(TextField);
+      // 挑一条弹出键盘前后都在视口里的消息：位置变化要与输入框完全一致。
+      final bubble = find.text('系统信息：你已获得一次额外的信息授权。');
+      final fieldBefore = tester.getTopLeft(field).dy;
+      final bubbleBefore = tester.getTopLeft(bubble).dy;
+
+      // 模拟软键盘弹出：物理像素与逻辑像素在 pumpAt 里是 1:1。
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final movedField = fieldBefore - tester.getTopLeft(field).dy;
+      final movedBubble = bubbleBefore - tester.getTopLeft(bubble).dy;
+      expect(movedField, greaterThan(0), reason: '输入框要跟着键盘上滑');
+      expect(movedBubble, closeTo(movedField, 1),
+          reason: '消息要跟输入框同步上滑，相对位置不变');
+
+      // 收起键盘同样同步回落，一来一回不留偏移。
+      tester.view.viewInsets = FakeViewPadding.zero;
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.getTopLeft(field).dy, closeTo(fieldBefore, 1));
+      expect(tester.getTopLeft(bubble).dy, closeTo(bubbleBefore, 1));
+    });
+  });
+
+  // 同上，但列表停在最底部——「看着最新消息打字」才是真机上的常见位置：
+  // 键盘弹出后最新一条必须还贴在输入框上方。
+  testWidgets('软键盘弹出后最新消息仍贴在输入框上方', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      store.mergeMessagesForTest(longChatJson());
+      await pumpAt(tester, store, const Size(420, 880));
+      await tester.drag(find.byType(MessageBubble).first, const Offset(0, -4000));
+      await tester.pumpAndSettle();
+
+      final field = find.byType(TextField);
+      final latest = find.byType(MessageBubble).last;
+      double gap() =>
+          tester.getTopLeft(field).dy - tester.getBottomLeft(latest).dy;
+      final before = gap();
+      expect(before, greaterThan(0), reason: '最新消息停在输入框上方');
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(gap(), closeTo(before, 1), reason: '键盘弹出后最新消息仍贴在输入框上方');
     });
   });
 

@@ -966,6 +966,12 @@ class GameStore extends ChangeNotifier {
   void applyView(GameView next) => _applyView(next);
 
   void _applyView(GameView next) {
+    // 「确认进入管理界面」一律以服务端为准：本局这个账号只要确认过一次
+    // （换令牌、重新登录、重开应用都算），服务端就不再要求确认，客户端直接展开
+    // 管理页；只有服务端明确要求时才显示确认页，本地不记这件事。
+    if (actor?.isHost == true) {
+      hostAdminEntered = !next.hostEntryRequired;
+    }
     final actionKeys = next.allActions.map((item) => item.protocolKey).toSet();
     final actionPreference = _preferenceKey('actions_seen');
     if (_actionBaseline == null) {

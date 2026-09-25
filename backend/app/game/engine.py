@@ -49,6 +49,8 @@ from .state import (
     chat_event,
     check_winner,
     clear_seat_actions,
+    host_capable,
+    host_view_actor,
     current,
     deal_cards,
     duel_cards,
@@ -82,10 +84,21 @@ from .state import (
 def validate_command(game, actor, action, payload):
     require(isinstance(action, str) and isinstance(payload, dict), "操作格式无效")
     require(actor.get("kind") in {"host", "player", "spectator"}, "没有操作权限")
-    require(actor.get("kind") == "host" or actor.get("game_id") == game["id"], "没有本局操作权限")
+    # 主持人要先确认进入本局管理界面，服务端才按主持人放行（见 state.host_capable）；
+    # 未确认时连这里列出的行动表都是空的，命令无从通过。
+    require(
+        host_capable(actor)
+        if actor.get("kind") == "host"
+        else actor.get("game_id") == game["id"],
+        "没有本局操作权限",
+    )
     choices = [
         a
-        for a in actions_for(game, actor, puppet_controlled=bool(actor.get("puppet_controlled")))
+        for a in actions_for(
+            game,
+            host_view_actor(actor),
+            puppet_controlled=bool(actor.get("puppet_controlled")),
+        )
         if a["id"] == action and all(payload.get(k) == v for k, v in a["payload"].items())
     ]
     require(bool(choices), "此操作不可用，请刷新当前状态")

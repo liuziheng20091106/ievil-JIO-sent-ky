@@ -13,7 +13,9 @@ from .state import (
     duel_cards,
     eligible_voters,
     fallen_upper_role,
+    host_capable,
     host_label,
+    host_view_actor,
     pending_nominators,
     owner,
     player_seat,
@@ -292,9 +294,13 @@ def seat_chat(game, own):
 
 
 def game_view(game, actor):
-    host = actor.get("kind") == "host"
+    # 「确认进入管理界面」是服务端的数据放行条件：未确认的主持人在这里只拿到
+    # 最窄的观察者投影——没有全席双牌、没有主持人面板与主持行动，也看不到私聊。
+    host = host_capable(actor)
     spectator = actor.get("kind") == "spectator"
     require(host or actor.get("game_id") == game["id"], "没有本局查看权限")
+    # 未确认进入的主持人按观察者生成行动表（空），避免下发主持与房间管理入口。
+    view_actor = host_view_actor(actor)
     own = player_seat(game, actor) if actor.get("kind") == "player" else None
     own_id = own["id"] if own else None
     seats = []
@@ -334,7 +340,10 @@ def game_view(game, actor):
             entry["cards"] = [card_view(game, game["cards"][cid], host) for cid in s["cards"]]
             entry["current_card_id"] = current(game, s)["id"] if current(game, s) else None
         seats.append(entry)
-    access = set(actor.get("access_ids", [])) | {actor.get("id")}
+    # 未确认进入的主持人不属于本局任何名单：连挂在自己名下的私密情报也不下发。
+    access = set(actor.get("access_ids", []))
+    if not (actor.get("kind") == "host" and not host):
+        access.add(actor.get("id"))
     information = [
         {k: deepcopy(item[k]) for k in ("id", "title", "text", "image_id") if k in item}
         for item in game["information"]
@@ -415,11 +424,16 @@ def game_view(game, actor):
             "current_card_id": current(game, own)["id"] if own and current(game, own) else None,
             "statuses": status_cards(game, own),
         },
-        "actions": actions_for(game, actor),
+        # 未确认进入的主持人不生成任何行动：连房间管理与私信都不给，
+        # 只有「确认进入管理界面」这个接口能推进（见 api.host_enter）。
+        "actions": actions_for(game, view_actor),
         "information": information,
         "public": public,
         "witness": view_witness,
         "result": deepcopy(game["result"]),
+        # 客户端据此显示「进入对局管理界面」的确认页；服务端才是权威，
+        # 确认成功后这次投影会立刻换成完整主持投影。
+        "host_entry_required": actor.get("kind") == "host" and not host,
     }
     if own:
         night = game["night"]

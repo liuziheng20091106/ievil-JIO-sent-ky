@@ -649,6 +649,13 @@ class GameView {
     return value.isEmpty ? '主持人' : value;
   }
 
+  /// 主持人还没确认进入本局管理界面：服务端此时只下发观察者投影，
+  /// 客户端据此显示确认页。判据在服务端（按账号+对局记），所以同一账号
+  /// 重新登录、换令牌或重开应用都不会被再拦一次。
+  bool get hostEntryRequired =>
+      jsonBool(raw['host_entry_required'], 'state.host_entry_required',
+          fallback: false);
+
   /// 当前牌是傀儡的玩家：只读旁观，由魔女梅露露代为行动。
   bool get puppetSpectator =>
       jsonBool(self['puppet_spectator'], 'state.self.puppet_spectator');

@@ -190,6 +190,10 @@ export interface GameView {
   phase: string;
   phase_label: string;
   deadline: number | null;
+  /** 本局主持人的展示名（主持人(昵称)）。 */
+  host_name?: string;
+  /** 主持人还没确认进入本局管理界面：此时只有观察者投影。 */
+  host_entry_required?: boolean;
   seats: Seat[];
   ready_count: number;
   self: {

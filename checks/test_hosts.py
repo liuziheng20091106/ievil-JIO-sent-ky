@@ -8,12 +8,13 @@
 import os
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import storage
+from backend.app import auth_storage, storage
 from backend.app.game import DEFAULT_CODEX
 from backend.app.main import app
 
@@ -283,8 +284,10 @@ class HostFlow(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         game_id = created.json()["id"]
 
-        # 对局还在进行时，1 级主持照常行使主持权。
+        # 对局还在进行时，1 级主持照常行使主持权（先确认进入本局管理界面）。
         self.assertEqual(self.client.get("/api/me", headers=headers).status_code, 200)
+        entered = self.client.post(f"/api/games/{game_id}/host/enter", headers=headers)
+        self.assertEqual(entered.status_code, 200, entered.text)
         ended = self.end_game(headers, game_id)
         self.assertEqual(ended.status_code, 200, ended.text)
 
@@ -350,6 +353,61 @@ class HostFlow(unittest.TestCase):
         # 建局主持人自己进入不算越权，不产生通告。
         mine = self.client.post(f"/api/games/{game_id}/host/enter", headers=self.admin)
         self.assertEqual(mine.json(), {"owner": True, "announced": False, "owner_name": "主持人(主持10001)"})
+
+    def test_unconfirmed_host_has_no_host_data_or_power(self):
+        """未确认进入管理界面前，主持人没有任何主持级数据与管理权（含禁言）。"""
+        created = self.create_game(self.admin)
+        game_id = created.json()["id"]
+        view = self.client.get(f"/api/games/{game_id}/state", headers=self.admin).json()
+        # 确认页需要知道「还没确认」，但拿不到主持人面板、行动与全席双牌。
+        self.assertTrue(view["host_entry_required"])
+        self.assertNotIn("host", view)
+        self.assertEqual(view["actions"], [])
+        self.assertTrue(all("cards" not in seat for seat in view["seats"]))
+
+        def command(action, payload):
+            state = self.client.get(f"/api/games/{game_id}/state", headers=self.admin).json()
+            return self.client.post(
+                f"/api/games/{game_id}/commands",
+                headers=self.admin,
+                json={
+                    "expected_version": state["version"],
+                    "action": action,
+                    "payload": payload,
+                },
+            )
+
+        # 管理权一律拒绝：禁言、移人、推进都不行，连私信入口也没有。
+        for action, payload in (
+            ("room.mute", {"participant_id": "nobody", "muted": True}),
+            ("room.kick", {"participant_id": "nobody"}),
+            ("host.advance", {}),
+        ):
+            refused = command(action, payload)
+            self.assertEqual(refused.status_code, 403, refused.text)
+            self.assertIn("确认进入", refused.json()["detail"])
+        # 席位视角与本局佩戴信息同样不放行。
+        self.assertEqual(
+            self.client.get(
+                f"/api/games/{game_id}/seats/1/view", headers=self.admin
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/achievements/games/{game_id}/equipped", headers=self.admin
+            ).status_code,
+            403,
+        )
+
+        # 确认之后：完整主持投影与管理权一起到位，房间管理入口才出现。
+        entered = self.client.post(f"/api/games/{game_id}/host/enter", headers=self.admin)
+        self.assertEqual(entered.status_code, 200, entered.text)
+        after = self.client.get(f"/api/games/{game_id}/state", headers=self.admin).json()
+        self.assertFalse(after["host_entry_required"])
+        self.assertIn("host", after)
+        ids = {item["id"] for item in after["actions"]}
+        self.assertIn("room.kick", ids, "确认后才有房间管理动作")
 
     def test_level_one_expires_on_reset_too(self):
         self.assertEqual(self.authorize("10003", 1).status_code, 200)
@@ -487,6 +545,83 @@ class AnnouncementFlow(unittest.TestCase):
         empty = self.client.get("/api/lobby", headers=player).json()
         self.assertEqual(empty["announcements"], [])
         self.assertNotEqual(empty["announcements_version"], after["announcements_version"])
+
+
+class SessionCleanup(unittest.TestCase):
+    """登录码与令牌的启动清理：只删确定无用的死行。
+
+    清理一旦多删，正在登录的人会拿到 410、已登录的人会掉线，所以这里守住三条边界：
+    未过期的令牌必须留下、宽限期内（已扫完码但客户端还没来取令牌）的登录码必须留下、
+    已撤销或已过期的记录必须清掉。
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.data_patch = patch.object(storage, "DATA_DIR", Path(self.directory.name))
+        self.data_patch.start()
+        self.addCleanup(self.data_patch.stop)
+        auth_storage.initialize()
+
+    def stamp(self, **delta):
+        return (auth_storage.now() + timedelta(**delta)).isoformat()
+
+    def seed(self):
+        with auth_storage.transaction() as db:
+            for challenge_id, status, expires_at, consumed_at in (
+                ("ch-alive", "pending", self.stamp(minutes=5), None),
+                # 已经完成、刚过 5 分钟有效期：晚到的轮询还要靠它换出令牌。
+                ("ch-late", "completed", self.stamp(minutes=-1), None),
+                ("ch-stale", "pending", self.stamp(days=-2), None),
+                ("ch-done", "completed", self.stamp(days=-1), self.stamp(days=-1)),
+            ):
+                db.execute(
+                    """INSERT INTO login_challenges
+                       (id,code_hash,status,client_kind,expires_at,consumed_at,created_at)
+                       VALUES(?,?,?,'web',?,?,?)""",
+                    (
+                        challenge_id,
+                        "hash-" + challenge_id,
+                        status,
+                        expires_at,
+                        consumed_at,
+                        self.stamp(days=-1),
+                    ),
+                )
+            for token_hash, valid, expires_at in (
+                ("tok-alive", 1, self.stamp(days=1)),
+                ("tok-revoked", 0, self.stamp(days=1)),
+                ("tok-expired", 1, self.stamp(days=-1)),
+            ):
+                db.execute(
+                    """INSERT INTO login_tokens
+                       (token_hash,account_id,kind,expires_at,valid,created_at)
+                       VALUES(?,NULL,'player',?,?,?)""",
+                    (token_hash, expires_at, valid, self.stamp(days=-1)),
+                )
+
+    def remaining(self):
+        with auth_storage.connect() as db:
+            challenges = {row["id"] for row in db.execute("SELECT id FROM login_challenges")}
+            tokens = {row["token_hash"] for row in db.execute("SELECT token_hash FROM login_tokens")}
+        return challenges, tokens
+
+    def test_cleanup_drops_only_dead_sessions(self):
+        self.seed()
+        self.assertEqual(auth_storage.cleanup(), {"challenges": 2, "tokens": 2})
+        challenges, tokens = self.remaining()
+        self.assertEqual(challenges, {"ch-alive", "ch-late"})
+        self.assertEqual(tokens, {"tok-alive"})
+        # 留下的令牌按请求时的校验口径依然有效，删掉的查不回来。
+        self.assertIsNotNone(auth_storage.token_row("tok-alive"))
+        self.assertIsNone(auth_storage.token_row("tok-expired"))
+
+    def test_startup_cleans_without_being_asked(self):
+        self.seed()
+        auth_storage.initialize()
+        challenges, tokens = self.remaining()
+        self.assertEqual(challenges, {"ch-alive", "ch-late"})
+        self.assertEqual(tokens, {"tok-alive"})
 
 
 if __name__ == "__main__":
