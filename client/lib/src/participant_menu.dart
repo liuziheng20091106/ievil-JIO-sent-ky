@@ -436,7 +436,8 @@ Future<void> showAvatarMenu(
       label: '查看角色技能与状态',
       onTap: () => showRoleDetail(context, store, ref),
     ),
-    if (!ref.isHost)
+    // 观战者已收拢进观战频道：观战者点头像不再提供私信入口。
+    if (!ref.isHost && store.actor?.isSpectator != true)
       _MenuEntry(
         icon: Icons.forum_outlined,
         label: '发起私信',

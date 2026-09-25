@@ -415,7 +415,7 @@ class BackendFlow(unittest.TestCase):
         prompt = self.client.get(self.root + "/state", headers=headers[0]).json()[
             "action_prompt"
         ]
-        self.assertEqual(prompt["title"], "请准备")
+        self.assertEqual(prompt["title"], "请点击文本框下发的*准备*按钮")
         self.assertIsNone(prompt["hint"])
         # 已经准备完的席位不再被催。
         self.command(headers[0], "lobby.ready")
@@ -431,7 +431,7 @@ class BackendFlow(unittest.TestCase):
         channel = next(item for item in created["channels"] if item["status"] == "pending")
         self.command(headers[1], "channel.accept", {"channel_id": channel["id"]})
         view = self.client.get(self.root + "/state", headers=headers[1]).json()
-        self.assertEqual(view["action_prompt"]["title"], "请准备")
+        self.assertEqual(view["action_prompt"]["title"], "请点击文本框下发的*准备*按钮")
         self.assertIn("私聊", view["action_prompt"]["hint"])
 
     def test_host_player_pair_channel_skips_system_notice(self):
@@ -455,6 +455,119 @@ class BackendFlow(unittest.TestCase):
             "messages"
         ]
         self.assertEqual([message["id"] for message in system], [message["id"] for message in baseline])
+
+    def test_spectator_channel_is_private_to_spectators_and_host(self):
+        """观战频道由观战者独享：观战互见、主持人可见可发言，玩家不可见不可入。"""
+        self.open_join()
+        player, player_actor, _ = self.join("12601")
+        first, first_actor, _ = self.join("12602", "spectator")
+        second, second_actor, _ = self.join("12603", "spectator")
+
+        # 观战者发言一律落到观战频道，不管前端传了什么 channel_id。
+        sent = self.client.post(
+            self.root + "/messages",
+            headers=first,
+            json={"channel_id": "public", "text": "观战闲聊"},
+        )
+        sent.raise_for_status()
+        self.assertEqual(sent.json()["channel_id"], "spectator")
+
+        # 另一个观战者能看到；主持人能看到且能在观战频道发言。
+        first_page = self.client.get(self.root + "/messages?scope=all", headers=second).json()[
+            "messages"
+        ]
+        self.assertTrue(any(message["id"] == sent.json()["id"] for message in first_page))
+        host_sent = self.client.post(
+            self.root + "/messages",
+            headers=self.host,
+            json={"channel_id": "spectator", "text": "主持人也在"},
+        )
+        host_sent.raise_for_status()
+        self.assertEqual(host_sent.json()["channel_id"], "spectator")
+
+        # 玩家读不到观战频道的任何一条（all/public 两个口径都要过滤）。
+        player_all = self.client.get(self.root + "/messages?scope=all", headers=player).json()[
+            "messages"
+        ]
+        self.assertFalse(any(message["channel_id"] == "spectator" for message in player_all))
+        player_public = self.client.get(
+            self.root + "/messages?scope=public", headers=player
+        ).json()["messages"]
+        self.assertTrue(all(message["channel_id"] == "public" for message in player_public))
+
+        # 观战者读不到玩家公屏，也读不到私信历史。
+        spectator_all = self.client.get(self.root + "/messages?scope=all", headers=first).json()[
+            "messages"
+        ]
+        self.assertTrue(
+            all(
+                message["channel_id"] in {"spectator"} or message["kind"] != "chat"
+                for message in spectator_all
+            )
+        )
+
+        # 观战者频道投影：只有观战频道与系统频道，没有建私信入口。
+        view = self.client.get(self.root + "/state", headers=first).json()
+        self.assertEqual(
+            [channel["id"] for channel in view["channels"]], ["spectator", "system"]
+        )
+        self.assertFalse(any(action["id"] == "channel.create" for action in view["actions"]))
+        self.assertEqual(view["channels"][0]["label"], "观战频道")
+        self.assertTrue(view["channels"][0]["can_send"])
+
+        # 观战者不能发起私信，也不能接受被邀请；玩家端邀请名单不再出现观战者。
+        # 观战者投影里没有建私信入口；就算直接构造命令也会被拒绝（行动未列出或身份拒绝）。
+        blocked = self.command(
+            first, "channel.create", {"participant_ids": ["host"]}, status=422
+        )
+        self.assertIn("不可用", blocked.text)
+        desc = next(
+            (
+                action
+                for action in self.client.get(self.root + "/state", headers=player).json()[
+                    "actions"
+                ]
+                if action["id"] == "channel.create"
+            ),
+            None,
+        )
+        if desc is not None:
+            labels = {
+                option["label"]
+                for option in desc["fields"][0]["options"]
+            }
+            self.assertFalse(any("观战" in label for label in labels))
+        # 玩家直接尝试邀请观战者：名单校验拒绝（观战者已不在有效成员里）。
+        self.command(
+            player, "channel.create", {"participant_ids": [first_actor["id"]]}, status=422
+        )
+
+        # 实时推送共用 visible_message：玩家身份对观战频道聊天不可见，观战者可见。
+        self.assertFalse(
+            storage.visible_message(
+                {"channel_id": "spectator", "kind": "chat", "audience": None},
+                {"kind": "player", "access_ids": [player_actor["id"]], "id": player_actor["id"]},
+            )
+        )
+        self.assertTrue(
+            storage.visible_message(
+                {"channel_id": "spectator", "kind": "chat", "audience": None},
+                {"kind": "spectator", "access_ids": [first_actor["id"]], "id": first_actor["id"]},
+            )
+        )
+        self.assertTrue(
+            storage.visible_message(
+                {"channel_id": "spectator", "kind": "chat", "audience": None},
+                {"kind": "host", "access_ids": ["host"], "id": "host", "host_entered": True},
+            )
+        )
+
+        # 主持人投影里观战频道可见且可发言。
+        host_view = self.client.get(self.root + "/state", headers=self.host).json()
+        spectator_channel = next(
+            channel for channel in host_view["channels"] if channel["id"] == "spectator"
+        )
+        self.assertTrue(spectator_channel["can_send"])
 
     def test_night_closes_private_channels_and_allows_only_host_chats(self):
         self.open_join()

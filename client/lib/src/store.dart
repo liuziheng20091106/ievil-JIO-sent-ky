@@ -1085,6 +1085,10 @@ class GameStore extends ChangeNotifier {
         (item) => item.id != selectedChannelId || item.status == 'ended')) {
       selectedChannelId = 'public';
     }
+    // 观战者进入对局后默认落在观战频道：服务端只下发观战频道与系统频道。
+    if (actor?.isSpectator == true && selectedChannelId == 'public') {
+      selectedChannelId = 'spectator';
+    }
     // 傀儡控制关系解除或频道失效同样要退回公屏：留着旧的 as_seat 会让下一次
     // 发送落到服务端已拒绝的身份上。
     if (puppetSeatId != null) {
@@ -1318,23 +1322,32 @@ class GameStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool _matchesScope(GameMessage message, String scope) => switch (scope) {
-        'public' => message.channelId == 'public',
-        'system' => message.channelId == 'system' || message.kind != 'chat',
-        'host' => message.channelId != 'public' &&
-            message.channelId != 'system' &&
-            (view?.channels.any((channel) =>
-                    channel.id == message.channelId &&
-                    channel.members.any((member) => member['id'] == 'host')) ??
-                false),
-        'private' => message.channelId != 'public' &&
-            message.channelId != 'system' &&
-            !(view?.channels.any((channel) =>
-                    channel.id == message.channelId &&
-                    channel.members.any((member) => member['id'] == 'host')) ??
-                false),
-        _ => true,
-      };
+  bool _matchesScope(GameMessage message, String scope) {
+    // 观战者独享观战频道：聊天消息只认观战频道，公屏/私信筛选统一映射过去。
+    final spectatorChat =
+        actor?.isSpectator == true && message.kind == 'chat';
+    if (spectatorChat && message.channelId != 'spectator') return false;
+    return switch (scope) {
+      'public' => message.kind == 'chat' &&
+          message.channelId == (actor?.isSpectator == true ? 'spectator' : 'public'),
+      'system' => message.channelId == 'system' || message.kind != 'chat',
+      'host' => message.channelId != 'public' &&
+          message.channelId != 'system' &&
+          message.channelId != 'spectator' &&
+          (view?.channels.any((channel) =>
+                  channel.id == message.channelId &&
+                  channel.members.any((member) => member['id'] == 'host')) ??
+              false),
+      'private' => message.channelId != 'public' &&
+          message.channelId != 'system' &&
+          message.channelId != 'spectator' &&
+          !(view?.channels.any((channel) =>
+                  channel.id == message.channelId &&
+                  channel.members.any((member) => member['id'] == 'host')) ??
+              false),
+      _ => true,
+    };
+  }
 
   Future<void> markMessagesRead() async {
     if (messages.isNotEmpty) {

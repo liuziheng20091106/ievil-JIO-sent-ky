@@ -38,6 +38,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
       reason: state?.chat_reason,
     },
   ];
+  const isSpectator = session.actor?.kind === "spectator";
   // 受控傀儡席的频道并入发送目标：同一真实频道 id 用 asSeat 区分身份。
   const targets = [
     ...channels.map((item) => ({ key: item.id, channel: item, asSeat: null as string | null })),
@@ -90,15 +91,15 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
   const draftScope = identityScope;
   const [draft, setDraft, clearDraft, draftError] = useDraft(draftScope, "");
   const rows = messages.filter((message) => {
+    // 观战者独享观战频道：聊天消息只有观战频道，公屏/私信筛选统一映射过去。
+    if (isSpectator && message.kind === "chat" && message.channel_id !== "spectator") return false;
     if (messageScope === "all") return true;
     if (messageScope === "public")
-      return message.kind === "chat" && message.channel_id === "public";
+      return message.kind === "chat" && message.channel_id === (isSpectator ? "spectator" : "public");
     if (messageScope === "private")
-      return message.kind === "chat" && message.channel_id !== "public";
+      return message.kind === "chat" && message.channel_id !== "public" && message.channel_id !== (isSpectator ? "spectator" : "");
     if (messageScope === "host") return message.sender_id === "host";
-    return ["notice", "presence", "information", "alert"].includes(
-      message.kind,
-    );
+    return ["notice", "presence", "information", "alert"].includes(message.kind);
   });
   const channelActions = [
     ...(state?.actions.filter((action) => action.id.startsWith("channel.")) ?? []),
@@ -251,8 +252,9 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
           <h2>{messageScope === "all" ? "全部消息" : "筛选消息"}</h2>
         </div>
         <div className="segmented" aria-label="消息筛选">
-          {(
-            ["all", "public", "private", "system", "host"] as const
+          {(isSpectator
+            ? (["all", "public", "system"] as const)
+            : (["all", "public", "private", "system", "host"] as const)
           ).map((scope) => (
             <button
               type="button"
@@ -262,7 +264,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             >
               {{
                 all: "全部",
-                public: "公屏",
+                public: isSpectator ? "观战" : "公屏",
                 private: "私信",
                 system: "系统",
                 host: "主持人",
@@ -271,7 +273,7 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
           ))}
         </div>
       </div>
-      {channelActions.length > 0 && (
+      {channelActions.length > 0 && !isSpectator && (
         <ActionPanel actions={channelActions} title="私信操作" />
       )}
       <div
@@ -355,9 +357,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
                     <span className="message-type">
                       {message.kind === "information"
                         ? "系统信息"
-                        : (channels.find(
-                            (item) => item.id === message.channel_id,
-                          )?.label ?? "私密频道")}
+                        : message.channel_id === "spectator"
+                          ? "观战频道"
+                          : (channels.find(
+                              (item) => item.id === message.channel_id,
+                            )?.label ?? "私密频道")}
                     </span>
                   )}
                   <p>{message.text}</p>
@@ -384,9 +388,11 @@ export function Chat({ onRole }: { onRole: (id: string) => void }) {
             >
               {sendable.map((item) => (
                 <option key={item.key} value={item.key}>
-                  {item.channel.id === "public" && !item.asSeat
-                    ? "公共讨论"
-                    : item.channel.label}
+                  {item.channel.id === "spectator"
+                    ? "观战频道"
+                    : item.channel.id === "public" && !item.asSeat
+                      ? "公共讨论"
+                      : item.channel.label}
                 </option>
               ))}
               {!sendable.length && <option value="public">暂无可用频道</option>}

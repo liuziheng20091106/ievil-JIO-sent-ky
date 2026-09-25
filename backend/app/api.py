@@ -21,7 +21,8 @@ from . import (
 )
 from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
 from .game.catalog import night_half
-from .game.state import controlled_cards, host_label, log_event, owner
+from .game.state import controlled_cards, host_capable, host_label, log_event, owner
+from .storage import SPECTATOR_CHANNEL
 
 router = APIRouter(prefix="/api")
 
@@ -825,6 +826,9 @@ def ensure_channel_available(db, game, member_ids, exclude=None):
 
 def channel_command(db, game, actor, action_id, payload):
     rows = []
+    if actor.get("kind") == "spectator" and action_id != "channel.end":
+        # 观战者独享观战频道：不能创建、接受或拒绝私信；遗留频道只允许自己结束。
+        raise HTTPException(403, "观战者不能参与私信")
     if action_id == "channel.create":
         body = schemas.Channel.model_validate(payload)
         invited = list(dict.fromkeys(body.participant_ids))
@@ -834,11 +838,13 @@ def channel_command(db, game, actor, action_id, payload):
         valid.update(
             row["id"]
             for row in db.execute(
-                "SELECT id FROM participants WHERE game_id=? AND active=1 AND blocked=0", (game["id"],)
+                "SELECT id FROM participants WHERE game_id=? AND active=1 AND blocked=0 "
+                "AND kind!='spectator'",
+                (game["id"],),
             )
         )
         if not invited or any(member not in valid for member in invited):
-            raise HTTPException(422, "邀请成员必须是本局有效参与身份或主持人")
+            raise HTTPException(422, "邀请成员必须是本局有效玩家或主持人")
         if actor["kind"] != "host" and night_half(game) and invited != ["host"]:
             raise HTTPException(403, "夜间只能与主持人建立私聊")
         members = [actor["id"], *invited]
@@ -1108,19 +1114,39 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 channels = views.puppet_channel_view(db, game, seat)
             else:
                 channels = views.view(db, game, actor, realtime.online(game_id))["channels"]
-            channel = next((item for item in channels if item["id"] == body.channel_id), None)
-            if not channel:
-                raise HTTPException(403, "你不能访问该频道")
-            if not channel["can_send"]:
-                raise HTTPException(403, channel.get("reason") or "当前不能在该频道发言")
-            audience = None
-            if body.channel_id != "public":
-                channel_row = db.execute(
-                    "SELECT * FROM channels WHERE id=? AND game_id=?", (body.channel_id, game_id)
+            if actor.get("kind") == "spectator":
+                # 观战频道独享：观战者的发言一律落到观战频道，不信任前端传参；
+                # 该频道不在 channels 投影里，直接放开校验并按观战者身份发送。
+                if game["status"] == "ended":
+                    raise HTTPException(403, "本局已经结束")
+                muted = db.execute(
+                    "SELECT muted FROM participants WHERE id=?", (actor["id"],)
                 ).fetchone()
-                if not channel_row or not storage.channel_visible(channel_row, actor):
+                if muted and muted["muted"]:
+                    raise HTTPException(403, "主持人已将你禁言")
+                channel_row = None
+                body_channel_id = SPECTATOR_CHANNEL
+                audience = None
+            else:
+                channel = next((item for item in channels if item["id"] == body.channel_id), None)
+                if not channel:
                     raise HTTPException(403, "你不能访问该频道")
-                audience = storage.channel_members(channel_row)
+                if not channel["can_send"]:
+                    raise HTTPException(403, channel.get("reason") or "当前不能在该频道发言")
+                body_channel_id = body.channel_id
+                audience = None
+                channel_row = None
+                if body.channel_id == SPECTATOR_CHANNEL:
+                    # 观战频道不在 channels 表里：只有主持人能以自己身份在这里发言。
+                    if not host_capable(actor):
+                        raise HTTPException(403, "你不能访问该频道")
+                elif body.channel_id != "public":
+                    channel_row = db.execute(
+                        "SELECT * FROM channels WHERE id=? AND game_id=?", (body.channel_id, game_id)
+                    ).fetchone()
+                    if not channel_row or not storage.channel_visible(channel_row, actor):
+                        raise HTTPException(403, "你不能访问该频道")
+                    audience = storage.channel_members(channel_row)
             seat = seat_for(game, actor["seat_id"]) if actor["seat_id"] else None
             row = storage.add_message(
                 db,
@@ -1131,7 +1157,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 avatar_role_id=(seat["avatar_role_id"] if game["status"] != "lobby" else None)
                 if seat
                 else ("host" if actor["kind"] == "host" else None),
-                channel_id=body.channel_id,
+                channel_id=body_channel_id,
                 text=body.text,
                 audience=audience,
             )

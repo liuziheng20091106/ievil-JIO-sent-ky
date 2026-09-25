@@ -8,6 +8,7 @@ from .game.actions import action, field, outstanding_seats
 from .game.catalog import AUTO_PHASES, night_half
 from .game.state import host_capable, host_label
 from .game.views import seat_chat
+from .storage import SPECTATOR_CHANNEL
 
 
 # 「请求操作」催办：自己的行动正卡住流程时的标题与说明，由服务端决定何时显示、显示什么。
@@ -252,6 +253,37 @@ def channels_for(db, game, actor, domain_view):
     by_id = {row["id"]: row for row in participants}
     # 对局内的「主持人」一律带上本局主持人的昵称，玩家才分得清是谁在主持。
     host_name = host_label(game)
+    if actor.get("kind") == "spectator":
+        # 观战者独享观战频道：只下发观战频道与系统频道，没有公屏与私信。
+        reason = storage.channel_send_reason(db, game, actor, SPECTATOR_CHANNEL)
+        return [
+            {
+                "id": SPECTATOR_CHANNEL,
+                "label": "观战频道",
+                "status": "active",
+                "creator_id": "host",
+                "members": [],
+                "invited_ids": [],
+                "accepted_ids": [],
+                "invitation": "none",
+                "can_send": not ended and not reason,
+                "reason": reason or ("本局已经结束" if ended else ""),
+                "actions": [],
+            },
+            {
+                "id": "system",
+                "label": "系统与私密信息",
+                "status": "active",
+                "creator_id": "host",
+                "members": [],
+                "invited_ids": [],
+                "accepted_ids": [],
+                "invitation": "none",
+                "can_send": False,
+                "reason": "系统信息只用于告知，不能在此发言",
+                "actions": [],
+            },
+        ]
     public_reason = storage.channel_send_reason(db, game, actor, "public") or domain_view.get(
         "chat_reason", ""
     )
@@ -321,6 +353,24 @@ def channels_for(db, game, actor, domain_view):
                 "actions": actions,
             }
         )
+    if host_capable(actor):
+        # 观战频道对主持人开放：可见、可发言（玩家永远看不到它）。
+        spectator_reason = storage.channel_send_reason(db, game, actor, SPECTATOR_CHANNEL)
+        result.append(
+            {
+                "id": SPECTATOR_CHANNEL,
+                "label": "观战频道",
+                "status": "active",
+                "creator_id": "host",
+                "members": [],
+                "invited_ids": [],
+                "accepted_ids": [],
+                "invitation": "none",
+                "can_send": not ended and not spectator_reason,
+                "reason": spectator_reason or ("本局已经结束" if ended else ""),
+                "actions": [],
+            }
+        )
     result.append(
         {
             "id": "system",
@@ -344,6 +394,9 @@ def channels_for(db, game, actor, domain_view):
 def channel_create_descriptor(db, game, actor, participants):
     if game["status"] == "ended" or storage.active_private_channel(db, game, actor["id"]):
         return None
+    if actor.get("kind") == "spectator":
+        # 观战者独享观战频道，不能发起任何私信。
+        return None
     host = host_capable(actor)
     night = night_half(game)
     options = []
@@ -351,9 +404,13 @@ def channel_create_descriptor(db, game, actor, participants):
         options.append(("host", host_label(game)))
     if host or not night:
         options.extend(
-            (row["id"], row["name"] + ("（观战）" if row["kind"] == "spectator" else ""))
+            # 观战者已收拢进观战频道：私信邀请名单不再出现他们。
+            (row["id"], row["name"])
             for row in participants
-            if row["active"] and not row["blocked"] and row["id"] != actor["id"]
+            if row["active"]
+            and not row["blocked"]
+            and row["id"] != actor["id"]
+            and row["kind"] != "spectator"
         )
     if not options:
         return None
@@ -514,7 +571,10 @@ def view(db, game, actor, online):
         ]
     collected_channel_actions = [item for channel in result["channels"] for item in channel["actions"]]
     active_private = storage.active_private_channel(db, game, actor["id"])
-    if active_private and not host_capable(actor):
+    if actor.get("kind") == "spectator":
+        # 观战者没有私信：不下发任何 channel.* 行动。
+        result["actions"] = []
+    elif active_private and not host_capable(actor):
         result["actions"] = collected_channel_actions
     else:
         create_action = channel_create_descriptor(db, game, actor, participants)
