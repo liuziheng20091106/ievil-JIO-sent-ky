@@ -14,6 +14,7 @@ import 'message_time.dart';
 import 'models.dart';
 import 'participant_menu.dart';
 import 'picks.dart';
+import 'player_marks.dart';
 import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 import 'store.dart';
@@ -53,6 +54,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     if (widget.store.pendingRoleId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => onStoreChanged());
     }
+    // 进局前就攒下的教程请求（例如进局瞬间正是首个非平安夜）同样补弹一次。
+    if (widget.store.pendingMarksTutorial) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => onStoreChanged());
+    }
   }
 
   @override
@@ -85,7 +90,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         if (mounted) showRoleIntro(context, store, enteredRole);
       });
     }
+    maybeShowMarksTutorial();
     if (mounted) setState(() {});
+  }
+
+  /// 首个非平安夜结束后弹一次「如何标记他人」：同一个对局只弹一次，
+  /// 请求在这个方法里就被取走，重复通知不会再排队等第二个面板。
+  void maybeShowMarksTutorial() {
+    if (!widget.store.takeMarksTutorial()) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) showMarksTutorial(context);
+    });
   }
 
   /// 宽屏同屏显示的页面直接算作已查看：对局栏始终可见，三栏时「我的/管理」也可见。
@@ -171,7 +186,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         );
         final board = BoardPage(store: store, bottomInset: inset);
         final third = host
-            ? HostManagementPage(store: store, bottomInset: inset)
+            ? (store.hostAdminEntered
+                ? HostManagementPage(store: store, bottomInset: inset)
+                : HostEntryGate(store: store, bottomInset: inset))
             : ProfilePage(store: store, bottomInset: inset);
         return Scaffold(
           key: _scaffold,
@@ -477,6 +494,37 @@ Future<void> returnToLobby(BuildContext context, GameStore store) async {
   }
 }
 
+/// 观战席主动退出：确认后让服务端解除观战身份，再回到大厅。
+/// 观战不占席位，退出不影响任何牌面；之后仍可再次入席观战。
+Future<void> leaveSpectating(BuildContext context, GameStore store) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('退出观战？'),
+      content: const Text('退出后会回到大厅，对局本身与其他玩家不受影响；之后仍可以再次观战。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('退出观战'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  try {
+    await store.leaveGame();
+  } on ApiException catch (failure) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    }
+  }
+}
+
 /// 阶段变化的整屏动画；首次进入与重连不重复旧动画。
 class PhaseOverlay extends StatefulWidget {
   const PhaseOverlay({super.key, required this.store});
@@ -717,6 +765,11 @@ class _ChatActionPageState extends State<ChatActionPage> {
                       onAvatar: (senderId) {
                         final ref = participantRefFor(store, senderId);
                         if (ref != null) showAvatarMenu(context, store, ref);
+                      },
+                      // 长按走「快速标记」：不经菜单，直接选标记。
+                      onAvatarLongPress: (senderId) {
+                        final ref = participantRefFor(store, senderId);
+                        if (ref != null) showMarkMenu(context, store, ref);
                       },
                     );
                   },
@@ -1477,12 +1530,16 @@ class MessageBubble extends StatelessWidget {
     this.self,
     this.store,
     this.onAvatar,
+    this.onAvatarLongPress,
   });
 
   final GameMessage message;
   final String? self;
   final GameStore? store;
   final ValueChanged<String?>? onAvatar;
+
+  /// 长按头像或昵称：快速标记该玩家。
+  final ValueChanged<String?>? onAvatarLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -1524,6 +1581,9 @@ class MessageBubble extends StatelessWidget {
     final mine = self != null && message.raw['sender_id']?.toString() == self;
     // 发送者佩戴的成就：服务端按参与者 id 下发，取不到就不显示徽章。
     final badge = store?.equippedFor(message.senderId);
+    // 本机给这名玩家打的标记：只把昵称染成标记色，不改其他任何展示。
+    final mark = store?.markFor(message.senderId);
+    final markColor = playerMarkColorOf(context, mark);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
@@ -1536,6 +1596,9 @@ class MessageBubble extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap:
                   onAvatar == null ? null : () => onAvatar!(message.senderId),
+              onLongPress: onAvatarLongPress == null
+                  ? null
+                  : () => onAvatarLongPress!(message.senderId),
               child: RoleAvatar(
                 roleId: message.avatarRoleId,
                 host: message.senderId == 'host',
@@ -1560,10 +1623,17 @@ class MessageBubble extends StatelessWidget {
                           onTap: onAvatar == null
                               ? null
                               : () => onAvatar!(message.senderId),
+                          onLongPress: onAvatarLongPress == null
+                              ? null
+                              : () => onAvatarLongPress!(message.senderId),
                           child: Text(
                             message.senderName!,
-                            style:  TextStyle(
-                                fontSize: 12, color: context.palette.textTertiary),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: markColor ?? context.palette.textTertiary,
+                              fontWeight:
+                                  markColor == null ? null : FontWeight.w600,
+                            ),
                           ),
                         ),
                         // 佩戴的成就紧跟在昵称右边，底色就是稀有度颜色。
@@ -2018,6 +2088,7 @@ class _BoardPageState extends State<BoardPage> {
                   padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                   child: SeatCard(
                     seat: seat,
+                    mark: store.markFor(seat['participant_id']?.toString()),
                     onTap: seat['participant_id'] == null
                         ? null
                         : () {
@@ -2027,6 +2098,17 @@ class _BoardPageState extends State<BoardPage> {
                             );
                             if (ref != null) {
                               showAvatarMenu(context, store, ref);
+                            }
+                          },
+                    onLongPress: seat['participant_id'] == null
+                        ? null
+                        : () {
+                            final ref = participantRefFor(
+                              store,
+                              seat['participant_id']?.toString(),
+                            );
+                            if (ref != null) {
+                              showMarkMenu(context, store, ref);
                             }
                           },
                   ),
@@ -2136,11 +2218,23 @@ String _resultTitle(Map<dynamic, dynamic> result) =>
     };
 
 class SeatCard extends StatelessWidget {
-  const SeatCard({super.key, required this.seat, this.onTap});
+  const SeatCard({
+    super.key,
+    required this.seat,
+    this.mark,
+    this.onTap,
+    this.onLongPress,
+  });
   final Map<String, dynamic> seat;
+
+  /// 本机给这名玩家打的标记：把名字染成标记色。服务端不下发这个字段。
+  final PlayerMark? mark;
 
   /// 点击整张席位卡打开该席位的快捷菜单。
   final VoidCallback? onTap;
+
+  /// 长按整张席位卡打开快速标记。
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -2163,6 +2257,7 @@ class SeatCard extends StatelessWidget {
     return Card(
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(AppRadius.card),
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
@@ -2188,8 +2283,14 @@ class SeatCard extends StatelessWidget {
                           child: Text(
                             name.isNotEmpty ? name : (occupied ? '等待命名' : '空席'),
                             overflow: TextOverflow.ellipsis,
-                            style:  TextStyle(
-                                fontSize: 14, color: context.palette.textSecondary),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: playerMarkColorOf(context, mark) ??
+                                  context.palette.textSecondary,
+                              fontWeight: mark == null
+                                  ? null
+                                  : FontWeight.w600,
+                            ),
                           ),
                         ),
                       ],
@@ -2655,6 +2756,17 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
         const SizedBox(height: AppSpacing.xl),
+        // 观战席不占席位，可以自己退出回大厅（占席玩家的退出仍由主持人裁量）。
+        if (actor.isSpectator) ...[
+          OutlinedButton.icon(
+            onPressed: store.writeBusy
+                ? null
+                : () => leaveSpectating(context, store),
+            icon: const Icon(Icons.meeting_room_outlined, size: 18),
+            label: const Text('退出观战（返回大厅）'),
+          ),
+          const SizedBox(height: AppSpacing.md),
+        ],
         OutlinedButton.icon(
           onPressed: store.logout,
           icon: const Icon(Icons.logout, size: 18),
@@ -2743,6 +2855,125 @@ class _OwnCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 进入管理界面前的确认页：管理界面含全部私密信息与席位代操作，而且不是建立
+/// 这一局的主持人进入时服务端会向全服发通告，所以启动应用后不直接进入，
+/// 等主持人自己确认；确认成功（服务端已登记）才展开真正的管理页。
+class HostEntryGate extends StatefulWidget {
+  const HostEntryGate({
+    super.key,
+    required this.store,
+    this.bottomInset = AppSpacing.bottomBar,
+  });
+  final GameStore store;
+
+  /// 底部为悬浮底栏预留的高度；宽屏由外壳传入更小的值。
+  final double bottomInset;
+
+  @override
+  State<HostEntryGate> createState() => _HostEntryGateState();
+}
+
+class _HostEntryGateState extends State<HostEntryGate> {
+  bool busy = false;
+  String? error;
+
+  Future<void> enter() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    final failure = await widget.store.enterHostAdmin();
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      error = failure;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = widget.store;
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.sm,
+        AppSpacing.lg,
+        widget.bottomInset,
+      ),
+      children: [
+        const SectionTitle(
+          '进入对局管理界面',
+          subtitle: '管理界面包含全部私密信息与席位代操作，请确认后进入。',
+        ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '本局主持人：${store.view?.hostName ?? '主持人'}',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: context.palette.text,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  '如果你不是建立这一局的主持人，本次进入会被服务端记录，并向全服发布一条通告。',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: context.palette.textSecondary,
+                  ),
+                ),
+                if (store.hostAdminNotice != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: context.palette.warningSoft,
+                      borderRadius: BorderRadius.circular(AppRadius.field),
+                      border: Border.all(
+                        color: context.palette.warning.withValues(alpha: .55),
+                      ),
+                    ),
+                    child: Text(
+                      store.hostAdminNotice!,
+                      style: TextStyle(fontSize: 13, color: context.palette.text),
+                    ),
+                  ),
+                ],
+                if (error != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    error!,
+                    style: TextStyle(fontSize: 13, color: context.palette.danger),
+                  ),
+                ],
+                const SizedBox(height: AppSpacing.lg),
+                FilledButton.icon(
+                  onPressed: busy ? null : enter,
+                  icon: busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.admin_panel_settings_outlined, size: 18),
+                  label: Text(busy ? '正在进入' : '确认进入管理界面'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2871,6 +3102,28 @@ class _HostManagementPageState extends State<HostManagementPage> {
         widget.bottomInset,
       ),
       children: [
+        // 不是本局建局主持人时，进入后常驻一条提醒：这次进入已经通告全服。
+        if (store.hostAdminNotice != null) ...[
+          Card(
+            color: context.palette.warningSoft,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              child: Row(
+                children: [
+                  Icon(Icons.campaign_outlined, color: context.palette.warning),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Text(
+                      store.hostAdminNotice!,
+                      style: TextStyle(fontSize: 13, color: context.palette.text),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+        ],
         Card(
           color: blocking > 0 ? context.palette.dangerSoft : context.palette.successSoft,
           child: Padding(

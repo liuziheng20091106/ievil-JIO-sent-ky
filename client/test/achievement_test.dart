@@ -215,6 +215,12 @@ void main() {
                 'equipped': {'id': 'grant-1', 'name': '成就9', 'rarity': 9},
               },
               {'participant_id': 'p2', 'account_id': 'a2', 'equipped': null},
+              // 主持人不是参与身份，但账号与它的玩家身份共用成就。
+              {
+                'participant_id': 'host',
+                'account_id': 'a-host',
+                'equipped': {'id': 'grant-host', 'name': '成就7', 'rarity': 7},
+              },
             ],
           };
         } else if (path == '/api/achievements/defs') {
@@ -282,11 +288,14 @@ void main() {
       expect(summary.equipped!.rarity, 9);
 
       final equipped = await api.gameEquipped('game-1');
-      expect(equipped, hasLength(2));
+      expect(equipped, hasLength(3));
       expect(equipped.first.participantId, 'p1');
       expect(equipped.first.accountId, 'a1');
       expect(equipped.first.equipped!.name, '成就9');
-      expect(equipped.last.equipped, isNull);
+      expect(equipped[1].equipped, isNull);
+      // 主持人固定占最后一行，accountId 是它的 QQ 账号。
+      expect(equipped.last.participantId, 'host');
+      expect(equipped.last.equipped!.rarity, 7);
     });
 
     test('新建、编辑与删除定义，授权与撤销', () async {
@@ -336,6 +345,22 @@ void main() {
       expect(store.equippedFor('p2'), isNull);
       expect(store.accountFor('p2'), 'a2');
       expect(store.accountFor('missing'), isNull);
+      // 主持人的徽章也进 store：昵称旁显示，点头像能看同一个账号的成就摘要。
+      expect(store.equippedFor('host')!.name, '成就7');
+      expect(store.accountFor('host'), 'a-host');
+    });
+
+    test('没有玩家入席时也要为主持人拉一次佩戴信息', () async {
+      final store = await previewStore();
+      store.api = GameApi(endpoint, token: 'token-abc');
+      store.gameId = 'game-1';
+      calls.clear();
+
+      // 空席对局：参与身份为空，但主持人固定占 "host"，所以仍然要拉一次。
+      store.applyView(GameView.fromJson(viewJson()));
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(calls.where((item) => item.endsWith('/equipped')), hasLength(1));
+      expect(store.equippedFor('host')!.name, '成就7');
     });
 
     test('参与身份变化才补拉佩戴信息，候场期间后入席的玩家也有徽章', () async {

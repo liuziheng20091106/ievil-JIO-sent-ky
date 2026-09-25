@@ -4,6 +4,7 @@ import 'achievements.dart';
 import 'action_sheet.dart';
 import 'design.dart';
 import 'models.dart';
+import 'player_marks.dart';
 import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 import 'store.dart';
@@ -39,9 +40,10 @@ ParticipantRef? participantRefFor(GameStore store, String? senderId) {
     return null;
   }
   if (senderId == 'host') {
-    return const ParticipantRef(
+    // 对局内的主持人一律显示「主持人(昵称)」；服务端没给名字时退回「主持人」。
+    return ParticipantRef(
       participantId: 'host',
-      name: '主持人',
+      name: store.view?.hostName ?? '主持人',
       online: true,
     );
   }
@@ -517,7 +519,8 @@ Future<void> showAvatarMenu(
                 },
               ),
             // 成就摘要在菜单下方：总量与最稀有的几个都直接摊开，不用再点一次。
-            if (accountId != null && !ref.isHost) ...[
+            // 主持人不是参与身份，但主持账号与它的玩家身份共用成就，所以一并显示。
+            if (accountId != null) ...[
               Divider(height: AppSpacing.xl, color: context.palette.border),
               Padding(
                 padding: const EdgeInsets.fromLTRB(
@@ -626,4 +629,316 @@ Future<void> _runHostAction(
     orElse: () => candidates.first,
   );
   await showActionForm(context, store, matched, initial: payload);
+}
+
+/// 长按头像的快速标记：魔女 / 好人 / 疑似魔女 / 疑似好人 / 清除标记。
+/// 标记只写进本机内存，服务端不知道，别的玩家也看不到。
+Future<void> showMarkMenu(
+  BuildContext context,
+  GameStore store,
+  ParticipantRef ref,
+) async {
+  if (ref.isHost || ref.seatId == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('只有入席玩家可以标记')),
+    );
+    return;
+  }
+  final choice = await showPredictiveSheet<_MarkChoice>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    builder: (sheetContext) => _MarkSheet(
+      ref: ref,
+      current: store.markFor(ref.participantId),
+    ),
+  );
+  if (choice == null) return;
+  store.setMark(ref.participantId, choice.mark);
+  if (!context.mounted) return;
+  final who = '${ref.seatId} 号${ref.name.isEmpty ? '' : ' ${ref.name}'}';
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(
+        choice.mark == null
+            ? '已清除 $who 的标记'
+            : '已标记 $who：${choice.mark!.label}（仅本机可见）',
+      ),
+    ),
+  );
+}
+
+/// 面板选择结果：null 表示关掉面板没选，`_MarkChoice(null)` 表示清除标记。
+class _MarkChoice {
+  const _MarkChoice(this.mark);
+  final PlayerMark? mark;
+}
+
+class _MarkSheet extends StatelessWidget {
+  const _MarkSheet({required this.ref, required this.current});
+
+  final ParticipantRef ref;
+  final PlayerMark? current;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl,
+                0,
+                AppSpacing.xl,
+                AppSpacing.sm,
+              ),
+              child: Row(
+                children: [
+                  RoleAvatar(roleId: ref.roleId, size: 44, dead: ref.dead),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${ref.seatId} 号 · ${ref.name}',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            color: palette.text,
+                          ),
+                        ),
+                        Text(
+                          '快速标记 · 只保存在本机',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: palette.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final mark in PlayerMark.values)
+              ListTile(
+                leading: PlayerMarkDot(
+                  color: mark.colorOf(palette),
+                  size: 22,
+                  icon: mark.icon,
+                ),
+                title: Text(
+                  mark.label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: mark.colorOf(palette),
+                  ),
+                ),
+                subtitle: Text(
+                  mark.description,
+                  style: TextStyle(fontSize: 12, color: palette.textTertiary),
+                ),
+                trailing: current == mark
+                    ? Icon(Icons.check_rounded,
+                        size: 20, color: mark.colorOf(palette))
+                    : null,
+                onTap: () => Navigator.pop(context, _MarkChoice(mark)),
+              ),
+            Divider(height: AppSpacing.lg, color: palette.border),
+            ListTile(
+              enabled: current != null,
+              leading: PlayerMarkDot(
+                color: clearedMarkColorOf(palette),
+                size: 22,
+                icon: Icons.layers_clear_outlined,
+              ),
+              title: Text(
+                '清除标记',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: current == null
+                      ? palette.textTertiary
+                      : clearedMarkColorOf(palette),
+                ),
+              ),
+              subtitle: Text(
+                current == null ? '当前没有标记' : '恢复默认名字颜色',
+                style: TextStyle(fontSize: 12, color: palette.textTertiary),
+              ),
+              onTap: current == null
+                  ? null
+                  : () => Navigator.pop(context, const _MarkChoice(null)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl,
+                0,
+                AppSpacing.xl,
+                AppSpacing.lg,
+              ),
+              child: Text(
+                '标记只是你的判断：不会发送给服务器，别人看不到，也不影响任何规则判定。',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.5,
+                  color: palette.textTertiary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 「如何标记他人」教程：固定在首个非平安夜结束后由外壳展示一次。
+Future<void> showMarksTutorial(BuildContext context) =>
+    showPredictiveSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => const _MarksTutorialSheet(),
+    );
+
+class _MarksTutorialSheet extends StatelessWidget {
+  const _MarksTutorialSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.xl,
+          0,
+          AppSpacing.xl,
+          AppSpacing.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.touch_app_outlined, size: 20, color: palette.accent),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  '如何标记他人',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: palette.text,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              '长按任意玩家的头像（牌桌上的席位，或聊天里发言者的头像），'
+              '在面板里选一种标记。',
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.6,
+                color: palette.text,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            for (final mark in PlayerMark.values)
+              _MarkLegendRow(
+                color: mark.colorOf(palette),
+                icon: mark.icon,
+                label: mark.label,
+                detail: mark.description,
+              ),
+            _MarkLegendRow(
+              color: clearedMarkColorOf(palette),
+              icon: Icons.layers_clear_outlined,
+              label: '清除标记',
+              detail: '恢复默认文字颜色',
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              '标记之后，对局中这个玩家的名字就会显示成对应的颜色；'
+              '再长按一次可以改标记或清除。',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.6,
+                color: palette.textSecondary,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              '标记只保存在这台设备的内存里：不会发给服务器，别人看不到，退出应用后清空。',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: palette.textTertiary,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('知道了'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MarkLegendRow extends StatelessWidget {
+  const _MarkLegendRow({
+    required this.color,
+    required this.icon,
+    required this.label,
+    required this.detail,
+  });
+
+  final Color color;
+  final IconData icon;
+  final String label;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          children: [
+            PlayerMarkDot(color: color, size: 20, icon: icon),
+            const SizedBox(width: AppSpacing.md),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                detail,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.palette.textTertiary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
 }

@@ -560,6 +560,9 @@ void main() {
   testWidgets('主持人端管理页渲染', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       final store = await previewStore(host: true);
+      // 管理界面要主持人自己确认后才展开（见「主持人进管理界面前先确认」）：
+      // 这里直接置位，golden 看到的是确认之后的真正管理页。
+      store.hostAdminEntered = true;
       // 宽屏改成同屏多栏、「管理」不再是底栏页签，单页 golden 用窄屏渲染；
       // 窗口仍要够高，让页尾的「席位代操作」入口也进入 golden。
       await pumpAt(tester, store, const Size(480, 1500));
@@ -574,6 +577,32 @@ void main() {
         find.byType(GameShell),
         matchesGoldenFile('goldens/host_manage.png'),
       );
+    });
+  });
+
+  testWidgets('主持人进管理界面前先确认', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: true);
+      await pumpAt(tester, store, const Size(480, 1200));
+      // 启动/进局后停在「对局」页：不自动进管理界面，等主持人自己确认。
+      expect(store.hostAdminEntered, isFalse);
+
+      await tester.tap(find.text('管理'));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(HostEntryGate), findsOneWidget);
+      expect(find.byType(HostManagementPage), findsNothing);
+      expect(find.text('确认进入管理界面'), findsOneWidget);
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/host_entry_gate.png'),
+      );
+
+      // 预览环境的服务端不可达：确认失败就不放行，绝不先展示管理内容。
+      await tester.tap(find.text('确认进入管理界面'));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(store.hostAdminEntered, isFalse, reason: '服务端没确认就不许进管理界面');
+      expect(find.byType(HostManagementPage), findsNothing);
+      expect(find.byType(HostEntryGate), findsOneWidget);
     });
   });
 
@@ -726,6 +755,8 @@ void main() {
     await withClock(Clock.fixed(fixedNow), () async {
       // 电脑宽屏：状态、对局、管理三栏同屏，悬浮底栏不再出现。
       final desktop = await previewStore(host: true);
+      // 多栏布局只是把管理页摆在同一屏里，确认步骤仍然要主持人自己做一次。
+      desktop.hostAdminEntered = true;
       await pumpAt(tester, desktop, const Size(1440, 1000));
       expect(find.byType(PaneFrame), findsNWidgets(3));
       expect(find.byType(NavigationBar), findsNothing);
@@ -739,6 +770,7 @@ void main() {
 
       // 平板横屏：状态与对局两栏，「我的/管理」收进右侧抽屉。
       final tablet = await previewStore(host: true);
+      tablet.hostAdminEntered = true;
       await pumpAt(tester, tablet, const Size(1024, 800));
       expect(find.byType(PaneFrame), findsNWidgets(2));
       expect(find.byType(NavigationBar), findsNothing);

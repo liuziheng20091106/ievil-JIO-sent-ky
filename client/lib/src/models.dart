@@ -449,6 +449,23 @@ class GameEquipped {
   late final EquippedAchievement? equipped;
 }
 
+/// 主持人进入本局管理界面的回应：owner 为假表示你不是建立这一局的主持人。
+class HostEntryResult {
+  HostEntryResult.fromJson(Object? value)
+      : raw = jsonObject(value, 'host_entry') {
+    owner = jsonBool(raw['owner'], 'host_entry.owner');
+    announced = jsonBool(raw['announced'], 'host_entry.announced');
+    ownerName = raw['owner_name']?.toString() ?? '';
+  }
+
+  final Map<String, dynamic> raw;
+  late final bool owner;
+
+  /// 本次进入是否已经向全服发布了通告（同一账号同一局只会通告一次）。
+  late final bool announced;
+  late final String ownerName;
+}
+
 /// 主持人视角的玩家条目：成就总数、佩戴、最近参赛时间与全部成就。
 class AchievementPlayer {
   AchievementPlayer.fromJson(Object? value)
@@ -625,6 +642,13 @@ class GameView {
   Map<String, dynamic> get host =>
       raw['host'] == null ? const {} : jsonObject(raw['host'], 'state.host');
 
+  /// 本局主持人的展示名（主持人(昵称)）：对局内显示主持人时统一用它。
+  /// 旧局没有记录主持身份时，服务端给的就是「主持人」。
+  String get hostName {
+    final value = raw['host_name']?.toString() ?? '';
+    return value.isEmpty ? '主持人' : value;
+  }
+
   /// 当前牌是傀儡的玩家：只读旁观，由魔女梅露露代为行动。
   bool get puppetSpectator =>
       jsonBool(self['puppet_spectator'], 'state.self.puppet_spectator');
@@ -647,8 +671,9 @@ class GameView {
 
   /// 视图里出现的参与身份 id：席位占位者，加上主持人视图的参与者名单。
   /// 成就是按参与身份下发佩戴徽章的，这里用来判断要不要重新拉一次。
+  /// 主持人固定占 id "host"（成就与它的玩家身份同源），所以始终带上它。
   Set<String> get participantIds {
-    final ids = <String>{};
+    final ids = <String>{'host'};
     for (final seat in seats) {
       final id = seat['participant_id']?.toString();
       if (id != null && id.isNotEmpty) ids.add(id);

@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'keepalive.dart';
 import 'models.dart';
+import 'player_marks.dart';
 
 /// Windows 下 shared_preferences 与 flutter_secure_storage 的存放目录都取自
 /// exe 版本资源里的 ProductName（缺失时才回退到 exe 文件名）。应用显示名从
@@ -112,8 +113,20 @@ class GameStore extends ChangeNotifier {
 
   /// 本局各参与身份佩戴的成就，以及参与者 id 到账号 id 的映射。
   /// 服务端单独下发（成就是独立于对局规则的库），取不到就当没有徽章。
+  /// 主持人也占一行（id 固定为 "host"，成就与它的玩家身份同源）。
   Map<String, EquippedAchievement> equippedAchievements = const {};
   Map<String, String> participantAccounts = const {};
+
+  /// 主持人是否已确认进入本局管理界面：每一局都要主持人自己确认一次，
+  /// 启动应用或换局都不会自动进管理界面。
+  bool hostAdminEntered = false;
+
+  /// 进入管理界面后服务端给的提示：不是建局主持人时说明已向全服通告。
+  String? hostAdminNotice;
+
+  /// 主动离开观战期间置位：服务端解除身份后会把旧连接按 4401 终结，
+  /// 但那是本人主动退出，不该被当成身份失效而清掉会话。
+  bool _leavingByChoice = false;
 
   /// 上一次为哪批参与身份取过佩戴信息：候场期间陆续有人入席就再补一次，
   /// 避免为同一批人反复请求。
@@ -122,6 +135,19 @@ class GameStore extends ChangeNotifier {
   /// 下层牌刚登场（下层登场、复活、换牌）时待展示的角色 id；
   /// 由 GameShell 弹一次角色卡介绍后清空。
   String? pendingRoleId;
+
+  /// 玩家标记（参与者 id → 标记）：只是本机笔记，见 [PlayerMark]。
+  /// 不落盘、不上传，登出或回大厅即清空。
+  Map<String, PlayerMark> playerMarks = const {};
+
+  /// 本局是否已经展示过「如何标记他人」教程：同一局只固定展示一次。
+  bool marksTutorialShown = false;
+
+  /// 首个非平安夜结束后置位，由 GameShell 弹一次教程并清空。
+  bool pendingMarksTutorial = false;
+
+  /// 教程判定所属的对局：换局时要重新固定展示一次。
+  String? _marksGameId;
   int newActionCount = 0;
   int warningCount = 0;
   int privateStateCount = 0;
@@ -660,6 +686,15 @@ class GameStore extends ChangeNotifier {
 
   Future<void> enterGame(String id) async {
     if (api == null) return;
+    // 换局要重新确认进入管理界面：上一局的确认不能带到这一局。
+    if (gameId != id) {
+      hostAdminEntered = false;
+      hostAdminNotice = null;
+      // 上一局的标记与教程也不属于这一局。
+      _resetPlayerMarks();
+    }
+    // 上一轮主动退出的 4401 已经过去，重新进局后恢复正常判定。
+    _leavingByChoice = false;
     gameId = id;
     try {
       await loadCatalog();
@@ -685,9 +720,80 @@ class GameStore extends ChangeNotifier {
   EquippedAchievement? equippedFor(String? participantId) =>
       participantId == null ? null : equippedAchievements[participantId];
 
+  /// 主持人确认进入本局管理界面。管理界面含全部私密信息与席位代操作，
+  /// 而且不是建立这一局的主持人进入时服务端会向全服通告，所以必须由主持人
+  /// 自己确认一次：确认成功才真正展开管理页，失败时返回错误文案。
+  Future<String?> enterHostAdmin() async {
+    final client = api;
+    final id = gameId;
+    if (client == null || id == null) return '当前没有可进入的对局';
+    try {
+      final result = await client.enterHostAdmin(id);
+      hostAdminEntered = true;
+      hostAdminNotice = result.owner
+          ? null
+          : '你不是本局的建局主持人（${result.ownerName}）；本次进入已向全服通告，'
+              '管理操作请交给本局主持人。';
+      notifyListeners();
+      return null;
+    } on ApiException catch (failure) {
+      return failure.message;
+    } on FormatException catch (failure) {
+      return failure.message;
+    }
+  }
+
+  /// 观战席主动退出：先断开实时连接（服务端解除身份后会把旧连接按 4401 终结，
+  /// 而 4401 在客户端语义里等于「身份失效」），再让服务端解除观战身份并回大厅。
+  /// 占席玩家的退出仍由主持人裁量，服务端会拒绝这里。
+  Future<void> leaveGame() async {
+    final client = api;
+    final id = gameId;
+    if (client == null || id == null) return;
+    // 关闭连接的回执可能晚于这次退出流程本身，所以标记留到下一次进局再清。
+    _leavingByChoice = true;
+    await live?.stop();
+    live = null;
+    await client.leaveGame(id);
+    await returnToLobby();
+  }
+
   /// 参与者 id 对应的账号 id：点头像看成就摘要时用它查公开摘要。
   String? accountFor(String? participantId) =>
       participantId == null ? null : participantAccounts[participantId];
+
+  /// 某个参与身份的标记；没标记过返回 null。
+  PlayerMark? markFor(String? participantId) =>
+      participantId == null ? null : playerMarks[participantId];
+
+  /// 设置或清除（[mark] 为 null）某个参与身份的标记。
+  /// 只改本机内存，不发任何请求，也不触发规则判定。
+  void setMark(String participantId, PlayerMark? mark) {
+    final next = Map<String, PlayerMark>.from(playerMarks);
+    if (mark == null) {
+      next.remove(participantId);
+    } else {
+      next[participantId] = mark;
+    }
+    playerMarks = next;
+    notifyListeners();
+  }
+
+  /// 取出「首个非平安夜」的教程展示请求：同一个对局只给一次。
+  bool takeMarksTutorial() {
+    if (!pendingMarksTutorial) return false;
+    pendingMarksTutorial = false;
+    marksTutorialShown = true;
+    return true;
+  }
+
+  /// 标记与教程都只属于当前这一局：换局、回大厅、登出都清空。
+  void _resetPlayerMarks() {
+    playerMarks = const {};
+    marksTutorialShown = false;
+    pendingMarksTutorial = false;
+    _marksGameId = null;
+  }
 
   /// 拉取本局各参与身份佩戴的成就。失败只影响徽章与摘要，不打扰对局。
   Future<void> loadGameAchievements() async {
@@ -740,6 +846,9 @@ class GameStore extends ChangeNotifier {
     equippedAchievements = const {};
     participantAccounts = const {};
     _equippedRequested = const {};
+    hostAdminEntered = false;
+    hostAdminNotice = null;
+    _resetPlayerMarks();
     newActionCount = 0;
     warningCount = 0;
     privateStateCount = 0;
@@ -805,8 +914,10 @@ class GameStore extends ChangeNotifier {
         connectionStatus = status;
         // 服务端用 4401 终结身份（被移出对局/该局已换成新局/令牌作废），
         // 或握手期就 401/403：留在局里只会反复失败，清会话回登录页。
-        // 大厅视图由 returnToLobby 的会话校验兜底。
-        if (status.startsWith('登录状态已失效') || status == '登录已失效，请重新登录') {
+        // 大厅视图由 returnToLobby 的会话校验兜底。观战席自己退出时同样会收到
+        // 4401，但那是有意为之，不能把用户踢回登录页。
+        if (!_leavingByChoice &&
+            (status.startsWith('登录状态已失效') || status == '登录已失效，请重新登录')) {
           error = '身份已失效（可能被移出对局或该局已结束），请重新登录';
           unawaited(_clearSession());
         }
@@ -836,8 +947,8 @@ class GameStore extends ChangeNotifier {
           if (_matchesScope(message, messageScope)) {
             _mergeMessages([message]);
           } else {
-            // 私密信息不随筛选范围丢弃：玩家停在公屏时也要收到提醒。
-            _notePrivateInfo([message]);
+            // 私密信息与夜终公告都不随筛选范围丢弃：玩家停在公屏时也要收到。
+            _noteIncoming([message]);
           }
           // 自己的发言本地已合并且已读，不该再加未读角标。
           if (message.id > _readCursor && message.senderId != actor?.id) {
@@ -952,6 +1063,43 @@ class GameStore extends ChangeNotifier {
     }
   }
 
+  /// 夜终公告：天亮时服务端公布「第X夜是平安夜。」或「第X夜：<当夜出局的角色牌>」。
+  ///
+  /// 「如何标记他人」教程就固定挂在第一条非平安夜的公告上：是不是平安夜由服务端
+  /// 说了算（它会把「只死一张牌、下层接着登场」也算作当夜出局），客户端不再从席位
+  /// 状态里自己重算一遍。实时连接把公告推给每个在场客户端，与当前消息筛选无关；
+  /// 掉线期间错过的公告会在下次取「全部/系统」历史时补上。
+  static final _deadlyNightNotice = RegExp(r'^第\d+夜：');
+
+  void _noteNightReports(Iterable<GameMessage> incoming) {
+    for (final message in incoming) {
+      _noteNightReport(message);
+    }
+  }
+
+  void _noteNightReport(GameMessage message) {
+    final game = view?.id;
+    if (game == null) return;
+    if (game != _marksGameId) {
+      // 换局（或本进程第一次看到这一局）：教程要在这一局重新固定展示一次。
+      _marksGameId = game;
+      marksTutorialShown = false;
+      pendingMarksTutorial = false;
+    }
+    if (marksTutorialShown || pendingMarksTutorial) return;
+    // 只认全场公告：聊天、私密信息与主持人的定向广播都不算夜终公告。
+    if (message.kind != 'alert') return;
+    if (!_deadlyNightNotice.hasMatch(message.text.trim())) return;
+    // 已落幕的对局只读，不再教学。
+    if (view?.status != 'playing') return;
+    // 主持人知道全部底牌，不需要这份面向玩家的教程。
+    if (actor?.isHost == true) {
+      marksTutorialShown = true;
+      return;
+    }
+    pendingMarksTutorial = true;
+  }
+
   Future<void> acknowledgePhase() async {
     final key = pendingPhaseKey;
     if (key == null) return;
@@ -988,7 +1136,7 @@ class GameStore extends ChangeNotifier {
       hasMoreMessages = page.hasMore;
       error = null;
       // 首批历史只用来定私密信息的基线：登录、刷新、切筛选都不该弹横幅。
-      _notePrivateInfo(page.messages);
+      _noteIncoming(page.messages);
     } on ApiException catch (failure) {
       error = failure.message;
     }
@@ -1066,13 +1214,20 @@ class GameStore extends ChangeNotifier {
     }
     messages = _hideStalePresence(indexed.values.toList())
       ..sort((a, b) => a.id.compareTo(b.id));
-    _notePrivateInfo(incoming);
+    _noteIncoming(incoming);
   }
 
   /// 记录新到的私密信息并准备一条横幅提醒。
   ///
   /// 游标按 id 单调前进，因此切换筛选范围、重连补齐都不会重复提醒；
   /// 首次拿到的历史（登录、刷新、首屏）只用来定基线，不弹横幅。
+  /// 所有新到消息的统一入口：记私密信息横幅，并认一下夜终公告。
+  /// 三个入口（首次取历史、重连补齐、实时单条）都走这里，筛选范围不影响判定。
+  void _noteIncoming(Iterable<GameMessage> incoming) {
+    _notePrivateInfo(incoming);
+    _noteNightReports(incoming);
+  }
+
   void _notePrivateInfo(Iterable<GameMessage> incoming) {
     final infos = incoming.where((item) => item.kind == 'information').toList()
       ..sort((a, b) => a.id.compareTo(b.id));
@@ -1445,6 +1600,10 @@ class GameStore extends ChangeNotifier {
     equippedAchievements = const {};
     participantAccounts = const {};
     _equippedRequested = const {};
+    hostAdminEntered = false;
+    hostAdminNotice = null;
+    _leavingByChoice = false;
+    _resetPlayerMarks();
     connectionStatus = '未连接';
   }
 

@@ -48,6 +48,18 @@ class GameApi {
         ),
       );
 
+  /// 主持人确认进入本局管理界面：服务端据此登记，并在非建局主持人时向全服通告。
+  Future<HostEntryResult> enterHostAdmin(String gameId) async =>
+      HostEntryResult.fromJson(await _request(
+        'POST',
+        '/api/games/${Uri.encodeComponent(gameId)}/host/enter',
+      ));
+
+  /// 观战席主动退出本局：服务端只解除观战参与身份，之后仍可再次入席观战。
+  Future<void> leaveGame(String gameId) async {
+    await _request('POST', '/api/games/${Uri.encodeComponent(gameId)}/leave');
+  }
+
   /// 在线账号名单；带 gameId 时服务端额外给出能否邀请与是否已邀请。
   Future<Map<String, dynamic>> online({String? gameId}) async => jsonObject(
         await _request('GET', '/api/online', query: {'game_id': gameId}),
