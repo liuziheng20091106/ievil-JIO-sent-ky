@@ -98,10 +98,10 @@ def action_prompt(game, actor, active_private):
         if game["phase"] == "ordering":
             title, text = "请确认上下牌并再次准备", "七名玩家再次准备后，主持人才会开局。"
         else:
-            title, text = "请准备", "七名玩家全部准备后，系统才会发牌。"
+            title, text = "请点击文本框下发的*准备*按钮", "七名玩家全部准备后，系统才会发牌。"
     elif seat["id"] in outstanding_seats(game):
         title, text = BLOCKING_PROMPTS.get(
-            game["phase"], ("请完成当前操作", "你的操作正在阻塞流程推进。")
+            game["phase"], ("请在行动区域完成当前操作", "你的操作正在阻塞流程推进。")
         )
     else:
         notice = public_notice(game)
