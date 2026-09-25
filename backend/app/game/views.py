@@ -213,7 +213,7 @@ def status_cards(game, own):
         None,
     )
     if protected:
-        add("treasure", "success", "寻宝保护", "魔女刀、蕾雅决斗和提名暂不能选择你；全场攻击仍有效。")
+        add("treasure", "success", "寻宝-不在场证明", "魔女刀、蕾雅决斗和提名暂不能选择你；全场攻击仍有效。")
     protection_day = next(
         (card["states"].get("protected_day") for card in cards if protection_active(game, card)),
         None,
@@ -523,6 +523,7 @@ def game_view(game, actor):
             "" if game["status"] != "ended" else "对局已结束",
         )
     elif spectator and game["status"] != "ended":
+        # 观战者的发言范围是独享的观战频道；这里只表示「能发言」，频道校验在后端。
         can_chat, reason = True, ""
     elif own:
         if view["self"].get("puppet_spectator"):

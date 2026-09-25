@@ -149,7 +149,7 @@ NIGHT_ABILITY_DESCRIPTIONS = {
     "rain": "下雨：本局一次，此后夜间死者会公开凶手座位号的方向线索。",
     "scapegoat": "替罪凶手：本局一次，指定之后自己造成死亡时对外显示的凶手。",
     "swap": "换血：每晚必须选择一名玩家（未提交时由系统随机指定）；其即将死亡时由你代替其死亡。",
-    "treasure": "寻宝：清空本席其他夜间选择，1/5概率触发地雷；当天地雷以外的致命手段不能选中你。",
+    "treasure": "寻宝：清空本席其他夜间选择，1/5概率挖到地雷！不过你会获得不在场证明，这或许能帮你在投票时获取一些优势？",
     "witch_scan": "查看全员当前魔女化状态，结果只发给你。",
     "arisa_injure": "令环形左右邻座各以1/2概率负伤；该效果不会把已有负伤升级为死亡。",
 }
@@ -169,7 +169,7 @@ DAY_ABILITY_DESCRIPTIONS = {
 NOMINATE_DESCRIPTION = (
     "提交即生效，无需二次确认；同一人可被多人提名，进入投票后计票去重，"
     "每个候选人只投一轮，提名过该候选的玩家自动投同意票。"
-    "寻宝保护者在保护当天不能被提名。"
+    "可是大家都看见艾玛昨天一整晚都在庭院里寻宝啊"
 )
 
 
@@ -401,7 +401,11 @@ def pending_action(game, item):
         suggested = list(
             dict.fromkeys(role for role in (killer, "hanna" if present(game, "hanna") else None) if role)
         )
-        suggested.extend(role for role in ROLES if role not in suggested and len(suggested) < 4)
+        # 补位优先勾当前在场（存活且为当前牌）的角色，不够 4 人时才用出局角色凑；
+        # 两段各自按魔典顺序，保证默认勾选可复现。
+        in_game = [r for r in ROLES if r not in suggested and present(game, r)]
+        out_game = [r for r in ROLES if r not in suggested and not present(game, r)]
+        suggested.extend((in_game + out_game)[: 4 - len(suggested)])
         fields = [
             field(
                 "suspects",
@@ -857,6 +861,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                     if active_seat["ready"]
                     else ("确认上下牌并再次准备" if game["phase"] == "ordering" else "准备发牌"),
                     group="准备",
+                    short_label="取消" if active_seat["ready"] else None,
                     blocking=not active_seat["ready"],
                 )
             )

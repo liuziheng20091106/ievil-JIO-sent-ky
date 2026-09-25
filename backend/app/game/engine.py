@@ -1138,7 +1138,11 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             notify(
                 game,
                 events,
-                f"寻宝结果：{'触发地雷' if mine else '安全'}。",
+                (
+                    "庭院中传来一声巨响——艾玛挖到地雷了！"
+                    if mine
+                    else "你整夜在庭院里挖来挖去，然而却找到了滚木。"
+                ),
                 [sid],
                 "寻宝结果",
             )
