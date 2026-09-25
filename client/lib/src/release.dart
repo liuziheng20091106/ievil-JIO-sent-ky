@@ -50,7 +50,7 @@ int? compareVersionTags(String? a, String? b) {
 /// 需要的「忽略电池优化」状态一并查回。任何一步失败都静默降级为不提示。
 class ReleaseMonitor extends ChangeNotifier {
   ReleaseMonitor({
-    this.currentVersion = '1.0.7',
+    this.currentVersion = '1.0.8',
     SharedPreferences? preferences,
   }) : _preferences = preferences {
     // 「已关闭」的记忆跟着偏好走：重启后不再重复弹同一条提示。
