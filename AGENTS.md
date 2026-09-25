@@ -3,6 +3,7 @@
 ## 范围与规则
 - 使用中文沟通。实现七人双角色模式，固定真人主持人；不扩展十三人模式或公网基础设施。
 - 当前用户确认的规则优先于 `docs/七双模式游戏介绍与完整规则.txt` 和 `docs/七双在线游戏设计方案.txt`；`docs/old` 仅供历史参考。
+- 桌游版说明与实际游戏版本存在差异：差异基线与「不要改」清单见 `docs/规则基线-勿改清单.md`。除已删除的「秘密洗脑」（普通安安）外，其余差异一律以代码现状为准，改动前先确认。
 - 入场使用本局统一玩家邀请码，随机分配空席；全员第一次准备后发牌，私下决定上下牌，再次全员准备后由主持人开局。可调整顺序期间不公开角色头像或名称。
 - 玩家身份与持久席位分离；踢人、观战替补不得重抽角色或重置技能。夜间同时行动，死亡者仍可完成当夜行动。
 - 提名在白天随时可提交、提交即生效（无需二次确认），进入提名阶段时先前提名或放弃自动视为已确认；同一人可被多人提名，计票去重后每张牌只投一轮，提名过当前候选的玩家自动投同意票。
@@ -27,11 +28,13 @@
 - 前端检查/构建：在 `frontend/` 执行 `npm.cmd run build`。
 - 客户端编译发行：在 `client/` 执行 `flutter build apk --release --target-platform android-arm64` 与 `flutter build windows --release`。
 - 每次编译后运行 `package-release.cmd`：把 `client/build/windows/x64/runner/Release` 重新打成 `魔法裁判Windows.zip`，并与 `app-release.apk` 一起覆盖复制到 `\\192.168.0.114\烟台一中\云控\信息技术`。
-- 客户端版本标签：后端 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`（`x.y.z` 三段），低于 latest 提示可更新、低于 minimum 强制更新；客户端内置版本号写在 `client/lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `client/pubspec.yaml` 的版本名同步手改，不动安卓 versionCode/versionName。
+- 在 DSH/自动化里调用发布脚本必须写成 `cmd /c "chcp 936>nul & package-release.cmd"`（不要直接 `cmd /c package-release.cmd`）。脚本本身是 GBK 编码，DSH 的 pwsh 子进程码页不是 936 时它里面的中文路径会被解码错：症状是构建目录里多出一个乱码名的 `*.zip`、复制目标解析失败，只在退出码 1 时回一句 `The network name cannot be found`，看起来像共享目录不可达，其实是编码问题。遇到这个症状先删掉乱码 zip（`Get-ChildItem client\build\windows\x64\runner\Release -Filter *.zip | Remove-Item -Force`）再按上面的写法重跑；不删就会被重新打进新 zip。成功时脚本打印「已发布到 …」且退出码为 0。
+- 发布后必须自己核对结果，不要只看脚本退出码：`\\192.168.0.114\烟台一中\云控\信息技术` 下的 `魔法裁判Windows.zip`、`app-release.apk` 要与 `client\build\windows\x64\runner\Release`、`client\build\app\outputs\flutter-apk` 里的本地文件大小与时间戳逐一一致；APK 版本号用 `client\build\app\outputs\apk\release\output-metadata.json` 的 `versionName` 核对，安卓 `versionCode` 保持不动。
+- 客户端版本标签：后端 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`（`x.y.z` 三段），低于 latest 提示可更新、低于 minimum 强制更新；客户端内置版本号写在 `client/lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `client/pubspec.yaml` 的版本名同步手改，不动安卓 versionCode/versionName。部署环境的标签在本地不入库的 `start.cmd.local.cmd` 里，改完必须重启服务端进程，`/api/health` 才会下发新版本。
 - 有意义的行为修改必须实际启动并验证相关服务或浏览器路径；新增回归检查只保护真实规则、权限或数据丢失边界。
 - 更新现有 TXT 运行说明；保持改动最小，不为假设需求搭框架。并发代理修改不同文件，统一在集成结束后格式化、构建和运行检查。
 
 ## 版本管理
 - 使用本地 Git 管理可回退版本；改动前保留基线，验证完成后提交功能变更。自动推送远端。
 - 不提交 `data/`、`.venv/`、`node_modules/`、构建产物、缓存、会话、私密材料或临时联调脚本。
-- 删除用户现有修改，每次改完重置工作区并删除所有验证数据。
+- 不要删除用户现有修改，每次改完删除所有验证数据。
