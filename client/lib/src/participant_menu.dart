@@ -111,24 +111,35 @@ bool _deadOf(GameStore store, String? seatId) {
 
 /// 角色登场介绍：下层登场、复活、换牌时自动弹一次，
 /// 内容就是该角色的公开技能说明，和点头像看到的角色详情同源。
+/// [opening] 为真时是开局那一次：宿主在候场转入进行中时锁定上层牌，
+/// 换的只是标题与收尾文案，技能说明仍与角色详情同源。
 /// 发牌不在此列——那时玩家正在「我的双牌」里自己选上下牌，不需要弹窗遮挡。
 Future<void> showRoleIntro(
   BuildContext context,
   GameStore store,
-  String roleId,
-) =>
+  String roleId, {
+  bool opening = false,
+}) =>
     showPredictiveSheet<void>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,
-      builder: (context) => _RoleIntroSheet(store: store, roleId: roleId),
+      builder: (context) =>
+          _RoleIntroSheet(store: store, roleId: roleId, opening: opening),
     );
 
 class _RoleIntroSheet extends StatelessWidget {
-  const _RoleIntroSheet({required this.store, required this.roleId});
+  const _RoleIntroSheet({
+    required this.store,
+    required this.roleId,
+    this.opening = false,
+  });
 
   final GameStore store;
   final String roleId;
+
+  /// 开局的上层牌教程：说明这一张就是开局起使用的牌。
+  final bool opening;
 
   @override
   Widget build(BuildContext context) {
@@ -156,7 +167,7 @@ class _RoleIntroSheet extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '新角色登场',
+                        opening ? '开局 · 上层牌' : '新角色登场',
                         style: TextStyle(
                           fontSize: 12,
                           color: context.palette.accent,
@@ -200,7 +211,9 @@ class _RoleIntroSheet extends StatelessWidget {
             ],
             const SizedBox(height: AppSpacing.md),
             Text(
-              '此刻起你使用这张牌的技能；私密信息只在本机显示。',
+              opening
+                  ? '开局起你使用上层牌；上层牌出局后，你才开始使用下层牌。私密信息只在本机显示。'
+                  : '此刻起你使用这张牌的技能；私密信息只在本机显示。',
               style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],

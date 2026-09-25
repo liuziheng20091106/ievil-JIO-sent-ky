@@ -334,25 +334,34 @@ class HostFlow(unittest.TestCase):
         self.assertEqual(
             entered.json(), {"owner": False, "announced": True, "owner_name": "主持人(主持10001)"}
         )
-        # 全服通告：任何已登录身份在大厅都能看到，并写清是谁进了谁的对局。
-        lobby = self.client.get("/api/lobby", headers=other).json()
-        listed = [item for item in lobby["announcements"] if item["title"] == "有主持人进入了他人建立的对局"]
-        self.assertEqual(len(listed), 1)
-        self.assertIn("主持10005", listed[0]["body"])
-        self.assertIn("主持人(主持10001)", listed[0]["body"])
+        # 对局内系统公告：在本局的记录里发一条全场可见的 alert，写清谁进了谁的对局。
+        def alerts(headers):
+            page = self.client.get(
+                f"/api/games/{game_id}/messages", headers=headers, params={"scope": "system"}
+            ).json()
+            return [item for item in page["messages"] if item["kind"] == "alert"]
 
-        # 同一账号在同一局只通告一次，重复打开管理界面不刷屏。
+        listed = alerts(other)
+        self.assertEqual(len(listed), 1)
+        self.assertIn("主持10005", listed[0]["text"])
+        self.assertIn("主持人(主持10001)", listed[0]["text"])
+        # 本局内的身份都看得到：连可见范围最窄的「还没确认进入的主持人」也能读到，
+        # 因为这是本局 kind=alert 的无受众系统消息，不是大厅那个全服公告库。
+        owner_page = self.client.get(
+            f"/api/games/{game_id}/messages", headers=self.admin, params={"scope": "system"}
+        ).json()
+        self.assertTrue(any(item["kind"] == "alert" for item in owner_page["messages"]))
+        self.assertEqual(self.client.get("/api/lobby", headers=other).json()["announcements"], [])
+
+        # 同一账号在同一局只公告一次，重复打开管理界面不刷屏。
         again = self.client.post(f"/api/games/{game_id}/host/enter", headers=other)
         self.assertEqual(again.json()["announced"], False)
-        lobby = self.client.get("/api/lobby", headers=other).json()
-        self.assertEqual(
-            len([item for item in lobby["announcements"] if item["title"] == "有主持人进入了他人建立的对局"]),
-            1,
-        )
+        self.assertEqual(len(alerts(other)), 1)
 
-        # 建局主持人自己进入不算越权，不产生通告。
+        # 建局主持人自己进入不算越权，不产生公告。
         mine = self.client.post(f"/api/games/{game_id}/host/enter", headers=self.admin)
         self.assertEqual(mine.json(), {"owner": True, "announced": False, "owner_name": "主持人(主持10001)"})
+        self.assertEqual(len(alerts(self.admin)), 1)
 
     def test_unconfirmed_host_has_no_host_data_or_power(self):
         """未确认进入管理界面前，主持人没有任何主持级数据与管理权（含禁言）。"""

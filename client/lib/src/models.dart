@@ -461,7 +461,7 @@ class HostEntryResult {
   final Map<String, dynamic> raw;
   late final bool owner;
 
-  /// 本次进入是否已经向全服发布了通告（同一账号同一局只会通告一次）。
+  /// 本次进入是否已经发过对局内系统公告（同一账号同一局只会发一次）。
   late final bool announced;
   late final String ownerName;
 }

@@ -7,6 +7,31 @@ import 'emoji.dart';
 /// 不落盘是有意的——本机可能先后登录多个账号，表情使用记录不属于任何对局数据。
 final recentEmojiIds = <String>[];
 
+/// 表情面板打开期间的返回拦截：返回键先收面板。
+///
+/// 面板占的是输入区，玩家按返回想收掉的通常只是面板；没有这一层时，聊天页在根路由上
+/// 会被整个收走（Android 上就是退出应用），行动表单会连同已填内容一起被收起。
+/// 只在面板打开时挂上（关掉面板这个作用域就消失），所以 canPop 恒为假：
+/// 一次返回固定用来收面板，收完之后返回恢复原样。Android 14+ 的预测性返回也据此让路，
+/// 见 predictive_sheet.dart 对 `RoutePopDisposition.doNotPop` 的判断。
+class EmojiPanelScope extends StatelessWidget {
+  const EmojiPanelScope({super.key, required this.onClose, required this.child});
+
+  /// 本次返回该做的事：收起面板。
+  final VoidCallback onClose;
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) onClose();
+        },
+        child: child,
+      );
+}
+
 /// 表情面板：经典 / 超级 / 最近分组 + 名称与拼音搜索。
 /// 面板本身不持有输入框，插入动作由调用方在 [onPick] 里完成。
 class EmojiPicker extends StatefulWidget {

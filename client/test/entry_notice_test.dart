@@ -1,7 +1,7 @@
 // 回归检查：两条「主动提醒」的判定边界。
 //
-// 1. 自己当前的下层牌换人就弹一次角色卡介绍；首次同步只记基线，
-//    否则每次刷新/重连都会刷一个介绍窗口。
+// 1. 自己当前的下层牌换人就弹一次角色卡介绍；开局（候场转入进行中）另弹一次
+//    上层牌教程；首次同步只记基线，否则每次刷新/重连都会刷一个介绍窗口。
 // 2. 只有这次刷新新到的对局邀请才发系统通知；登录后已堆着的旧邀请不重复提醒。
 //
 // 运行方式（client 目录）：flutter test test/entry_notice_test.dart
@@ -17,12 +17,13 @@ const endpoint = 'http://127.0.0.1';
 Map<String, dynamic> viewJson({
   required Object? currentCardId,
   List<Map<String, dynamic>> cards = const [],
+  String status = 'playing',
 }) =>
     {
       'ui_version': 1,
       'id': 'game-1',
       'version': 3,
-      'status': 'playing',
+      'status': status,
       'day': 1,
       'half': 'day',
       'phase': 'speech',
@@ -100,6 +101,11 @@ void main() {
         cards: cards,
       )));
       expect(store.pendingRoleId, 'millia');
+      expect(
+        store.pendingRoleIntroOpening,
+        isFalse,
+        reason: '这是下层登场，不是开局的上层牌教程',
+      );
 
       // 介绍由界面取走一次后不再重播。
       store.pendingRoleId = null;
@@ -134,6 +140,53 @@ void main() {
       expect(store.pendingRoleId, 'emma');
     });
 
+    test('候场转入开局时弹一次上层牌教程', () async {
+      final store = await previewStore();
+      final cards = [
+        {'id': 'c-1', 'role_id': 'hiro', 'alive': true},
+        {'id': 'c-2', 'role_id': 'emma', 'alive': true},
+      ];
+
+      // 候场与调序：当前牌发下来就在手上，但那时玩家还在自己排上下牌，
+      // 不该被介绍窗口盖住。
+      store.applyView(GameView.fromJson(viewJson(
+        currentCardId: 'c-1',
+        cards: cards,
+        status: 'lobby',
+      )));
+      expect(store.pendingRoleId, isNull);
+
+      // 主持人开局：上下牌锁定，当前牌没变也要弹一次「开局 · 上层牌」。
+      store.applyView(GameView.fromJson(viewJson(
+        currentCardId: 'c-1',
+        cards: cards,
+      )));
+      expect(store.pendingRoleId, 'hiro');
+      expect(store.pendingRoleIntroOpening, isTrue);
+
+      // 取走一次后不再重播。
+      store.pendingRoleId = null;
+      store.pendingRoleIntroOpening = false;
+      store.applyView(GameView.fromJson(viewJson(
+        currentCardId: 'c-1',
+        cards: cards,
+      )));
+      expect(store.pendingRoleId, isNull);
+    });
+
+    test('开局之后才第一次同步（刷新、重连、替补入席）不补弹上层牌教程', () async {
+      final store = await previewStore();
+      store.applyView(GameView.fromJson(viewJson(
+        currentCardId: 'c-1',
+        cards: [
+          {'id': 'c-1', 'role_id': 'hiro', 'alive': true},
+          {'id': 'c-2', 'role_id': 'emma', 'alive': true},
+        ],
+      )));
+      expect(store.pendingRoleId, isNull);
+      expect(store.pendingRoleIntroOpening, isFalse);
+    });
+
     test('登出后重登的首次同步只记基线，不补弹旧角色的介绍', () async {
       final store = await previewStore();
       await store.logout();
@@ -157,6 +210,20 @@ void main() {
       )));
       await store.returnToLobby();
       expect(store.pendingRoleId, isNull);
+
+      // 新的一局重新走「候场 → 开局」：上一局已经停在「进行中」，
+      // 若不把状态基线一起清掉，这次开局就会被当成普通同步而漏掉教程。
+      store.applyView(GameView.fromJson(viewJson(
+        currentCardId: 'c-1',
+        cards: cards,
+        status: 'lobby',
+      )));
+      store.applyView(GameView.fromJson(viewJson(
+        currentCardId: 'c-1',
+        cards: cards,
+      )));
+      expect(store.pendingRoleId, 'emma');
+      expect(store.pendingRoleIntroOpening, isTrue);
     });
   });
 

@@ -48,7 +48,7 @@ class GameApi {
         ),
       );
 
-  /// 主持人确认进入本局管理界面：服务端据此登记，并在非建局主持人时向全服通告。
+  /// 主持人确认进入本局管理界面：服务端据此登记，并在非建局主持人时向本局发一条系统公告。
   Future<HostEntryResult> enterHostAdmin(String gameId) async =>
       HostEntryResult.fromJson(await _request(
         'POST',

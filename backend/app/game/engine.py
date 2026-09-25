@@ -53,6 +53,7 @@ from .state import (
     host_view_actor,
     current,
     deal_cards,
+    debunked_abilities,
     duel_cards,
     duel_vote_required,
     eligible_voters,
@@ -443,7 +444,7 @@ def close_vote(game, events):
 
 
 def advance(game, events):
-    require(not game["pending"], "仍有待裁定事项，请逐项处理后推进")
+    require(not game["pending"], "仍有待裁定事项，请先在「裁决」里逐项处理后再推进")
     game.pop("rewound_night", None)
     phase = game["phase"]
     if phase == "witch":
@@ -839,7 +840,7 @@ def host_command(game, events, action, data):
         save_snapshot(game)
         notify(game, events, "所有上下牌已锁定，对局开始。")
     elif action == "host.advance":
-        advance(game, events)
+        force_advance(game, events)
     elif action == "host.auto":
         paused = not game["public"].get("auto_advance_off")
         game["public"]["auto_advance_off"] = paused
@@ -1219,6 +1220,10 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             )
             use_card = candidate
         require(use_card is not None, "当前没有可声明技能的角色牌")
+        require(
+            ability not in debunked_abilities(game, sid),
+            "该技能已被质疑拆穿，本局不能再发动",
+        )
         real = can_day_ability(game, use_card, ability)
         fake = not real and day_fake_allowed(game, use_card, ability)
         require(real or fake, "此时不能声明该技能")
@@ -1257,7 +1262,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             notify(
                 game,
                 events,
-                f"{sid}号质疑成功：这次伪装技能已经生效的部分一并撤销。",
+                f"{sid}号质疑成功：这次伪装技能已经生效的部分一并撤销，"
+                f"{d['seat_id']}号的「{DAY_ABILITIES[d['ability']][1]}」本局不能再发动。",
                 alert=True,
             )
         else:
@@ -1678,6 +1684,87 @@ def run_auto_advance(game, now=None):
     return events
 
 
+def timeout_seat(game, events, sid):
+    """把一个席位当前未完成的行动按超时（视为放弃）处理；返回是否确有行动被放弃。
+
+    与主持人的30秒警告到点共用同一套分支：夜间视为放弃并确认，顺序发言顺延到
+    下一位，提名记作放弃，投票记弃权，处决响应记作确认，穗乃香目击按默认显示。
+    """
+    phase = game["phase"]
+    witness = next(
+        (
+            item
+            for item in game["pending"]
+            if item["kind"] == "honoka_witness" and item["seat_id"] == sid
+        ),
+        None,
+    )
+    if witness:
+        publish_witness(
+            game,
+            events,
+            {**witness, "seat_id": witness["witness_seat"]},
+            witness["suspects"],
+        )
+        game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
+    elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
+        clear_seat_actions(game, sid, events)
+        game["night"]["confirmed"].append(sid)
+        unlock_coco(game, events)
+    elif phase == "speech" and game["public"]["speaker"] == sid:
+        speech_done(game, events)
+    elif phase == "nomination" and sid in pending_nominators(game):
+        game.setdefault("nomination_done", []).append(sid)
+    elif phase == "voting":
+        game["votes"][sid] = "abstain"
+    elif phase == "execution":
+        if sid not in game["execution_ready"]:
+            game["execution_ready"].append(sid)
+    else:
+        return False
+    game["warnings"].pop(sid, None)
+    return True
+
+
+def timeout_outstanding(game, events):
+    """强制推进：本阶段所有未完成的玩家行动立刻按超时处理。
+
+    顺序发言一次只暴露当前发言人，超时后顺延到下一位，所以循环取到没有待办为止；
+    每轮都要求至少有一个席位真的被处理，避免任何意外分支让命令空转。
+    """
+    timed_out = []
+    for _ in range(len(game["seats"]) * 2 + 2):
+        targets = outstanding_seats(game)
+        if not targets or game["status"] != "playing":
+            break
+        progressed = False
+        for sid in targets:
+            if timeout_seat(game, events, sid):
+                timed_out.append(sid)
+                progressed = True
+        if not progressed:
+            break
+    timed_out = list(dict.fromkeys(timed_out))
+    if timed_out:
+        for sid in timed_out:
+            notify(game, events, f"{sid}号未完成的操作已按超时处理。", [sid], "强制推进")
+        log_event(
+            game,
+            "host",
+            "主持人强制推进：" + "、".join(f"{sid}号" for sid in timed_out) + "未完成的行动按超时处理",
+        )
+    return timed_out
+
+
+def force_advance(game, events):
+    """主持人的强制推进：先让所有未完成的玩家行动立刻超时，再推进阶段。
+
+    待裁定事项不算玩家行动，仍由 advance() 拒绝，必须由主持人逐项处理。
+    """
+    timeout_outstanding(game, events)
+    advance(game, events)
+
+
 def expire_warnings(game, now=None):
     now = time() if now is None else now
     expired = [sid for sid, deadline in game["warnings"].items() if deadline <= now]
@@ -1685,36 +1772,7 @@ def expire_warnings(game, now=None):
         return []
     events = []
     for sid in expired:
-        phase = game["phase"]
-        witness = next(
-            (
-                item
-                for item in game["pending"]
-                if item["kind"] == "honoka_witness" and item["seat_id"] == sid
-            ),
-            None,
-        )
-        if witness:
-            publish_witness(
-                game,
-                events,
-                {**witness, "seat_id": witness["witness_seat"]},
-                witness["suspects"],
-            )
-            game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
-        elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
-            clear_seat_actions(game, sid, events)
-            game["night"]["confirmed"].append(sid)
-            unlock_coco(game, events)
-        elif phase == "speech" and game["public"]["speaker"] == sid:
-            speech_done(game, events)
-        elif phase == "nomination" and sid in pending_nominators(game):
-            game.setdefault("nomination_done", []).append(sid)
-        elif phase == "voting":
-            game["votes"][sid] = "abstain"
-        elif phase == "execution":
-            if sid not in game["execution_ready"]:
-                game["execution_ready"].append(sid)
+        timeout_seat(game, events, sid)
         game["warnings"].pop(sid, None)
         # 警告与超时只私下告知被警告的席位，不对全场公告。
         notify(

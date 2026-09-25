@@ -738,8 +738,11 @@ class ResolutionEdges(unittest.TestCase):
         self.assertNotIn(
             "vote.nominate", [item["id"] for item in actions_for(game, player(game, "4"))]
         )
-        with self.assertRaises(GameError):
-            command(game, HOST, "host.advance")
+        # 未提名或放弃的席位仍是待办：系统不会自动推进，等主持人处理。
+        self.assertEqual(set(pending_nominators(game)), {"3", "5", "6", "7"})
+        self.assertFalse(
+            any(item["kind"] == "advance" and item["blocking"] for item in host_tasks(game))
+        )
         for sid in ("3", "5", "6", "7"):
             command(game, player(game, sid), "vote.pass")
         command(game, HOST, "host.advance")
@@ -1990,6 +1993,91 @@ class HostTodo(unittest.TestCase):
             item for item in game_view(game, HOST)["host"]["tasks"] if item["id"] == "advance"
         )
         self.assertFalse(advance["blocking"])
+
+    def test_unfinished_player_actions_no_longer_block_the_advance(self):
+        """未完成的玩家行动不再是阻塞项：主持人可以直接推进让它们立刻超时。"""
+        game = arranged_game("voting")
+        game["public"]["votes"] = {"candidate": "3"}
+        game["votes"] = {}
+        tasks = game_view(game, HOST)["host"]["tasks"]
+        self.assertTrue(any(item["kind"] == "voting" for item in tasks))
+        for task in tasks:
+            if task["action"] == "host.warn":
+                self.assertFalse(task["blocking"])
+        advance = next(item for item in tasks if item["id"] == "advance")
+        self.assertFalse(advance["blocking"])
+        self.assertIn("按超时处理", advance["detail"])
+
+
+class ForceAdvance(unittest.TestCase):
+    """主持人推进就是强制推进：未完成的玩家行动立刻按超时（视为放弃）处理。"""
+
+    def test_force_advance_skips_the_rest_of_the_speech_round(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        command(game, player(game, "4"), "speech.speak", {"text": "我提前写好了"})
+        events = command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "discussion")
+        self.assertIsNone(game["public"]["speaker"])
+        # 提前写好的内容不随强制推进丢失，仍以玩家消息公开。
+        self.assertIn("我提前写好了", [item["text"] for item in events if item["kind"] == "chat"])
+        self.assertTrue(any("强制推进" in item["text"] for item in game["log"]))
+        # 被跳过的席位只收到私下提示，不对全场公告。
+        for event in events:
+            if "按超时处理" in event["text"]:
+                self.assertIsNotNone(event["audience"])
+
+    def test_force_advance_abstains_every_missing_vote(self):
+        game = arranged_game("nomination")
+        command(game, player(game, "2"), "vote.nominate", {"target": "3"})
+        # 其余席位未提名或放弃：强制推进把它们按超时处理，直接进入投票。
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "voting")
+        command(game, player(game, "1"), "vote.cast", {"choice": "yes"})
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["votes"]["1"], "yes")
+        self.assertEqual(game["votes"]["2"], "yes")
+        for sid in ("3", "4", "5", "6", "7"):
+            self.assertEqual(game["votes"][sid], "abstain")
+        self.assertEqual(game["vote_rounds"][0]["yes"], 2)
+        self.assertEqual(game["phase"], "execution")
+
+    def test_force_advance_confirms_given_up_night_actions(self):
+        game = arranged_game("night", "night")
+        begin_night(game, [])
+        waiting = outstanding_seats(game)
+        self.assertTrue(waiting)
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(set(game["night"]["confirmed"]), set(game["night"]["actors"]))
+        self.assertTrue(game["night"]["locked"])
+        self.assertIsNotNone(game["night"]["preview"])
+        self.assertEqual(game["phase"], "night_review")
+
+    def test_force_advance_still_refuses_while_a_ruling_is_pending(self):
+        """待裁定事项不是玩家行动：强制推进不会替主持人做裁定。"""
+        game = arranged_game("discussion")
+        item = pending(game, "evidence", "遗留证物", seat_id="1", text="一句话")
+        with self.assertRaises(GameError):
+            command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "discussion")
+        self.assertEqual([entry["id"] for entry in game["pending"]], [item["id"]])
+
+    def test_force_advance_lets_the_honoka_witness_choice_time_out(self):
+        game = arranged_game("night_results", "night")
+        pending(
+            game,
+            "honoka_witness",
+            "穗乃香被列入目击：等待本人选择显示角色",
+            seat_id="1",
+            victim="millia",
+            witness_seat="1",
+            suspects=["honoka", "emma", "noah", "coco"],
+        )
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["pending"], [])
+        self.assertEqual(game["witness"]["seat_id"], "1")
+        self.assertIn("穗乃香", game["witness"]["text"])
+        self.assertEqual(game["phase"], "speech")
 
 
 class ActionDescriptions(unittest.TestCase):

@@ -49,16 +49,18 @@ def host_tasks(game):
         return tasks
 
     def warn_task(kind, seat_id, title):
+        # 未完成的玩家行动不再是「阻塞项」：主持人可以直接强制推进，让它们立刻超时。
+        # 这条待办只提示主持人还能先警告、再等30秒。
         tasks.append(
             {
                 "id": f"{kind}:{seat_id}" if seat_id else kind,
                 "kind": kind,
                 "title": title,
-                "detail": "",
+                "detail": "可直接推进（未完成的行动立刻按超时处理），或先警告并等待30秒。",
                 "seats": [seat_id] if seat_id else [],
                 "action": "host.warn",
                 "payload": {"seat_id": seat_id} if seat_id else {},
-                "blocking": True,
+                "blocking": False,
             }
         )
 
@@ -137,13 +139,21 @@ def host_tasks(game):
     if game["phase"] != "night_review":
         waiting = outstanding_seats(game)
         ready = not game["pending"] and not waiting and not game["winner_candidate"]
+        if ready:
+            detail = PHASES[game["phase"]] + "：现在可以推进"
+        elif waiting and not game["pending"] and not game["winner_candidate"]:
+            detail = (
+                PHASES[game["phase"]]
+                + f"：仍{len(waiting)}个席位未完成，推进将立刻把它们按超时处理"
+            )
+        else:
+            detail = PHASES[game["phase"]] + "：先处理上方待办，或等待玩家完成行动"
         tasks.append(
             {
                 "id": "advance",
                 "kind": "advance",
                 "title": "完成当前阶段 / 推进",
-                "detail": PHASES[game["phase"]]
-                + ("：现在可以推进" if ready else "：先处理上方待办，或等待玩家完成行动"),
+                "detail": detail,
                 "seats": [],
                 "action": "host.advance",
                 "payload": {},

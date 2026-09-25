@@ -369,11 +369,14 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
               ),
             ),
             if (emojiField != null)
-              EmojiPicker(
-                onPick: (face) => _insertEmoji(emojiField!, face),
-                // 表单本身已占屏 88%，面板再高会把字段区压没。
-                height: (MediaQuery.sizeOf(context).height * 0.26)
-                    .clamp(140.0, 210.0),
+              EmojiPanelScope(
+                onClose: () => setState(() => emojiField = null),
+                child: EmojiPicker(
+                  onPick: (face) => _insertEmoji(emojiField!, face),
+                  // 表单本身已占屏 88%，面板再高会把字段区压没。
+                  height: (MediaQuery.sizeOf(context).height * 0.26)
+                      .clamp(140.0, 210.0),
+                ),
               ),
           ],
         ),

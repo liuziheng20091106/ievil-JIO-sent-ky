@@ -6,6 +6,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:seven_double_client/src/emoji.dart';
 import 'package:seven_double_client/src/emoji_picker.dart';
 
+/// 系统返回：引擎在非预测性返回时就是往 flutter/navigation 发 popRoute。
+Future<void> pressSystemBack(WidgetTester tester) async {
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/navigation',
+    const JSONMethodCodec().encodeMethodCall(const MethodCall('popRoute')),
+    (ByteData? _) {},
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -106,5 +116,51 @@ void main() {
     await tester.tap(find.widgetWithText(FilterChip, '超级'));
     await tester.pump();
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, '');
+  });
+
+  // 返回键绑定到关闭表情面板：面板占的是输入区，玩家按返回想收的只是面板。
+  // 聊天页的面板就在根路由上，没有这一层时返回会让应用直接退出。
+  testWidgets('表情面板打开时返回键只收面板，不请求退出应用', (tester) async {
+    var open = true;
+    final platformCalls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        platformCalls.add(call);
+        return null;
+      },
+    );
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+    bool requestedExit() =>
+        platformCalls.any((call) => call.method == 'SystemNavigator.pop');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) => Scaffold(
+            body: open
+                ? EmojiPanelScope(
+                    onClose: () => setState(() => open = false),
+                    child: const SizedBox(
+                      height: 300,
+                      child: Center(child: Text('表情面板')),
+                    ),
+                  )
+                : const Center(child: Text('对局页')),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await pressSystemBack(tester);
+    expect(find.text('对局页'), findsOneWidget, reason: '返回只收面板，页面留着');
+    expect(find.text('表情面板'), findsNothing);
+    expect(requestedExit(), isFalse, reason: '面板开着时返回不能请求退出应用');
+
+    // 面板收起后返回恢复原样：这次才轮到页面自己处理（根路由上就是退出应用）。
+    await pressSystemBack(tester);
+    expect(requestedExit(), isTrue, reason: '面板收起后返回不再被拦');
   });
 }

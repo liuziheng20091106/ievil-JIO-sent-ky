@@ -482,6 +482,35 @@ Future<void> pumpAt(WidgetTester tester, GameStore store, Size size) async {
   await tester.pump(const Duration(milliseconds: 600));
 }
 
+/// 模拟软键盘弹出：真机上 IME 是逐帧上报 inset 的动画。
+///
+/// 一次性跳变会掩盖只在动画里出现的问题——每帧 MediaQuery 变化都会让 Scrollable
+/// 重建 ScrollPosition，任何依赖 ScrollPosition/ScrollPhysics 内部状态的纠正都会失效，
+/// 所以键盘相关的回归必须按帧推进。物理像素与逻辑像素在 pumpAt 里是 1:1。
+Future<void> showKeyboard(WidgetTester tester, {double inset = 320}) async {
+  for (var step = 1; step <= 4; step++) {
+    tester.view.viewInsets = FakeViewPadding(bottom: inset * step / 4);
+    await tester.pump(const Duration(milliseconds: 40));
+  }
+  await tester.pumpAndSettle();
+}
+
+Future<void> hideKeyboard(WidgetTester tester, {double inset = 320}) async {
+  for (var step = 3; step >= 0; step--) {
+    tester.view.viewInsets = FakeViewPadding(bottom: inset * step / 4);
+    await tester.pump(const Duration(milliseconds: 40));
+  }
+  await tester.pumpAndSettle();
+}
+
+/// 在消息列表里拖动。不能拿某个气泡当拖动点：滚过之后它可能已经被裁出视口，
+/// tester.drag 打不中就不会真的滚。
+Future<void> dragMessages(WidgetTester tester, double dy) async {
+  final fieldTop = tester.getTopLeft(find.byType(TextField)).dy;
+  await tester.dragFrom(Offset(210, fieldTop - 200), Offset(0, dy));
+  await tester.pumpAndSettle();
+}
+
 /// 测试环境默认没有可用字形（中文与图标都会渲染成方框），这里显式加载内置字体与
 /// Material 图标字体，否则 golden 图无法反映真实观感。
 Future<void> loadBundledFonts() async {
@@ -708,28 +737,77 @@ void main() {
       // 进局前就有一长串历史，消息列表真的可以滚动。
       store.mergeMessagesForTest(longChatJson());
       await pumpAt(tester, store, const Size(420, 880));
+      // 滚到列表中间再弹键盘：这里没有边界夹取，消息必须与输入框一像素不差地同步。
+      await dragMessages(tester, -4000);
+      await dragMessages(tester, 900);
 
       final field = find.byType(TextField);
-      // 挑一条弹出键盘前后都在视口里的消息：位置变化要与输入框完全一致。
-      final bubble = find.text('系统信息：你已获得一次额外的信息授权。');
+      final scrollable = find.ancestor(
+        of: find.byType(MessageBubble).first,
+        matching: find.byType(Scrollable),
+      );
+      final position = tester.state<ScrollableState>(scrollable).position;
       final fieldBefore = tester.getTopLeft(field).dy;
-      final bubbleBefore = tester.getTopLeft(bubble).dy;
+      final pixelsBefore = position.pixels;
+      final viewportBefore = position.viewportDimension;
+      // 视口下沿当时贴在内容里的位置：弹键盘后必须还是这一处。
+      final anchorBefore = pixelsBefore + viewportBefore;
 
-      // 模拟软键盘弹出：物理像素与逻辑像素在 pumpAt 里是 1:1。
-      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
-      await tester.pump(const Duration(milliseconds: 300));
+      await showKeyboard(tester);
 
       final movedField = fieldBefore - tester.getTopLeft(field).dy;
-      final movedBubble = bubbleBefore - tester.getTopLeft(bubble).dy;
       expect(movedField, greaterThan(0), reason: '输入框要跟着键盘上滑');
-      expect(movedBubble, closeTo(movedField, 1),
-          reason: '消息要跟输入框同步上滑，相对位置不变');
+      final shrink = viewportBefore - position.viewportDimension;
+      expect(shrink, greaterThan(0), reason: '软键盘会顶矮消息视口');
+      expect(position.pixels - pixelsBefore, closeTo(shrink, 1),
+          reason: '视口矮了多少偏移就涨多少——消息跟输入框一起上滑');
+      expect(position.pixels + position.viewportDimension,
+          closeTo(anchorBefore, 1),
+          reason: '视口下沿要守在内容里的同一处，输入框与消息的相对位置不变');
 
       // 收起键盘同样同步回落，一来一回不留偏移。
-      tester.view.viewInsets = FakeViewPadding.zero;
-      await tester.pump(const Duration(milliseconds: 300));
+      await hideKeyboard(tester);
+      expect(position.pixels, closeTo(pixelsBefore, 1));
       expect(tester.getTopLeft(field).dy, closeTo(fieldBefore, 1));
-      expect(tester.getTopLeft(bubble).dy, closeTo(bubbleBefore, 1));
+    });
+  });
+
+  // 回归：进局收到一长串历史后，消息列表要能一路滚到最底部、看得到最新消息。
+  // 曾经的自定义 physics 在「视口高度没变、只是惰性列表在细化 maxScrollExtent」时也
+  // 按旧度量算锚点纠正偏移，于是玩家刚滚到的位置被一帧帧拽回旧锚点：列表只能在很小的
+  // 一段里滑动、怎么拖都看不到最新消息（真机表现）。
+  testWidgets('收到一长串历史后能滚到底并看到最新消息', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: false);
+      await pumpAt(tester, store, const Size(420, 880));
+
+      // 进局后历史补齐：真实路径由实时事件合并完再通知界面重建。
+      store.mergeMessagesForTest(longChatJson(60));
+      store.markPrivateViewed();
+      await tester.pump();
+      final scrollable = find.ancestor(
+        of: find.byType(MessageBubble).first,
+        matching: find.byType(Scrollable),
+      );
+      final position = tester.state<ScrollableState>(scrollable).position;
+
+      // 新消息到达后自动滚到最底部：最新一条必须看得见。
+      await tester.pumpAndSettle();
+      expect(position.pixels, closeTo(position.maxScrollExtent, 1),
+          reason: '历史到达后要停在最底部');
+      expect(find.text('第 159 条公屏讨论内容'), findsOneWidget,
+          reason: '最新一条要看得见');
+
+      // 手动往上拖要跟手，不能被拽回旧锚点。
+      final before = position.pixels;
+      await dragMessages(tester, 600);
+      expect(before - position.pixels, greaterThan(400), reason: '拖动要跟手');
+
+      // 再拖回底部依然要能到底。
+      await dragMessages(tester, -8000);
+      expect(position.pixels, closeTo(position.maxScrollExtent, 1),
+          reason: '能再滚到最底部');
+      expect(find.text('第 159 条公屏讨论内容'), findsOneWidget);
     });
   });
 
@@ -740,8 +818,7 @@ void main() {
       final store = await previewStore(host: false);
       store.mergeMessagesForTest(longChatJson());
       await pumpAt(tester, store, const Size(420, 880));
-      await tester.drag(find.byType(MessageBubble).first, const Offset(0, -4000));
-      await tester.pumpAndSettle();
+      await dragMessages(tester, -8000);
 
       final field = find.byType(TextField);
       final latest = find.byType(MessageBubble).last;
@@ -750,8 +827,7 @@ void main() {
       final before = gap();
       expect(before, greaterThan(0), reason: '最新消息停在输入框上方');
 
-      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
-      await tester.pump(const Duration(milliseconds: 300));
+      await showKeyboard(tester);
 
       expect(gap(), closeTo(before, 1), reason: '键盘弹出后最新消息仍贴在输入框上方');
     });
@@ -1093,6 +1169,45 @@ void main() {
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('goldens/role_intro.png'),
+    );
+  });
+
+  testWidgets('开局上层牌教程渲染', (tester) async {
+    final store = await previewStore(host: false);
+    await pumpAt(tester, store, const Size(520, 900));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: Center(
+            child: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () =>
+                    showRoleIntro(context, store, 'hiro', opening: true),
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // 单独跑这条时图片缓存是空的：先预热立绘，避免「头像空白」的 golden
+    // 与全量跑（前面的测试已经解码过立绘）不一致。
+    await tester.runAsync(() async {
+      await precacheImage(
+        const AssetImage('assets/avatars/hiro.png'),
+        tester.element(find.text('打开')),
+      );
+    });
+    await tester.pump();
+
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('goldens/role_intro_opening.png'),
     );
   });
 }

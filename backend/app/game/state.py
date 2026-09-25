@@ -270,6 +270,19 @@ def lost_by_challenge(game, seat):
     return bool(seat) and seat.get("occupant_id") in game["spiritual"]["personal_losses"]
 
 
+def debunked_abilities(game, seat_id):
+    """被质疑拆穿的技能：该席位本局不能再发动同一技能。
+
+    「质疑成功」是声明状态 stopped 的唯一来源，因此直接从声明记录派生，
+    不需要单独记账；回溯时随声明记录一起还原时间线。
+    """
+    return {
+        declaration["ability"]
+        for declaration in game.get("declarations", [])
+        if declaration["seat_id"] == seat_id and declaration["status"] == "stopped"
+    }
+
+
 def pending_nominators(game):
     """Seats that have not nominated or passed yet; they may act at the same time.
 

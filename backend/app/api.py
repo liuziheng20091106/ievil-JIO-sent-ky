@@ -639,10 +639,12 @@ async def host_enter(game_id: str, request: Request):
     面板与私聊历史，也不能执行禁言、移人、代操作等管理动作（见 game.state.host_capable）。
     确认成功后立刻把完整主持投影推给这一局的所有连接，客户端不必再刷新。
 
-    不是建立这一局的主持人时，另外向全服发一条通告；同一账号在同一局只发一次。
+    不是建立这一局的主持人时，另外在本局发一条系统公告（全场可见的 alert），
+    让在场的人当场知道有人以主持身份进了管理界面；同一账号在同一局只发一次。
     没有记录主持人身份的旧局不做越权判定。
     """
     async with realtime.lock:
+        rows = []
         with storage.transaction() as db:
             # 这里不能要求 host=True：那已经蕴含「已确认」了，会把自己锁死。
             actor = auth.require_actor(db, request, game_id)
@@ -663,18 +665,24 @@ async def host_enter(game_id: str, request: Request):
                     "host",
                     f"主持人【{entrant}】进入本局管理界面；本局主持人：{host_label(game)}",
                 )
-                storage.save_game(db, game)
                 if not owner:
-                    announcement_storage.create(
-                        "有主持人进入了他人建立的对局",
-                        f"主持人【{entrant}】进入了{host_label(game)}建立的对局管理界面。\n\n"
-                        "本局只应由建立对局的主持人操作；如果这不是你安排的，请及时联系系统管理员。",
-                        "",
-                        "系统",
+                    # 对局内系统公告：这是本局的异常操作，公告留在这一局的记录里
+                    # （alert 在两端都是红边的全场公告，玩家与观战当场就能看到）。
+                    rows.append(
+                        storage.add_message(
+                            db,
+                            game["id"],
+                            kind="alert",
+                            text=(
+                                f"主持人【{entrant}】进入了{host_label(game)}建立的对局"
+                                "管理界面；本局只应由建立对局的主持人操作。"
+                            ),
+                        )
                     )
                     announced = True
+                storage.save_game(db, game)
         # 登记成功后立刻重推状态：这一份就是升级后的完整主持投影。
-        realtime.publish(game_id)
+        realtime.publish(game_id, rows)
         return {"owner": owner, "announced": announced, "owner_name": host_label(game)}
 
 

@@ -72,6 +72,9 @@ class GameStore extends ChangeNotifier {
   /// refreshLobby 都不得用服务器的当前局 gameId 把用户拉回对局。
   bool _stayingInLobby = false;
 
+  /// 正在向服务器核对当前参与身份（观战接管席位后的兜底），避免重复请求。
+  bool _reconcilingActor = false;
+
   /// 角色目录（id → 名称、好人技能、魔女化技能）；公开信息，用于角色详情与魔典说明。
   List<RoleInfo> roles = const <RoleInfo>[];
   List<String> defaultCodex = const <String>[];
@@ -121,7 +124,7 @@ class GameStore extends ChangeNotifier {
   /// 启动应用或换局都不会自动进管理界面。
   bool hostAdminEntered = false;
 
-  /// 进入管理界面后服务端给的提示：不是建局主持人时说明已向全服通告。
+  /// 进入管理界面后服务端给的提示：不是建局主持人时说明已发本局系统公告。
   String? hostAdminNotice;
 
   /// 主动离开观战期间置位：服务端解除身份后会把旧连接按 4401 终结，
@@ -132,9 +135,13 @@ class GameStore extends ChangeNotifier {
   /// 避免为同一批人反复请求。
   Set<String> _equippedRequested = const {};
 
-  /// 下层牌刚登场（下层登场、复活、换牌）时待展示的角色 id；
-  /// 由 GameShell 弹一次角色卡介绍后清空。
+  /// 下层牌刚登场（下层登场、复活、换牌）或开局锁定上层牌时，
+  /// 待展示的角色 id；由 GameShell 弹一次角色卡介绍后清空。
   String? pendingRoleId;
+
+  /// [pendingRoleId] 要展示的是「开局 · 上层牌」教程还是「新角色登场」介绍；
+  /// 与它同时被 GameShell 取走，不留给下一帧。
+  bool pendingRoleIntroOpening = false;
 
   /// 玩家标记（参与者 id → 标记）：只是本机笔记，见 [PlayerMark]。
   /// 不落盘、不上传，登出或回大厅即清空。
@@ -157,6 +164,9 @@ class GameStore extends ChangeNotifier {
   String? _privateStateBaseline;
   String? _loadedPhaseKey;
   String? _ownCardBaseline;
+
+  /// 上一次同步的对局状态：用来认出「候场 → 开局」这一刻（上层牌刚锁定）。
+  String? _statusBaseline;
   Set<String>? _inviteBaseline;
   int _challengeGeneration = 0;
 
@@ -721,7 +731,7 @@ class GameStore extends ChangeNotifier {
       participantId == null ? null : equippedAchievements[participantId];
 
   /// 主持人确认进入本局管理界面。管理界面含全部私密信息与席位代操作，
-  /// 而且不是建立这一局的主持人进入时服务端会向全服通告，所以必须由主持人
+  /// 而且不是建立这一局的主持人进入时服务端会发本局系统公告，所以必须由主持人
   /// 自己确认一次：确认成功才真正展开管理页，失败时返回错误文案。
   Future<String?> enterHostAdmin() async {
     final client = api;
@@ -732,7 +742,7 @@ class GameStore extends ChangeNotifier {
       hostAdminEntered = true;
       hostAdminNotice = result.owner
           ? null
-          : '你不是本局的建局主持人（${result.ownerName}）；本次进入已向全服通告，'
+          : '你不是本局的建局主持人（${result.ownerName}）；本次进入已向本局发布系统公告，'
               '管理操作请交给本局主持人。';
       notifyListeners();
       return null;
@@ -860,7 +870,9 @@ class GameStore extends ChangeNotifier {
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
     pendingRoleId = null;
+    pendingRoleIntroOpening = false;
     _ownCardBaseline = null;
+    _statusBaseline = null;
     _inviteBaseline = null;
     error = null;
     await preferences.remove(_gameKey);
@@ -972,6 +984,14 @@ class GameStore extends ChangeNotifier {
     if (actor?.isHost == true) {
       hostAdminEntered = !next.hostEntryRequired;
     }
+    // 观战者被主持人安排接管席位（room.replace）后，服务端的参与身份已经变成玩家，
+    // 但本地缓存的 actor 仍是「观战」：行动区会被过滤成只剩私信（表现为看不到
+    //「准备」），「我的」页也仍写观战者。座位号与缓存对不上时重新核对一次身份。
+    if (actor != null &&
+        !actor!.isHost &&
+        next.self['seat_id']?.toString() != actor!.seatId) {
+      unawaited(_reconcileActor());
+    }
     final actionKeys = next.allActions.map((item) => item.protocolKey).toSet();
     final actionPreference = _preferenceKey('actions_seen');
     if (_actionBaseline == null) {
@@ -1004,23 +1024,32 @@ class GameStore extends ChangeNotifier {
       privateStateCount = 1;
     }
 
-    // 自己当前的下层牌换人（下层登场、复活、换牌）就弹一次角色卡介绍。
-    // 三条边界：调序阶段的上下交换也会改 current_card_id，但那时还没开局，
+    // 自己当前的下层牌换人（下层登场、复活、换牌）就弹一次角色卡介绍；
+    // 候场转入开局时上层牌刚锁定，另弹一次「开局 · 上层牌」教程。
+    // 四条边界：调序阶段的上下交换也会改 current_card_id，但那时还没开局，
     // 每换一次弹一个窗口只是噪音；发牌是「没有当前牌」到「有当前牌」，也不是登场；
-    // 基线的第一次观察同样不弹，否则恢复对局 = 重播一次介绍。
+    // 基线的第一次观察（刷新、重连、替补入席）同样不弹，否则恢复对局 = 重播一次介绍。
     final ownCardId = next.self['current_card_id']?.toString();
     final previousCardId = _ownCardBaseline;
+    final previousStatus = _statusBaseline;
     _ownCardBaseline = ownCardId;
-    if (next.status == 'playing' &&
-        ownCardId != null &&
-        previousCardId != null &&
-        previousCardId != ownCardId) {
-      final cards = next.self['cards'];
-      if (cards is List) {
-        for (final card in cards) {
-          if (card is Map && card['id']?.toString() == ownCardId) {
-            pendingRoleId = card['role_id']?.toString();
-            break;
+    _statusBaseline = next.status;
+    if (next.status == 'playing' && ownCardId != null) {
+      // 开局这一刻自己用的就是上层牌：这是本局第一次确定要用哪张牌。
+      final opening = previousStatus == 'lobby';
+      final entered = previousCardId != null && previousCardId != ownCardId;
+      if (opening || entered) {
+        final cards = next.self['cards'];
+        if (cards is List) {
+          for (final card in cards) {
+            if (card is Map && card['id']?.toString() == ownCardId) {
+              final roleId = card['role_id']?.toString();
+              if (roleId != null) {
+                pendingRoleId = roleId;
+                pendingRoleIntroOpening = opening;
+              }
+              break;
+            }
           }
         }
       }
@@ -1066,6 +1095,38 @@ class GameStore extends ChangeNotifier {
         puppetSeatId = null;
         selectedPuppetChannelId = 'public';
       }
+    }
+  }
+
+  /// 向服务器重新核对当前参与身份并覆盖本地缓存。
+  ///
+  /// 只在状态推送里的座位号与缓存不一致时调用：观战接管席位后服务端身份变成玩家，
+  /// 本地不刷新就会一直按观战者分支渲染（行动区只剩私信、「我的」页写观战者）。
+  /// 失败不打断对局，下一次状态推送会再试。
+  Future<void> _reconcileActor() async {
+    final client = api;
+    if (client == null || _reconcilingActor) return;
+    _reconcilingActor = true;
+    try {
+      final value = (await client.me())['actor'];
+      if (value == null) return;
+      final next = Actor.fromJson(value);
+      final current = actor;
+      if (current != null &&
+          current.id == next.id &&
+          current.kind == next.kind &&
+          current.seatId == next.seatId) {
+        return;
+      }
+      actor = next;
+      await preferences.setString(_actorKey, jsonEncode(actor!.raw));
+      notifyListeners();
+    } on ApiException {
+      // 身份核对失败时保留旧身份：服务端仍是权威，下一次状态推送会重试。
+    } on FormatException {
+      // 同上。
+    } finally {
+      _reconcilingActor = false;
     }
   }
 
@@ -1583,7 +1644,9 @@ class GameStore extends ChangeNotifier {
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
     pendingRoleId = null;
+    pendingRoleIntroOpening = false;
     _ownCardBaseline = null;
+    _statusBaseline = null;
     _inviteBaseline = null;
     // 登出后 1.45 秒内重登不该凭空重播旧对局的阶段动画，
     // 角标计数也不该带着旧对局的残留进入新会话。

@@ -85,9 +85,14 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     }
     final enteredRole = store.pendingRoleId;
     if (enteredRole != null) {
+      // 开局的上层牌教程与下层登场介绍共用同一张角色卡说明，只换标题与收尾文案。
+      final opening = store.pendingRoleIntroOpening;
       store.pendingRoleId = null;
+      store.pendingRoleIntroOpening = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) showRoleIntro(context, store, enteredRole);
+        if (mounted) {
+          showRoleIntro(context, store, enteredRole, opening: opening);
+        }
       });
     }
     maybeShowMarksTutorial();
@@ -674,6 +679,9 @@ class _ChatActionPageState extends State<ChatActionPage> {
   int lastCount = 0;
   bool emojiOpen = false;
 
+  /// 上一次布局时消息视口的高度（由消息列表外的 LayoutBuilder 量得）。
+  double? viewportHeight;
+
   @override
   void initState() {
     super.initState();
@@ -689,25 +697,82 @@ class _ChatActionPageState extends State<ChatActionPage> {
     super.dispose();
   }
 
+  /// 视口高度变了多少，就把偏移平移多少：输入框与消息的相对位置保持不变。
+  ///
+  /// 软键盘弹出/收起、表情面板开合、输入框长高都会顶矮消息视口，此时内容必须跟着
+  /// 输入框一起上移（或回落），否则最新几条就被压到输入框下面——用户得自己再滚一下
+  /// 才看得到，真机上「只有别人发消息（触发自动滚到底）才看得到最新消息」就是这么来的。
+  ///
+  /// 这件事不能交给 ScrollPhysics / ScrollPosition：软键盘带来的 MediaQuery 变化会让
+  /// Scrollable 每帧重建 ScrollPosition，而新位置的第一次布局不走
+  /// correctForNewDimensions（haveDimensions 还是 false），纠正会被整个丢掉——物理层
+  /// 写法在模拟器/单测里成立，到真机上一律失效。视口高度只有界面这边量得到，也就只能
+  /// 在界面这边补，而且按当前偏移做相对平移，不会和玩家自己的滚动打架。
+  void noteViewportHeight(double height) {
+    final previous = viewportHeight;
+    viewportHeight = height;
+    if (previous == null || previous == height) return;
+    if (!scroll.hasClients) return;
+    // LayoutBuilder 在子列表布局之前跑，这里读到的还是变化前的度量：既知道玩家原本是不是
+    // 停在最底部，也知道视口下沿当时贴在内容里的哪一处——后者就是变化后要守住的位置。
+    final anchor = scroll.position.pixels + previous;
+    final wasAtBottom =
+        scroll.position.pixels >= scroll.position.maxScrollExtent - 1;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !scroll.hasClients) return;
+      final position = scroll.position;
+      final target = wasAtBottom
+          // 原本贴着底部就继续贴住底部：惰性列表的 maxScrollExtent 是按已布局的几条估
+          // 出来的，视口一变它自己也会挪，只按高度差平移会停在「估算的底部」上方。
+          ? position.maxScrollExtent
+          // 其余情况按变化前记下的锚点算绝对目标：不能拿变化后的偏移再加高度差——
+          // 视口变大时框架会先把越界的偏移夹回新范围，那一截损失就再也补不回来了。
+          : anchor - height;
+      final clamped =
+          target.clamp(position.minScrollExtent, position.maxScrollExtent);
+      if (clamped != position.pixels) scroll.jumpTo(clamped);
+    });
+  }
+
   void onStore() {
     final count = widget.store.messages.length;
     if (count != lastCount) {
       lastCount = count;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && scroll.hasClients) {
-          scroll.animateTo(
-            scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-          );
-        }
+        if (mounted) scrollToLatest();
       });
+    }
+  }
+
+  /// 滚到最新一条。
+  ///
+  /// 惰性列表的 maxScrollExtent 是按已经布局的那几条估出来的（首屏常混着系统短消息，
+  /// 估得偏小），动画期间还会边滚边变：只按第一次拿到的估值滚，会停在「估算的底部」
+  /// 上，差几条消息看不到最新一条。到点后重新取一次，还差就直接补到底——每补一次都会
+  /// 多布局出几条，两三次就收敛。
+  Future<void> scrollToLatest() async {
+    if (!scroll.hasClients) return;
+    await scroll.animateTo(
+      scroll.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+    for (var attempt = 0; attempt < 3; attempt++) {
+      // 先等一帧：新偏移下的布局才会重新估出 maxScrollExtent，立刻查还是旧的估值。
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || !scroll.hasClients) return;
+      final position = scroll.position;
+      if (position.pixels >= position.maxScrollExtent) return;
+      scroll.jumpTo(position.maxScrollExtent);
     }
   }
 
   List<ActionDescriptor> get actions {
     final store = widget.store;
-    final source = store.actor!.isHost || store.actor!.isSpectator
+    // 只有主持人要在这里收敛成私信入口（主持行动在「裁决」页）。观战者本来就
+    // 拿不到任何游戏行动，不能再按缓存的 actor 过滤：观战接管席位后缓存可能仍是
+    // 「观战」，那会把刚拿到的「准备」一起滤掉，玩家就永远看不到这个按钮。
+    final source = store.actor!.isHost
         ? store.view!.allActions.where((item) => item.id.startsWith('channel.'))
         : store.view!.allActions;
     final seen = <String>{};
@@ -764,42 +829,44 @@ class _ChatActionPageState extends State<ChatActionPage> {
                   title: '当前筛选范围没有消息',
                   detail: '切换上方筛选可以查看公屏、私信与系统信息。',
                 )
-              : ListView.builder(
-                  controller: scroll,
-                  // 软键盘、表情面板与长高的输入框都会顶矮消息视口：偏移量跟着补上
-                  // 同样的高度差，消息与输入框的相对位置保持不变（见该 physics）。
-                  physics: const _ComposerFollowingScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg,
-                      AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
-                  itemCount:
-                      store.messages.length + (store.hasMoreMessages ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    if (store.hasMoreMessages && index == 0) {
-                      return Center(
-                        child: TextButton(
-                          onPressed: store.loadOlderMessages,
-                          child: const Text('加载更早消息'),
-                        ),
+              : LayoutBuilder(builder: (context, constraints) {
+                  // 只为了量到消息视口的高度：输入区被顶起时视口会被顶矮多少，
+                  // 偏移就补多少（见 noteViewportHeight）。
+                  noteViewportHeight(constraints.maxHeight);
+                  return ListView.builder(
+                    controller: scroll,
+                    padding: const EdgeInsets.fromLTRB(AppSpacing.lg,
+                        AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
+                    itemCount: store.messages.length +
+                        (store.hasMoreMessages ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (store.hasMoreMessages && index == 0) {
+                        return Center(
+                          child: TextButton(
+                            onPressed: store.loadOlderMessages,
+                            child: const Text('加载更早消息'),
+                          ),
+                        );
+                      }
+                      final item = store
+                          .messages[index - (store.hasMoreMessages ? 1 : 0)];
+                      return MessageBubble(
+                        message: item,
+                        self: store.actor?.id,
+                        store: store,
+                        onAvatar: (senderId) {
+                          final ref = participantRefFor(store, senderId);
+                          if (ref != null) showAvatarMenu(context, store, ref);
+                        },
+                        // 长按走「快速标记」：不经菜单，直接选标记。
+                        onAvatarLongPress: (senderId) {
+                          final ref = participantRefFor(store, senderId);
+                          if (ref != null) showMarkMenu(context, store, ref);
+                        },
                       );
-                    }
-                    final item =
-                        store.messages[index - (store.hasMoreMessages ? 1 : 0)];
-                    return MessageBubble(
-                      message: item,
-                      self: store.actor?.id,
-                      store: store,
-                      onAvatar: (senderId) {
-                        final ref = participantRefFor(store, senderId);
-                        if (ref != null) showAvatarMenu(context, store, ref);
-                      },
-                      // 长按走「快速标记」：不经菜单，直接选标记。
-                      onAvatarLongPress: (senderId) {
-                        final ref = participantRefFor(store, senderId);
-                        if (ref != null) showMarkMenu(context, store, ref);
-                      },
-                    );
-                  },
-                ),
+                    },
+                  );
+                }),
         ),
         if (!typing && store.view!.puppetSpectator)
           const Padding(
@@ -822,6 +889,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
           emojiOpen: emojiOpen,
           onToggleEmoji: () => setEmojiOpen(!emojiOpen),
           onPickEmoji: (face) => message.insertFace(face),
+          onCloseEmoji: () => setEmojiOpen(false),
           onTapField: () => setEmojiOpen(false),
           onSend: send,
           onClearError: () => setState(() => sendError = null),
@@ -853,52 +921,6 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 }
 
-/// 消息列表跟着输入区一起动：视口高度变化（软键盘弹出/收起、表情面板开合、
-/// 输入框长高）时，把视口下沿重新钉在内容里的同一处，输入框与消息的相对位置保持不变。
-///
-/// 系统默认的 RangeMaintainingScrollPhysics 只在偏移越界时才纠正，停在底部也照样保留
-/// 原偏移：键盘一弹出来，视口被顶矮，最新几条消息就被压到输入框下面，用户得自己再滚
-/// 一下。
-///
-/// 这里按「旧下沿在内容里的位置」直接算出新偏移，而不是在现有偏移上累加高度差：惰性
-/// 列表一次布局会跑好几轮 correctForNewDimensions（每轮的旧度量都是同一份），累加会被
-/// 成倍放大。锚点法每轮都算出同一个目标值，天然幂等。
-class _ComposerFollowingScrollPhysics extends ScrollPhysics {
-  const _ComposerFollowingScrollPhysics({super.parent});
-
-  @override
-  _ComposerFollowingScrollPhysics applyTo(ScrollPhysics? ancestor) =>
-      _ComposerFollowingScrollPhysics(parent: buildParent(ancestor));
-
-  @override
-  double adjustPositionForNewDimensions({
-    required ScrollMetrics oldPosition,
-    required ScrollMetrics newPosition,
-    required bool isScrolling,
-    required double velocity,
-  }) {
-    final corrected = super.adjustPositionForNewDimensions(
-      oldPosition: oldPosition,
-      newPosition: newPosition,
-      isScrolling: isScrolling,
-      velocity: velocity,
-    );
-    // 视口下沿在内容坐标里的位置：旧的那一处就是新视口下沿要守住的位置。
-    final anchor = oldPosition.extentBefore + oldPosition.viewportDimension;
-    final shift =
-        anchor - (newPosition.extentBefore + newPosition.viewportDimension);
-    if (shift == 0) return corrected;
-    final shifted = corrected + shift;
-    // 内容比视口还短时没有可滚动的余量，只能夹回合法范围，否则会被推出边界。
-    if (newPosition.minScrollExtent.isFinite &&
-        newPosition.maxScrollExtent.isFinite) {
-      return shifted.clamp(
-          newPosition.minScrollExtent, newPosition.maxScrollExtent);
-    }
-    return shifted;
-  }
-}
-
 /// 输入区：频道选择 + 输入框 + 行动入口。键盘弹出时只保留紧凑行动入口。
 class _Composer extends StatelessWidget {
   const _Composer({
@@ -911,6 +933,7 @@ class _Composer extends StatelessWidget {
     required this.emojiOpen,
     required this.onToggleEmoji,
     required this.onPickEmoji,
+    required this.onCloseEmoji,
     required this.onTapField,
     required this.onSend,
     required this.onClearError,
@@ -928,6 +951,9 @@ class _Composer extends StatelessWidget {
   final bool emojiOpen;
   final VoidCallback onToggleEmoji;
   final ValueChanged<EmojiFace> onPickEmoji;
+
+  /// 返回键收起表情面板：由 [EmojiPanelScope] 在面板打开期间调用。
+  final VoidCallback onCloseEmoji;
 
   /// 重新聚焦输入框即收起面板：否则键盘与面板会同时占位。
   final VoidCallback onTapField;
@@ -1034,11 +1060,14 @@ class _Composer extends StatelessWidget {
               ),
             ],
             if (emojiOpen)
-              EmojiPicker(
-                onPick: onPickEmoji,
-                // 小屏上给消息列表留出空间：面板最高不超过屏幕的三分之一。
-                height: (MediaQuery.sizeOf(context).height * 0.32)
-                    .clamp(150.0, 236.0),
+              EmojiPanelScope(
+                onClose: onCloseEmoji,
+                child: EmojiPicker(
+                  onPick: onPickEmoji,
+                  // 小屏上给消息列表留出空间：面板最高不超过屏幕的三分之一。
+                  height: (MediaQuery.sizeOf(context).height * 0.32)
+                      .clamp(150.0, 236.0),
+                ),
               ),
           ],
         ),
@@ -2932,7 +2961,7 @@ class _OwnCard extends StatelessWidget {
 }
 
 /// 进入管理界面前的确认页：管理界面含全部私密信息与席位代操作，而且不是建立
-/// 这一局的主持人进入时服务端会向全服发通告，所以启动应用后不直接进入，
+/// 这一局的主持人进入时服务端会向本局发系统公告，所以启动应用后不直接进入，
 /// 等主持人自己确认；确认成功（服务端已登记）才展开真正的管理页。
 class HostEntryGate extends StatefulWidget {
   const HostEntryGate({
@@ -2997,7 +3026,7 @@ class _HostEntryGateState extends State<HostEntryGate> {
                 ),
                 const SizedBox(height: AppSpacing.sm),
                 Text(
-                  '如果你不是建立这一局的主持人，本次进入会被服务端记录，并向全服发布一条通告。',
+                  '如果你不是建立这一局的主持人，本次进入会被服务端记录，并向本局发布一条系统公告。',
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.5,
@@ -3181,7 +3210,7 @@ class _HostManagementPageState extends State<HostManagementPage> {
         widget.bottomInset,
       ),
       children: [
-        // 不是本局建局主持人时，进入后常驻一条提醒：这次进入已经通告全服。
+        // 不是本局建局主持人时，进入后常驻一条提醒：这次进入已经发过本局系统公告。
         if (store.hostAdminNotice != null) ...[
           Card(
             color: context.palette.warningSoft,

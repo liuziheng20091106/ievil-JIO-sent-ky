@@ -15,6 +15,7 @@ from .state import (
     card_actionable,
     controlled_cards,
     current,
+    debunked_abilities,
     duel_cards,
     duel_vote_required,
     eligible_voters,
@@ -82,9 +83,9 @@ SHORT_LABELS = {
 DESCRIPTIONS = {
     "host.start": "全员两次准备后开局：锁定上下牌，进入当日魔女化检测。",
     "host.codex": "重新指定11名魔典角色并随机顺序；只改本局魔典，不影响已发出的牌。",
-    "host.advance": "当前阶段没有待办时推进到下一阶段；有待裁定事项会先被拒绝。",
+    "host.advance": "强制推进到下一阶段：仍有席位未完成本阶段行动时，会立刻把它们按超时（视为放弃）处理；有待裁定事项需先在「裁决」里处理。",
     "host.auto": "暂停后本阶段只由主持人手动推进；恢复后无人待办时5秒自动进入下一阶段。",
-    "host.warn": "对当前卡住的席位启动30秒倒计时，到期按未操作处理；掉线不会自动放弃行动。",
+    "host.warn": "对当前卡住的席位启动30秒倒计时，到期按未操作处理；掉线不会自动放弃行动。也可以直接推进，未完成的行动会立刻按超时处理。",
     "host.water": "在夜间或预结算阶段把一瓶13水私下交给一个存活席位；同夜可发多瓶，各自使用，夜末未用会过期收回。",
     "host.damage": "裁定伤害或直接出局：死亡应用庇护，无条件出局忽略庇护；夜间提交的伤害并入本夜预结算。",
     "host.state": "直接增删角色牌状态（魔女化、中毒、庇护、负伤、投票权、傀儡、生死）；庇护按天记账，第 N 天获得后到第 N+1 天夜里过期；不勾选公开时只通知该席位。",
@@ -500,7 +501,21 @@ def host_actions(game):
             )
         )
     else:
-        result.append(action("host.advance", "完成当前阶段 / 推进", group="流程", blocking=True))
+        waiting = outstanding_seats(game)
+        result.append(
+            action(
+                "host.advance",
+                "完成当前阶段 / 推进",
+                group="流程",
+                blocking=True,
+                description=DESCRIPTIONS["host.advance"]
+                + (
+                    f"当前有{len(waiting)}个席位未完成本阶段行动，推进会立即把它们按超时处理。"
+                    if waiting
+                    else ""
+                ),
+            )
+        )
     result.extend(
         pending_action(game, item) for item in game["pending"] if item["kind"] != "honoka_witness"
     )
@@ -930,6 +945,9 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         ):
             day_cards.append(emma_card)
         for ability in DAY_ABILITIES:
+            # 被质疑拆穿的技能本局不能再发动，也不再出现在行动表单里。
+            if ability in debunked_abilities(game, sid):
+                continue
             ability_card = next(
                 (
                     c

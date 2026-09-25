@@ -118,10 +118,17 @@ class PredictiveSheetBack with WidgetsBindingObserver {
   }
 
   /// 当前是否可以被返回手势接管：面板还在，且它就是栈顶路由，并且完全展开。
+  ///
+  /// 面板内容里若有 PopScope 挡着返回（例如行动表单展开了表情面板：返回应先收面板，
+  /// 而不是收起整个表单），这次手势就不能拿来驱动面板收起。判据与框架给页面路由的
+  /// 一致（`PageRoute.popGestureEnabled` 同样对 `RoutePopDisposition.doNotPop` 让路）：
+  /// 返回 false 后框架会把这次手势退回普通返回，交给那个 PopScope 自己处理。
   bool get _canTakeOver {
     final _SheetSession? session = _active;
     if (session == null) return false;
-    if (_routeObserver.top is! ModalBottomSheetRoute<dynamic>) return false;
+    final Route<dynamic>? top = _routeObserver.top;
+    if (top is! ModalBottomSheetRoute<dynamic>) return false;
+    if (top.popDisposition == RoutePopDisposition.doNotPop) return false;
     final AnimationController controller = session.controller;
     return !controller.isDismissed && controller.isCompleted;
   }

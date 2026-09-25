@@ -29,6 +29,9 @@ export function App() {
   const { session, state, catalog, loading, error, setError, refresh, logout } =
     useGame();
   const [roleId, setRoleId] = useState<string | null>(null);
+  // 这张角色卡是自动弹出的介绍，还是玩家自己点开的图鉴/席位详情：
+  // 只有自动弹出时才在弹窗里标明它是「开局 · 上层牌」。
+  const [roleIntro, setRoleIntro] = useState<"opening" | null>(null);
   const [rules, setRules] = useState(false);
   const [newGame, setNewGame] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
@@ -54,23 +57,41 @@ export function App() {
     };
   }, []);
   const role = catalog.roles.find((item) => item.id === roleId);
-  // 角色登场时自动弹出角色卡介绍：下层登场、复活、换牌都会改变 current_card_id。
-  // 调序阶段的上下交换同样会改它，但那时还没开局，逐次弹窗只是噪音；
+  // 点开角色图鉴或席位详情：不是自动介绍，不带「开局 · 上层牌」标记。
+  const openRole = (id: string) => {
+    setRoleIntro(null);
+    setRoleId(id);
+  };
+  // 角色卡介绍自动弹出：开局锁定上层牌、下层登场、复活、换牌都会触发。
+  // 调序阶段的上下交换同样会改 current_card_id，但那时还没开局，逐次弹窗只是噪音；
   // 首次观察（含刷新、重连）只记基线，不弹窗，否则每次恢复对局都会刷一个窗口。
   const currentCardId = state?.self.current_card_id ?? null;
+  const status = state?.status ?? null;
   const seenCardId = useRef<string | null | undefined>(undefined);
+  const seenStatus = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     if (!state) {
       seenCardId.current = undefined;
+      seenStatus.current = undefined;
       return;
     }
-    const previous = seenCardId.current;
+    const previousCardId = seenCardId.current;
+    const previousStatus = seenStatus.current;
     seenCardId.current = currentCardId;
-    if (state.status !== "playing") return;
-    if (!currentCardId || previous === undefined || previous === currentCardId) return;
+    seenStatus.current = status;
+    if (status !== "playing" || !currentCardId) return;
     const entered = state.self.cards.find((card) => card.id === currentCardId);
-    if (entered) setRoleId(entered.role_id);
-  }, [currentCardId, state]);
+    if (!entered) return;
+    // 开局：主持人锁定上下牌，此刻用的就是本局的上层牌，即使 current_card_id 没变也要介绍一次。
+    if (previousStatus === "lobby") {
+      setRoleIntro("opening");
+      setRoleId(entered.role_id);
+      return;
+    }
+    // 下层登场、复活或换牌：换人了才介绍。
+    if (previousCardId === undefined || previousCardId === currentCardId) return;
+    setRoleId(entered.role_id);
+  }, [currentCardId, status, state]);
   const exit = async () => {
     setLogoutBusy(true);
     try {
@@ -159,7 +180,7 @@ export function App() {
           ) : session.actor.kind === "account" && !state ? (
             <LobbyEntry />
           ) : state ? (
-            <Room onRole={setRoleId} onNewGame={() => setNewGame(true)} />
+            <Room onRole={openRole} onNewGame={() => setNewGame(true)} />
           ) : (
             <main className="loading-screen">
               <h1>暂时无法读取本局</h1>
@@ -183,7 +204,7 @@ export function App() {
                 key={item.id}
                 onClick={() => {
                   setRules(false);
-                  setRoleId(item.id);
+                  openRole(item.id);
                 }}
               >
                 {item.avatar ? (
@@ -203,7 +224,16 @@ export function App() {
         </Modal>
       )}
       {role && (
-        <Modal title={role.name} onClose={() => setRoleId(null)}>
+        <Modal
+          title={role.name}
+          onClose={() => {
+            setRoleId(null);
+            setRoleIntro(null);
+          }}
+        >
+          {roleIntro === "opening" && (
+            <span className="eyebrow">开局 · 上层牌</span>
+          )}
           <div className="role-detail">
             {role.avatar ? (
               <img src={role.avatar} alt={`${role.name}完整立绘`} />
@@ -217,6 +247,12 @@ export function App() {
               <p>{role.witch}</p>
             </div>
           </div>
+          {roleIntro === "opening" && (
+            <p className="hint">
+              开局起你使用上层牌；上层牌出局后，你才开始使用下层牌。
+              私密信息只在本机显示。
+            </p>
+          )}
         </Modal>
       )}
     </>
@@ -756,9 +792,13 @@ function Room({
   const isObserver = session.actor?.kind === "spectator";
   const urgent = state.actions.filter((item) => item.blocking);
   const hostTasks = state.host?.tasks ?? [];
+  // 只有真正挡住推进的主持人待办才禁用「推进」；玩家未完成的行动不再阻塞——
+  // 直接推进会把它们立刻按超时处理（见 host.warn 之外的 waitingTasks）。
   const blockingTasks = hostTasks.filter(
     (item) => item.blocking && item.action !== "host.advance",
   );
+  const waitingTasks = hostTasks.filter((item) => item.action === "host.warn");
+  const openTasks = hostTasks.filter((item) => item.action !== "host.advance");
   const actor = state.public.current_actor;
   const hint =
     state.status === "playing" || state.status === "lobby"
@@ -780,7 +820,12 @@ function Room({
     { id: "chat", label: "聊天" },
     { id: "table", label: "桌面" },
     isHost
-      ? { id: "actions", label: "裁决", count: blockingTasks.length }
+      ? {
+          id: "actions",
+          label: "裁决",
+          count: openTasks.length,
+          urgent: openTasks.length > 0,
+        }
       : { id: "cards", label: isObserver ? "信息" : "我的牌" },
     isHost
       ? {
@@ -874,13 +919,17 @@ function Room({
               title={
                 blockingTasks.length
                   ? `还有 ${blockingTasks.length} 项待处理，见「裁决」列表`
-                  : advanceAction.description || advanceAction.label
+                  : waitingTasks.length
+                    ? `有 ${waitingTasks.length} 个席位未完成本阶段行动：推进会立即把它们按超时（视为放弃）处理`
+                    : advanceAction.description || advanceAction.label
               }
               onClick={() => pick("host.advance")}
             >
               {blockingTasks.length
                 ? `${blockingTasks.length}项待办`
-                : advanceAction.short_label}
+                : waitingTasks.length
+                  ? "强制推进"
+                  : advanceAction.short_label}
             </button>
           )}
           {isHost && autoToggle && (
@@ -1551,7 +1600,9 @@ function HostTasks({
       {tasks.length ? (
         tasks.map((task) => (
           <article
-            className={`pending-item ${task.blocking ? "blocking" : ""}`}
+            className={`pending-item ${
+              task.blocking || task.action === "host.warn" ? "blocking" : ""
+            }`}
             key={task.id}
           >
             <div className="split">
@@ -1582,7 +1633,7 @@ function HostTasks({
         ))
       ) : (
         <p className="hint">
-          没有待办。明确规则由服务器执行；需要你决定的事项会列于此处，玩家未完成操作前不会推进阶段。
+          没有待办。明确规则由服务器执行；需要你决定的事项会列于此处。玩家未完成行动时可以直接推进，未完成的行动会立刻按超时处理。
         </p>
       )}
     </section>
