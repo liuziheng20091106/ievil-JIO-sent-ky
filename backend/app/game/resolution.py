@@ -253,7 +253,7 @@ def lock_night(game, events):
             actions = [a for a in night["actions"] if a["seat_id"] == photo["target"]]
             notify(game, events, night_text(game, actions), [photo["sender"]], "信物授权的夜间行动")
     game["phase"] = "night_review"
-    prepare_night_preview(game)
+    prepare_night_preview(game, events)
 
 def damage_preview(game, attacks, protection=()):
     injured = {c["id"]: c["injured"] for c in game["cards"].values()}
@@ -360,16 +360,19 @@ def millia_substitute(game, attacks, protection=()):
     return rewritten
 
 
-def prepare_night_preview(game):
+def prepare_night_preview(game, events=None):
     night = game["night"]
     night["reactions"] = [r for r in night["reactions"] if r != "millia"]
     preview, dead = night_damage(game)
     night["preview"] = preview
     # 夜间预结算里希罗死亡时立即回溯到前一天顺序发言，不放主持人待办。
+    # 事件队列必须原样传下去：回溯是公开事件，用空列表会把「游戏时间已回溯」
+    # 吞掉，玩家只会看到整夜被打回重来（额度却照扣）。只有拿不到队列的
+    # REST 入口（api.room_command 的替补接管）才允许传 None。
     if "hiro" in dead:
         hiro = role_card(game, "hiro")
         if not game["spiritual"]["hiro_used"]["witch" if hiro["witch"] else "normal"]:
-            hiro_rewind(game, [], "night")
+            hiro_rewind(game, events if events is not None else [], "night")
 
 
 def night_damage(game):

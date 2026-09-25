@@ -1347,6 +1347,43 @@ class HostFreeAdjudication(unittest.TestCase):
         self.assertEqual(game["day"], 1)
         self.assertTrue(game["cards"]["hiro"]["alive"])
 
+    def test_a_night_preview_rewind_is_announced_to_the_table(self):
+        # 夜间预结算触发的希罗回溯曾经把公告写进空事件列表：额度照扣、整夜被打回
+        # 重来，但玩家和主持人都看不到「游戏时间已回溯」。
+        game = arranged_game("night", "night")
+        game.update(day=1, phase="night", half="night")
+        save_snapshot(game)
+        game["cards"]["meruru"]["alive"] = False  # 3号当前牌变成汉娜
+        game["night"] = {
+            "actors": {"3": "hanna"},
+            "actions": [
+                {
+                    "id": "knife",
+                    "seat_id": "3",
+                    "card_id": "hanna",
+                    "ability": "knife",
+                    "target_seat": "2",
+                    "target_card": "hiro",
+                    "confirmed": True,
+                    "effective": True,
+                    "title": "3号 · 魔女刀",
+                }
+            ],
+            "confirmed": ["3"],
+            "locked": False,
+            "preview": None,
+            "reactions": [],
+            "extra_attacks": [],
+        }
+        events = command(game, HOST, "host.advance", {})
+        self.assertTrue(game["spiritual"]["hiro_used"]["normal"])
+        self.assertTrue(game["cards"]["hiro"]["alive"])
+        self.assertEqual(game["day"], 1)
+        self.assertTrue(
+            any(item["text"].startswith("游戏时间已回溯") for item in events),
+            [item["text"] for item in events],
+        )
+
 
 class WitchHiroMandate(unittest.TestCase):
     """魔女希罗「必须疯狂地使艾玛出局」由主持人裁定，绝不能把整夜锁死。"""

@@ -948,7 +948,7 @@ def host_command(game, events, action, data):
         if game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"}:
             game["night"].setdefault("extra_attacks", []).extend(attacks)
             if game["night"]["locked"]:
-                prepare_night_preview(game)
+                prepare_night_preview(game, events)
         else:
             apply_damage(game, events, damage_preview(game, attacks))
         notify(game, events, data["reason"], [], "伤害裁定")
@@ -1014,7 +1014,7 @@ def host_command(game, events, action, data):
             "主持人状态裁定",
         )
         if game["phase"] == "night_review":
-            prepare_night_preview(game)
+            prepare_night_preview(game, events)
     elif action == "host.information":
         recipients = None if data.get("public") else data.get("recipients", [])
         require(recipients is None or recipients, "请选择公开或指定接收者")
@@ -1156,7 +1156,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             if not (a["seat_id"] == sid and a["ability"] == ability)
         ] + [entry]
     elif action == "night.clear":
-        clear_seat_actions(game, sid)
+        clear_seat_actions(game, sid, events)
     elif action == "night.confirm":
         actions = [a for a in game["night"]["actions"] if a["seat_id"] == sid]
         card = game["cards"][game["night"]["actors"][sid]]
@@ -1323,7 +1323,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         if game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"}:
             game["night"].setdefault("extra_attacks", []).append(attack)
             if game["night"]["locked"]:
-                prepare_night_preview(game)
+                prepare_night_preview(game, events)
         else:
             apply_damage(game, events, damage_preview(game, [attack]))
     elif action == "speech.done":
@@ -1450,7 +1450,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         game["night"].setdefault("extra_attacks", []).append(attack)
         if game["night"]["locked"]:
             # 已锁夜：重算预结算，不创建主持人待办。
-            prepare_night_preview(game)
+            prepare_night_preview(game, events)
         notify(game, events, f"{sid}号使用13水指定{data['target']}号。")
     elif action == "meruru.revive":
         card["uses"]["revive"] = True
@@ -1703,7 +1703,7 @@ def expire_warnings(game, now=None):
             )
             game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
         elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
-            clear_seat_actions(game, sid)
+            clear_seat_actions(game, sid, events)
             game["night"]["confirmed"].append(sid)
             unlock_coco(game, events)
         elif phase == "speech" and game["public"]["speaker"] == sid:

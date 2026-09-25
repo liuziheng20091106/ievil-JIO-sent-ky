@@ -932,7 +932,7 @@ def finish(game, events, winner, reason):
     )
 
 
-def clear_seat_actions(game, seat_id):
+def clear_seat_actions(game, seat_id, events=None):
     require(any(s["id"] == seat_id for s in game["seats"]), "席位不存在")
     night = game["night"]
     night["actions"] = [a for a in night["actions"] if a["seat_id"] != seat_id]
@@ -947,6 +947,7 @@ def clear_seat_actions(game, seat_id):
             p for p in game["pending"] if p["kind"] != "hiro" or p.get("preview")
         ]
         night["reactions"] = []
-        prepare_night_preview(game)
+        # 重算预结算同样可能触发希罗回溯，事件队列要一起传下去（见 prepare_night_preview）。
+        prepare_night_preview(game, events)
     game["warnings"].pop(seat_id, None)
     game["deadline"] = min(game["warnings"].values(), default=None)
