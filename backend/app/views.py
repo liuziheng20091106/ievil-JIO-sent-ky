@@ -5,7 +5,7 @@ import json
 from . import storage
 from .game import game_view
 from .game.actions import action, field, outstanding_seats
-from .game.catalog import night_half
+from .game.catalog import AUTO_PHASES, night_half
 from .game.state import host_capable, host_label
 from .game.views import seat_chat
 
@@ -21,17 +21,77 @@ BLOCKING_PROMPTS = {
 }
 
 
-def action_prompt(game, actor, active_private):
-    """阻塞阶段的红色催办框；玩家在私聊里时额外说明要先结束私聊。
+def seat_number_list(seats):
+    """「3号、4号」：横幅里按座位号顺序列出等待中的席位。
 
-    返回 None 表示当前没有卡在本人身上的操作。内容与时机都由服务端判定，
-    客户端只负责醒目地展示。
+    outstanding_seats 按发言顺序（而不是编号）返回，直接拼接会出现
+    「正在等待7号、6号、5号玩家提名」这种读不通的排列。
+    """
+    return "、".join(f"{seat}号" for seat in sorted(seats, key=int))
+
+
+def host_blocking(game):
+    """流程是不是卡在主持人身上：玩家都做完了，却还得等主持人动手。
+
+    只算真正让流程停住的阻塞——待裁定事项、胜负宣判、必须由主持人推进的阶段
+    （预结算发布、夜间结果、天黑结算），以及被主持人暂停的自动推进。交牌申请
+    只是主持人的待办，不挡流程，因此不算。
+    """
+    if game["status"] != "playing" or outstanding_seats(game):
+        return False
+    if any(item["kind"] != "honoka_witness" for item in game["pending"]):
+        return True
+    if game["winner_candidate"]:
+        return True
+    if game["phase"] == "night_review":
+        return game["night"]["preview"] is not None
+    if game["phase"] not in AUTO_PHASES:
+        return True
+    return bool(game["public"].get("auto_advance_off"))
+
+
+def public_notice(game):
+    """全场横幅：当前轮到谁发言、还在等谁动手、是不是只等主持人。
+
+    与个人催办框同一份文案来源，但内容对全场一致，且绝不泄露夜间进度：
+    夜间只报「仍有玩家未完成行动」——列出席位等于当众公开谁有夜间技能。
+    没有值得公示的进度时返回 None。
+    """
+    if game["status"] != "playing":
+        return None
+    phase = game["phase"]
+    waiting = outstanding_seats(game)
+    if phase == "speech":
+        # 轮到的席位本人另有「轮到你顺序发言」的个人催办，这里通报给其他人。
+        speaker = game["public"].get("speaker")
+        if speaker:
+            return f"当前轮到{speaker}号玩家发言"
+    elif phase in {"nomination", "voting"} and waiting:
+        action = "提名" if phase == "nomination" else "投票"
+        return f"正在等待{seat_number_list(waiting)}玩家{action}"
+    if waiting and night_half(game):
+        # 整个夜间只报「还有玩家没做完」：列出席位等于公开谁有夜间技能。
+        return "仍有玩家未完成行动"
+    if phase == "discussion":
+        # 自由发言由「已有 n/6 人请求结束」的进度条表示，不在这里提示等主持人。
+        return None
+    if host_blocking(game):
+        return "等待主持人进行操作"
+    return None
+
+
+def action_prompt(game, actor, active_private):
+    """客户端顶部常驻的横幅：先是卡在本人身上的操作，其次才是全场进度。
+
+    返回 None 表示当前没有要给这名玩家看的内容。内容与时机都由服务端判定，
+    客户端只负责醒目地展示；玩家在私聊里时额外说明要先结束私聊。
     """
     if actor["kind"] != "player" or game["status"] == "ended":
         return None
     seat = next((s for s in game["seats"] if s["occupant_id"] == actor["id"]), None)
     if not seat:
         return None
+    blocking = True
     if game["status"] == "lobby":
         if seat["ready"]:
             return None
@@ -44,11 +104,17 @@ def action_prompt(game, actor, active_private):
             game["phase"], ("请完成当前操作", "你的操作正在阻塞流程推进。")
         )
     else:
-        return None
+        notice = public_notice(game)
+        if notice is None:
+            return None
+        # 全场横幅只是通报进度，不提示「先结束私聊才能行动」。
+        blocking, title, text = False, notice, ""
     return {
         "title": title,
         "text": text,
-        "hint": "你正在私聊中：先结束私聊，才能执行上面的操作。" if active_private else None,
+        "hint": "你正在私聊中：先结束私聊，才能执行上面的操作。"
+        if blocking and active_private
+        else None,
     }
 
 

@@ -6,6 +6,7 @@ from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_gam
 from backend.app.game.actions import actions_for
 from backend.app.game.engine import sync_declarations
 from backend.app.game.state import DEAL_EXCLUDED_PAIRS, check_winner, deal_cards, upgrade_game
+from backend.app.views import action_prompt
 
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
@@ -522,6 +523,93 @@ class WitchFactionRules(unittest.TestCase):
         check_winner(game)
         self.assertEqual(game["winner_candidate"]["winner"], "good")
         self.assertEqual(game["winner_candidate"]["reason"], "魔女阵营A、B两席出局")
+
+
+class PhaseBannerRules(unittest.TestCase):
+    """全场横幅：当前轮到谁、还在等谁、还是只等主持人。
+
+    横幅走客户端已有的 action_prompt 通道，因此这里直接核对服务端下发的文案：
+    夜间只说「仍有玩家未完成行动」，列出席位等于公开谁有夜间技能。
+    """
+
+    @staticmethod
+    def prompt(game, seat_id, active_private=False):
+        actor = next(item for item in players(game) if item["seat_id"] == seat_id)
+        return action_prompt(game, actor, active_private)
+
+    def test_speech_phase_tells_everyone_whose_turn_it_is(self):
+        game = staged_game(day=2, half="day", phase="speech")
+        game["public"]["speaker"] = "3"
+        # 轮到的席位仍是本人催办，其他席位看到全场通报。
+        self.assertEqual(self.prompt(game, "3")["title"], "轮到你顺序发言")
+        self.assertEqual(self.prompt(game, "5")["title"], "当前轮到3号玩家发言")
+        self.assertEqual(self.prompt(game, "5")["text"], "")
+
+    def test_nomination_and_voting_list_who_is_still_expected(self):
+        game = staged_game(day=2, half="day", phase="nomination")
+        game["nomination_done"] = ["1", "2"]
+        self.assertEqual(
+            self.prompt(game, "1")["title"], "正在等待3号、4号、5号、6号、7号玩家提名"
+        )
+        self.assertEqual(self.prompt(game, "3")["title"], "请提交提名或放弃")
+
+        game = staged_game(day=2, half="day", phase="voting")
+        game["votes"] = {"1": "yes", "2": "no"}
+        self.assertEqual(
+            self.prompt(game, "1")["title"], "正在等待3号、4号、5号、6号、7号玩家投票"
+        )
+        self.assertEqual(self.prompt(game, "3")["title"], "请投票")
+        # 全场横幅只通报进度：私聊里的「先结束私聊」提示只挂在本人待办上。
+        self.assertIsNone(self.prompt(game, "1", active_private=True)["hint"])
+        self.assertIn("私聊", self.prompt(game, "3", active_private=True)["hint"])
+
+    def test_night_banner_never_names_the_seats_that_are_still_acting(self):
+        game = staged_game(day=3, half="night", phase="night")
+        game["night"]["actors"] = {
+            seat_id: game["seats"][int(seat_id) - 1]["cards"][0] for seat_id in ("2", "3")
+        }
+        game["night"]["confirmed"] = []
+        self.assertEqual(self.prompt(game, "2")["title"], "请完成本夜行动")
+        for seat_id in ("1", "5", "7"):
+            title = self.prompt(game, seat_id)["title"]
+            self.assertEqual(title, "仍有玩家未完成行动")
+            self.assertNotIn("号", title)
+        # 少一个人待办也必须是同一条文案：不能从文案变化里推出谁完成了行动。
+        game["night"]["confirmed"] = ["2"]
+        self.assertEqual(self.prompt(game, "1")["title"], "仍有玩家未完成行动")
+        # 夜里还有玩家待办（如穗乃香选显示角色）时也只报「还有玩家」，不提示等主持人。
+        game = staged_game(day=3, half="night", phase="night_review")
+        game["night"]["preview"] = {"deaths": []}
+        game["pending"] = [
+            {"id": "w1", "kind": "honoka_witness", "seat_id": "7", "title": "等待选择"}
+        ]
+        self.assertEqual(self.prompt(game, "4")["title"], "仍有玩家未完成行动")
+        self.assertNotIn("7", self.prompt(game, "4")["title"])
+
+    def test_host_blocked_phases_ask_the_table_to_wait_for_the_host(self):
+        game = staged_game(day=3, half="night", phase="night_review")
+        game["night"]["preview"] = {"deaths": []}
+        self.assertEqual(self.prompt(game, "4")["title"], "等待主持人进行操作")
+        self.assertEqual(
+            self.prompt(staged_game(day=3, half="night", phase="night_results"), "4")["title"],
+            "等待主持人进行操作",
+        )
+        self.assertEqual(
+            self.prompt(staged_game(day=3, half="day", phase="dusk"), "4")["title"],
+            "等待主持人进行操作",
+        )
+        # 自动推进被主持人暂停时也只能等他；恢复后不再提示。
+        game = staged_game(day=3, half="day", phase="nomination")
+        game["nomination_done"] = [seat["id"] for seat in game["seats"]]
+        game["public"]["auto_advance_off"] = True
+        self.assertEqual(self.prompt(game, "4")["title"], "等待主持人进行操作")
+        game["public"].pop("auto_advance_off")
+        self.assertIsNone(self.prompt(game, "4"))
+
+    def test_free_discussion_never_blames_the_host(self):
+        game = staged_game(day=2, half="day", phase="discussion")
+        game["public"]["auto_advance_off"] = True
+        self.assertIsNone(self.prompt(game, "4"))
 
 
 if __name__ == "__main__":
