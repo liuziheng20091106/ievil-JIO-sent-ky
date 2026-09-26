@@ -14,3 +14,4 @@ logs/
 *.env.local
 client/test/failures/
 start.cmd.local.cmd
+run-supervisor.cmd.local.cmd

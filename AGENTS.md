@@ -40,7 +40,7 @@
 - 默认只监听 `127.0.0.1:13900`（`GAME_SUPERVISOR_HOST` / `GAME_SUPERVISOR_PORT` 可改）。`GET /status` 给出两个进程的 pid、存活时长、重启次数、日志路径与后端 `/api/health` 是否可达；重启走 POST（设了令牌就带 `-H "X-Supervisor-Token: <令牌>"`）：
   - `POST /restart/backend` 重启后端；`POST /restart/gateway` 重启登录网关；`POST /restart/all` 先把两个都停掉再拉起（先后端后网关，避免网关空转重连）。
   - `POST /start|stop/{backend|gateway|all}` 是同一套生命周期；进程名不在白名单返回 404，起不来返回 500 且 body 带退出码与日志末尾，`/status` 里该进程为 `stopped`。
-- 后端端口默认 8000，用 `--backend-port` 或 `GAME_SUPERVISOR_BACKEND_PORT` 覆盖；显式改端口时守护进程会把网关子进程的 `GAME_BACKEND_URL` 一起改到该端口。网关的环境变量默认读 `gateway/.env`，测试或换端口用 `--gateway-env` 指向别的文件；后端的环境变量（`GAME_ADMIN_QQ`、`GAME_GATEWAY_TOKEN`、`GAME_DATA_DIR`、客户端版本标签等）由守护进程原样继承，所以部署时写一份不入库的 `run-supervisor.cmd.local.cmd`（`*.cmd.local` 已 gitignore）设好再启动。
+- 后端端口默认 8000，用 `--backend-port` 或 `GAME_SUPERVISOR_BACKEND_PORT` 覆盖；显式改端口时守护进程会把网关子进程的 `GAME_BACKEND_URL` 一起改到该端口。网关的环境变量默认读 `gateway/.env`，测试或换端口用 `--gateway-env` 指向别的文件；后端的环境变量（`GAME_ADMIN_QQ`、`GAME_GATEWAY_TOKEN`、`GAME_DATA_DIR`、客户端版本标签等）由守护进程原样继承，所以部署时照 `start.cmd.local.cmd` 的样子写一份不入库的 `run-supervisor.cmd.local.cmd`（和它一样显式列在 `.gitignore` 里，`*.cmd.local` 匹配不到 `*.cmd.local.cmd`）设好再启动。
 - 绑定非回环地址必须先设 `GAME_SUPERVISOR_TOKEN`，否则拒绝启动；设了令牌后除 `GET /health` 外的请求都要带 `X-Supervisor-Token`。带 `Origin` 的浏览器请求一律 403——这个接口只给本机脚本用，不能让网页重启服务。端口被占用会直接报错退出，不会静默双开。
 
 ## 版本管理
