@@ -1010,6 +1010,10 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canSend = channel?.canSend == true && !store.writeBusy;
+    // 「按 Enter 发送」：开启时回车直接发出，输入类型同时切成单行——安卓只在非多行
+    // 类型下才会把回车报成 send 动作（多行一律按换行处理），两者必须一起切。
+    // 关闭时保持多行 + 换行动作，回车就是换行。
+    final enterSends = store.enterToSendEnabled;
     // 当前频道里正在输入的其他人；傀儡代发身份不下发输入状态，也就无需展示。
     final typers = store.activeAsSeat != null
         ? const <TypingUser>[]
@@ -1046,6 +1050,15 @@ class _Composer extends StatelessWidget {
               maxLength: 2000,
               minLines: 1,
               maxLines: 4,
+              keyboardType: enterSends
+                  ? TextInputType.text
+                  : TextInputType.multiline,
+              textInputAction: enterSends
+                  ? TextInputAction.send
+                  : TextInputAction.newline,
+              // 发出后不收键盘：给了 onEditingComplete，框架就不再自动失焦，
+              // 可以接着打下一条（发送本身仍走 onSubmitted）。
+              onEditingComplete: enterSends ? () {} : null,
               decoration: InputDecoration(
                 hintText: canSend ? '说点什么…' : '当前不可发言',
                 errorText: error,
@@ -1274,8 +1287,8 @@ class _SettingsButton extends StatelessWidget {
       );
 }
 
-/// 聊天设置面板：公开我的输入状态 / 自动切换到可用聊天频道。
-/// 两个开关都是本机全局偏好，改动立即持久化并即时生效。
+/// 聊天设置面板：按 Enter 发送 / 公开我的输入状态 / 自动切换到可用聊天频道。
+/// 三个开关都是本机全局偏好，改动立即持久化并即时生效。
 class _ChatSettingsSheet extends StatelessWidget {
   const _ChatSettingsSheet({required this.store});
 
@@ -1303,6 +1316,12 @@ class _ChatSettingsSheet extends StatelessWidget {
               animation: store,
               builder: (context, _) => Column(
                 children: [
+                  SwitchListTile(
+                    value: store.enterToSendEnabled,
+                    onChanged: store.setEnterToSendEnabled,
+                    title: const Text('按 Enter 发送'),
+                    subtitle: const Text('关闭后按 Enter 只换行，用发送按钮发送'),
+                  ),
                   SwitchListTile(
                     value: store.typingPublicEnabled,
                     onChanged: store.setTypingPublicEnabled,
