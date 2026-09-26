@@ -2,16 +2,378 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#191721" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="description" content="魔法裁判·七双：七位玩家，双重身份，一场由你们书写的魔女审判。" />
     <title>魔法裁判 · 七双</title>
+    <style>
+      /* 界面统一使用 HarmonyOS Sans SC，字体随构建产物同源提供（见 public/fonts）。 */
+      @font-face {
+        font-family: "HarmonyOS Sans SC";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("/fonts/HarmonyOS_Sans_SC_Regular.ttf") format("truetype");
+      }
+      @font-face {
+        font-family: "HarmonyOS Sans SC";
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url("/fonts/HarmonyOS_Sans_SC_Medium.ttf") format("truetype");
+      }
+      @font-face {
+        font-family: "HarmonyOS Sans SC";
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+        src: url("/fonts/HarmonyOS_Sans_SC_Bold.ttf") format("truetype");
+      }
+      :root {
+        font-family: "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+        color: #ede8f1;
+        background: #191721;
+        font-synthesis: none;
+        line-height: 1.6;
+        font-size: 16px;
+        --bg: #191721;
+        --panel: #211e2b;
+        --raised: #2b2736;
+        --border: #3a3348;
+        --muted: #aea4ba;
+        --purple: #b7a0dc;
+        --gold: #d8bc81;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-width: 320px;
+      }
+      button,
+      a {
+        -webkit-tap-highlight-color: transparent;
+      }
+      a:focus-visible,
+      button:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--gold);
+        outline-offset: 3px;
+      }
+      a {
+        color: var(--purple);
+        text-decoration: none;
+      }
+      .page {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 20px 16px 60px;
+      }
+      header.hero {
+        text-align: center;
+        padding: 28px 8px 8px;
+      }
+      header.hero h1 {
+        margin: 0 0 6px;
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      header.hero p {
+        margin: 0 auto;
+        max-width: 34em;
+        color: var(--muted);
+      }
+      section {
+        margin-top: 26px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 18px 18px 14px;
+      }
+      section > h2 {
+        margin: 0 0 12px;
+        font-size: 19px;
+        color: var(--gold);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      section > h2::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--border);
+      }
+      .ann-empty {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .announcement {
+        border-top: 1px solid var(--border);
+        padding: 12px 0 10px;
+      }
+      .announcement:first-of-type {
+        border-top: 0;
+        padding-top: 2px;
+      }
+      .announcement h3 {
+        margin: 0 0 4px;
+        font-size: 16px;
+      }
+      .announcement .meta {
+        font-size: 12.5px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .announcement .body {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 14.5px;
+      }
+      .downloads {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .downloads a {
+        display: inline-block;
+        min-height: 44px;
+        padding: 9px 18px;
+        border-radius: 9px;
+        border: 1px solid #655376;
+        background: #30283e;
+        color: #ede8f1;
+        font-weight: 500;
+        line-height: 26px;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .downloads a:hover {
+        background: #3b334b;
+        border-color: #8a6fa8;
+      }
+      .download-empty {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      details.rule {
+        border-top: 1px solid var(--border);
+        padding: 4px 0;
+      }
+      details.rule:first-of-type {
+        border-top: 0;
+      }
+      details.rule summary {
+        cursor: pointer;
+        padding: 10px 2px;
+        font-size: 15.5px;
+        font-weight: 500;
+        color: var(--purple);
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      details.rule summary::-webkit-details-marker {
+        display: none;
+      }
+      details.rule summary::before {
+        content: "▸";
+        transition: transform 0.15s;
+      }
+      details.rule[open] summary::before {
+        transform: rotate(90deg);
+      }
+      details.rule .content {
+        padding: 2px 4px 12px;
+        font-size: 14.5px;
+      }
+      details.rule .content p {
+        margin: 8px 0;
+      }
+      h3.rule-sub {
+        margin: 14px 0 4px;
+        font-size: 15px;
+        color: var(--gold);
+        border-bottom: 1px dashed var(--border);
+        padding-bottom: 3px;
+      }
+      details.rule .content ul,
+      details.rule .content ol {
+        margin: 8px 0;
+        padding-left: 22px;
+      }
+      details.rule .content li {
+        margin: 4px 0;
+      }
+      details.rule .content dt {
+        font-weight: 500;
+        color: var(--gold);
+        margin-top: 8px;
+      }
+      details.rule .content dd {
+        margin: 2px 0 0 0;
+      }
+      footer {
+        margin-top: 30px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      @media (max-width: 560px) {
+        header.hero h1 {
+          font-size: 24px;
+        }
+        section {
+          padding: 14px 14px 10px;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <div class="page">
+      <header class="hero">
+        <h1>魔法裁判 · 七双</h1>
+        <p>七位玩家，双重身份，一场由你们书写的魔女审判。</p>
+      </header>
+
+      <section aria-label="下载游戏">
+        <h2>下载游戏</h2>
+        <p class="download-empty" id="downloads-empty">下载链接准备中，敬请期待。</p>
+        <ul class="downloads" id="downloads" hidden></ul>
+      </section>
+
+      <section aria-label="公告">
+        <h2>公告</h2>
+        <p class="ann-empty" id="announcements-empty">暂无公告。</p>
+        <div id="announcements"></div>
+      </section>
+
+      <section aria-label="游戏规则">
+        <h2>游戏规则</h2>
+        <div id="rules"></div>
+      </section>
+
+      <footer>魔法裁判 · 七双 — 构建于 <!--BUILD-STAMP--></footer>
+    </div>
+
+    <script>
+      "use strict";
+      // —— 规则数据：构建时由 build.mjs 从 docs/规则-网页版.md 注入（见 RULES_PLACEHOLDER）。
+      // 公告与下载走后端公开只读接口，页面加载后实时拉取。
+      var RULES_PLACEHOLDER;
+
+      function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
+      function formatDate(value) {
+        var date = new Date(value);
+        if (isNaN(date.getTime())) return "";
+        return (
+          date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") +
+          "-" + String(date.getDate()).padStart(2, "0")
+        );
+      }
+
+      function loadAnnouncements() {
+        return fetch("/api/announcements/public", { credentials: "same-origin" })
+          .then(function (response) {
+            if (!response.ok) throw new Error("bad status " + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            var items = Array.isArray(data && data.announcements) ? data.announcements : [];
+            var list = document.getElementById("announcements");
+            document.getElementById("announcements-empty").hidden = items.length > 0;
+            items.forEach(function (item) {
+              var card = el("article", "announcement");
+              card.appendChild(el("h3", null, item.title || ""));
+              var meta = "";
+              if (item.author_name) meta += item.author_name + " · ";
+              var time = formatDate(item.updated_at || item.created_at);
+              if (time) meta += time;
+              if (meta) card.appendChild(el("div", "meta", meta));
+              card.appendChild(el("div", "body", item.body || ""));
+              list.appendChild(card);
+            });
+          })
+          .catch(function () {
+            document.getElementById("announcements-empty").textContent =
+              "公告加载失败，请稍后刷新重试。";
+          });
+      }
+
+      function loadDownloads() {
+        return fetch("/api/downloads", { credentials: "same-origin" })
+          .then(function (response) {
+            if (!response.ok) throw new Error("bad status " + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            var items = Array.isArray(data && data.downloads) ? data.downloads : [];
+            var list = document.getElementById("downloads");
+            document.getElementById("downloads-empty").hidden = items.length > 0;
+            items.forEach(function (item) {
+              var link = el("a", null, item.name || "下载");
+              link.href = item.url;
+              link.rel = "noopener";
+              list.appendChild(el("li")).appendChild(link);
+            });
+          })
+          .catch(function () {
+            // 下载配置读取失败就保持「敬请期待」，不弹错误打扰访客。
+          });
+      }
+
+      function renderRules() {
+        var host = document.getElementById("rules");
+        RULES.forEach(function (section) {
+          var details = el("details", "rule");
+          var summary = el("summary", null, section.title);
+          details.appendChild(summary);
+          var content = el("div", "content");
+          section.blocks.forEach(function (block) {
+            if (block.type === "p") {
+              content.appendChild(el("p", null, block.text));
+            } else if (block.type === "h3") {
+              content.appendChild(el("h3", "rule-sub", block.text));
+            } else if (block.type === "ul" || block.type === "ol") {
+              var list = el(block.type);
+              block.items.forEach(function (item) {
+                list.appendChild(el("li", null, item));
+              });
+              content.appendChild(list);
+            } else if (block.type === "terms") {
+              var dl = el("dl");
+              block.terms.forEach(function (term) {
+                dl.appendChild(el("dt", null, term.term));
+                dl.appendChild(el("dd", null, term.text));
+              });
+              content.appendChild(dl);
+            }
+          });
+          details.appendChild(content);
+          host.appendChild(details);
+        });
+        // 默认展开第一节，其余收起。
+        if (host.firstElementChild) host.firstElementChild.open = true;
+      }
+
+      renderRules();
+      loadAnnouncements();
+      loadDownloads();
+    </script>
   </body>
 </html>

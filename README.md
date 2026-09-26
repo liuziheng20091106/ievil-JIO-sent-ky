@@ -13,12 +13,12 @@
 - 主持人分级与授权：管理员由 `GAME_ADMIN_QQ` 指定（5 级/系统管理员），4 级可授权 1-3 级、5 级可授权 1-5 级主持；1 级只主持 1 局，那一局结束授权即失效。授权与 QQ 账号绑定，没有共享密码；登录令牌每次请求都重新核对等级。
 - 公告（原生客户端）：5 级主持用 markdown 发布全服公告，大厅显示列表与未读数；已读按公告内容 sha256 记在本机，公告改动会重新算未读。公告存在独立库 `data/announcements.sqlite3`，跨局保留。
 - 成就（原生客户端）：主持人在大厅自定义成就（名称、内容、稀有度 1-10）并授权给玩家；玩家挑一个佩戴，对局内发言时昵称右边显示该成就，点头像可看总成就数与最稀有的 5 个。成就存在独立库 `data/achievements.sqlite3`，跨局保留；3 级起才能管理，稀有度上限随等级。
-- 多端：React 网页由后端同源提供，另有 Flutter 原生 Android / Windows 客户端。
+- 多端：游戏对局走 Flutter 原生 Android / Windows 客户端；网页首页只提供公告、游戏规则介绍与游戏下载链接。
 
 ## 环境要求
 
 - Python 3.14+
-- Node.js >= 22.12
+- Node.js >= 22.12（仅构建网页首页）
 - Flutter 3.35+（仅构建原生客户端时需要）
 - NapCat（QQ 网关，仅 QQ 登录时需要）
 
@@ -29,7 +29,26 @@ setup.cmd
 start.cmd
 ```
 
-然后打开 <http://localhost:8000>。默认绑定 `0.0.0.0`，局域网内可直接访问；`start.cmd` 的参数会透传给 `run.py`（如 `start.cmd --port 9000`）。
+然后打开 <http://localhost:8000>：这是公告、游戏规则介绍与游戏下载链接的网页首页；游戏对局在 Flutter 原生客户端进行。默认绑定 `0.0.0.0`，局域网内可直接访问；`start.cmd` 的参数会透传给 `run.py`（如 `start.cmd --port 9000`）。
+
+### 网页首页
+
+无框架静态单页，构建后由后端同源提供。三个栏目：
+
+- **公告**：读取 `GET /api/announcements/public`（公开只读，无需登录），内容来自 5 级主持发布的全服公告。
+- **游戏规则**：内容写在 `frontend/rules.md`，构建时由 `frontend/build.mjs` 解析并注入页面。
+- **下载游戏**：读取 `GET /api/downloads`，配置文件是 `data/downloads.json`（不入库，改完即生效）：
+
+```json
+{
+  "downloads": [
+    { "name": "Windows 版", "url": "https://example.com/魔法裁判Windows.zip" },
+    { "name": "安卓版", "url": "https://example.com/app-release.apk" }
+  ]
+}
+```
+
+文件不存在时页面显示「下载链接准备中，敬请期待」。
 
 主持人登录与玩家一样走 QQ 群登录码，**必须在服务端配置管理员 QQ 号**：在 `start.cmd.local.cmd` 里设置 `GAME_ADMIN_QQ=你的QQ号`（多个用英文逗号分隔），否则没有任何账号能进入主持人端。其余主持等级由 4/5 级主持在「主持授权」页授权，授权与 QQ 账号绑定。
 
@@ -176,11 +195,11 @@ cd frontend && npm.cmd run build
 backend/app/    FastAPI 服务、SQLite 存储、账号令牌、实时推送
 backend/app/game/  规则、结算与可见性裁剪
 backend/app/simulator/  虚拟玩家模拟器（真实协议驱动整局）
-frontend/src/  React + TypeScript 网页界面
-client/        Flutter Android / Windows 原生客户端
-gateway/       NapCat OneBot QQ 登录网关
-checks/        后端回归检查
-tools/         应用图标与表情资源生成脚本
+frontend/       公告、规则与下载的静态网页首页（无框架）
+client/         Flutter Android / Windows 原生客户端
+gateway/        NapCat OneBot QQ 登录网关
+checks/         后端回归检查
+tools/          应用图标与表情资源生成脚本
 docs/          游戏规则与设计方案
 img/           角色头像
 ```

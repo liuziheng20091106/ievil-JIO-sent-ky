@@ -25,6 +25,12 @@ def require_admin(request):
         return auth.require_host_level(db, request, auth_storage.HOST_LEVEL_MAX)
 
 
+@router.get("/public")
+async def public_announcements():
+    """公开只读：不需要登录。供网页首页展示，不含任何私密信息。"""
+    return announcement_storage.lobby_payload()
+
+
 @router.get("")
 async def list_announcements(request: Request):
     require_reader(request)

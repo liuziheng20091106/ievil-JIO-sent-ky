@@ -20,6 +20,7 @@ from . import (
     announcements_api,
     api,
     auth_storage,
+    downloads_api,
     hosts_api,
     realtime,
     storage,
@@ -53,6 +54,7 @@ app.include_router(api.router)
 app.include_router(achievements_api.router)
 app.include_router(announcements_api.router)
 app.include_router(hosts_api.router)
+app.include_router(downloads_api.router)
 
 
 @app.middleware("http")

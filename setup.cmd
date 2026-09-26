@@ -8,8 +8,6 @@ if not exist ".venv\Scripts\python.exe" (
 ".venv\Scripts\python.exe" -m pip install -r backend\requirements.txt -r gateway\requirements.txt
 if errorlevel 1 goto failed
 pushd frontend
-call npm.cmd ci
-if errorlevel 1 goto frontend_failed
 call npm.cmd run build
 if errorlevel 1 goto frontend_failed
 popd
