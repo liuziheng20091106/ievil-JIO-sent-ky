@@ -23,7 +23,7 @@ flutter build windows --debug
 - **Android**：下载 APK 到应用缓存目录（同一版本只下一次）→ 经 FileProvider 交给系统安装器（`REQUEST_INSTALL_PACKAGES` 权限；未授权时引导到「安装未知应用」页）→ 安装完成或失败后清理残留安装包。
 - **Windows**：下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\` → 由它准备更新环境（首次用一次管理员权限把自签名证书装进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 计划任务以最高权限静默替换程序 → 自动重启客户端。之后每次更新都不再需要 UAC。
 
-首次连接某个服务地址时会展示服务端下发的用户协议（`/api/agreement`，Markdown），用户可选「同意并继续」或「取消连接」；同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过会重新询问，服务端没配协议则直接进入登录页。
+首次连接某个服务地址时会展示服务端下发的用户协议（`/api/agreement`，Markdown），用户可选「同意并继续」或「取消连接」；同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过会重新询问，服务端没配协议则直接进入登录页。协议正文的仓库副本见 `docs/免责声明与用户协议.md`（部署时复制成服务端的 `data/agreement.md`）。
 
 服务地址默认预填 `https://super.tkcloud.online:447`，可以随意修改（不自动连接）。
 

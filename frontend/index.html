@@ -170,6 +170,34 @@
         line-height: 1.7;
         margin: 0 0 12px;
       }
+      .legal h3 {
+        margin: 18px 0 6px;
+        font-size: 15.5px;
+      }
+      .legal h3:first-child {
+        margin-top: 2px;
+      }
+      .legal p {
+        margin: 0 0 10px;
+        font-size: 14.5px;
+        line-height: 1.75;
+      }
+      .legal ul {
+        margin: 0 0 10px;
+        padding-left: 20px;
+        font-size: 14.5px;
+        line-height: 1.75;
+      }
+      .legal li {
+        margin-bottom: 4px;
+      }
+      .legal a {
+        color: var(--purple);
+      }
+      .legal-empty {
+        color: var(--muted);
+        font-size: 14px;
+      }
       details.rule {
         border-top: 1px solid var(--border);
         padding: 4px 0;
@@ -270,6 +298,28 @@
       <section aria-label="游戏规则">
         <h2>游戏规则</h2>
         <div id="rules"></div>
+      </section>
+
+      <section aria-label="免责声明">
+        <h2>免责声明</h2>
+        <p class="legal-empty" id="agreement-empty">协议内容准备中，客户端内也会展示同一份内容。</p>
+        <div class="legal" id="agreement"></div>
+      </section>
+
+      <section aria-label="开源协议">
+        <h2>开源协议</h2>
+        <div class="legal">
+          <p>
+            本项目（服务端、客户端与 Windows 更新器）以
+            <a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="noopener">GNU AGPL-3.0</a>
+            授权，完整条文见仓库根目录的 LICENSE 文件。
+          </p>
+          <p>
+            依照 AGPL-3.0 第 13 条，通过网络与本服务交互的用户有权获得对应版本的完整源代码：
+            <a href="https://github.com/liuziheng20091106/ievil-JIO-sent-ky" rel="noopener">github.com/liuziheng20091106/ievil-JIO-sent-ky</a>。
+            修改本程序后作为网络服务对外提供，同样必须以 AGPL-3.0 公开源码并保留原有的版权与许可声明。
+          </p>
+        </div>
       </section>
 
       <footer>魔法裁判 · 七双 — 构建于 <!--BUILD-STAMP--></footer>
@@ -384,9 +434,77 @@
         if (host.firstElementChild) host.firstElementChild.open = true;
       }
 
+      // 免责声明与客户端里展示的用户协议是同一份内容（服务端 data/agreement.md）。
+      // 只处理三种写法：# 一级标题（由本页标题承担，跳过）、## 小节、- 列表项、其余按段落。
+      function appendLinked(node, text) {
+        var pattern = /(https?:\/\/[^\s，。；）)]+)/g;
+        var index = 0;
+        var match;
+        while ((match = pattern.exec(text)) !== null) {
+          if (match.index > index) {
+            node.appendChild(document.createTextNode(text.slice(index, match.index)));
+          }
+          var link = el("a", null, match[1]);
+          link.href = match[1];
+          link.rel = "noopener";
+          node.appendChild(link);
+          index = match.index + match[1].length;
+        }
+        if (index < text.length) {
+          node.appendChild(document.createTextNode(text.slice(index)));
+        }
+      }
+
+      function renderAgreement(text) {
+        var host = document.getElementById("agreement");
+        host.textContent = "";
+        var list = null;
+        text.split("\n").forEach(function (raw) {
+          var line = raw.replace(/\s+$/, "");
+          var trimmed = line.trim();
+          if (!trimmed || trimmed.indexOf("# ") === 0) return;
+          if (trimmed.indexOf("## ") === 0) {
+            list = null;
+            host.appendChild(el("h3", null, trimmed.slice(3).trim()));
+            return;
+          }
+          if (trimmed.indexOf("- ") === 0) {
+            if (!list) {
+              list = el("ul");
+              host.appendChild(list);
+            }
+            list.appendChild(el("li", null, trimmed.slice(2).trim()));
+            return;
+          }
+          list = null;
+          var paragraph = el("p");
+          appendLinked(paragraph, trimmed);
+          host.appendChild(paragraph);
+        });
+      }
+
+      function loadAgreement() {
+        return fetch("/api/agreement", { credentials: "same-origin" })
+          .then(function (response) {
+            if (!response.ok) throw new Error("bad status " + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            var text = (data && data.text) || "";
+            // 服务端没配置协议时保持「准备中」那一行，不显示空小节。
+            if (!text.trim()) return;
+            document.getElementById("agreement-empty").hidden = true;
+            renderAgreement(text);
+          })
+          .catch(function () {
+            // 拉不到就留着提示，不影响其它内容；客户端里仍会正常展示。
+          });
+      }
+
       renderRules();
       loadAnnouncements();
       loadDownloads();
+      loadAgreement();
     </script>
   </body>
 </html>
