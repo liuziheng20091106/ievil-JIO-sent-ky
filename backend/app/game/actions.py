@@ -107,7 +107,7 @@ DESCRIPTIONS = {
     "lobby.order": "发牌后选择哪张牌作为上层；艾玛、米莉亚、亚里沙必须放在下层。",
     "lobby.ready": "确认准备；全员再次准备后由主持人开局。",
     "player.profile": "设置本局的公开称呼，其他玩家和主持人都能看到。",
-    "night.clear": "清除本席位尚未确认的夜间选择；已确认的行动要改需主持人裁定。",
+    "night.clear": "清除本席位尚未确认的夜间选择；已确认的行动要改需主持人裁定。已提交寻宝的席位不能清除。",
     "night.confirm": "确认本席夜间选择；未确认的选择不计入结算，未选视为放弃。",
     "day.challenge": "质疑他人的白天技能声明；质疑失败本局个人判负。",
     "honoka.disguise": "穗乃香选择一个示人角色：只改别人看到的角色名，不获得该角色的技能。",
@@ -155,7 +155,7 @@ NIGHT_ABILITY_DESCRIPTIONS = {
     "rain": "下雨：本局一次，此后夜间死者会公开凶手座位号的方向线索。",
     "scapegoat": "替罪凶手：本局一次，指定之后自己造成死亡时对外显示的凶手。",
     "swap": "换血：每晚必须选择一名玩家（未提交时由系统随机指定）；其即将死亡时由你代替其死亡。",
-    "treasure": "寻宝：清空本席其他夜间选择，1/5概率挖到地雷！不过你会获得不在场证明，这或许能帮你在投票时获取一些优势？",
+    "treasure": "寻宝：清空本席其他夜间选择，1/5概率挖到地雷！不过你会获得不在场证明，这或许能帮你在投票时获取一些优势？提交后本夜不可修改或放弃。",
     "witch_scan": "查看全员当前魔女化状态，结果只发给你。",
     "arisa_injure": "令环形左右邻座各以1/2概率负伤；该效果不会把已有负伤升级为死亡。",
 }
@@ -175,7 +175,6 @@ DAY_ABILITY_DESCRIPTIONS = {
 NOMINATE_DESCRIPTION = (
     "提交即生效，无需二次确认；同一人可被多人提名，进入投票后计票去重，"
     "每个候选人只投一轮，提名过该候选的玩家自动投同意票。"
-    "可是大家都看见艾玛昨天一整晚都在庭院里寻宝啊"
 )
 
 
@@ -1036,39 +1035,49 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         ):
             acting = game["cards"][cid]
             submitted = {a["ability"] for a in night["actions"] if a["seat_id"] == sid}
-            for ability in night_abilities(game, acting):
-                if ability == "treasure" and submitted - {"treasure"}:
-                    continue
-                if "treasure" in submitted and ability != "treasure":
-                    continue
-                fields = []
-                if ability == "scapegoat":
-                    fields = [field("target_card", "显示为凶手的角色牌", "select", role_options())]
-                elif ability not in {"massacre", "rain", "treasure", "witch_scan", "arisa_injure"}:
-                    fields = [
-                        target_field(
-                            game,
-                            True,
-                            sid if ability == "swap" else None,
-                            avoid_treasure=ability == "knife",
-                        )
-                    ]
+            if "treasure" in submitted:
+                # 寻宝提交后本夜定局：不再提供修改、清除或放弃入口，防止重掷地雷
+                # 或私下看到结果后弃单洗白（服务端同样拒绝，见 engine.night.submit）。
                 result.append(
                     action(
-                        "night.submit",
-                        ("修改" if ability in submitted else "选择") + NIGHT_ABILITIES[ability][1],
-                        fields,
-                        {"ability": ability},
-                        "夜间",
-                        danger=ability == "treasure",
-                        description=NIGHT_ABILITY_DESCRIPTIONS.get(ability, ""),
+                        "night.confirm",
+                        "确认夜间行动（寻宝已提交，不可修改）",
+                        group="夜间",
+                        blocking=True,
                     )
                 )
-            if submitted:
-                result.append(action("night.clear", "清除未确认夜间选择", group="夜间"))
-            result.append(
-                action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True)
-            )
+            else:
+                for ability in night_abilities(game, acting):
+                    if ability == "treasure" and submitted:
+                        continue
+                    fields = []
+                    if ability == "scapegoat":
+                        fields = [field("target_card", "显示为凶手的角色牌", "select", role_options())]
+                    elif ability not in {"massacre", "rain", "treasure", "witch_scan", "arisa_injure"}:
+                        fields = [
+                            target_field(
+                                game,
+                                True,
+                                sid if ability == "swap" else None,
+                                avoid_treasure=ability == "knife",
+                            )
+                        ]
+                    result.append(
+                        action(
+                            "night.submit",
+                            ("修改" if ability in submitted else "选择") + NIGHT_ABILITIES[ability][1],
+                            fields,
+                            {"ability": ability},
+                            "夜间",
+                            danger=ability == "treasure",
+                            description=NIGHT_ABILITY_DESCRIPTIONS.get(ability, ""),
+                        )
+                    )
+                if submitted:
+                    result.append(action("night.clear", "清除未确认夜间选择", group="夜间"))
+                result.append(
+                    action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True)
+                )
     if card and game["half"] == "day":
         day_cards = [card]
         # 新版规则：艾玛即使在下层也可打断一次发言。

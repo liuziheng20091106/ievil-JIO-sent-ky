@@ -1,4 +1,4 @@
-"""昵称展示上限：发往界面的展示名一律不超过 8 个字。
+"""昵称展示上限：发往界面的展示名一律不超过 16 个半角宽度（中文按 2 算）。
 
 存储里保留完整昵称（账号昵称、参与身份快照、消息留档都不改写），只有下发到客户端
 的字符串走 ``state.display_player_name``：席位名、聊天昵称、选择器标签、系统文案与
@@ -31,11 +31,24 @@ class DisplayPlayerNameTest(unittest.TestCase):
         self.assertEqual(display_player_name(None), "")
         self.assertEqual(display_player_name("  阿雪  "), "阿雪")
 
-    def test_truncates_beyond_eight_characters(self):
+    def test_truncates_beyond_the_width_limit(self):
+        # 8 个汉字 = 16 半角宽度，正好占满；再长就在第 8 个字后截断。
         limit = "一二三四五六七八"
         self.assertEqual(display_player_name(limit), limit)
         self.assertEqual(display_player_name(limit + "九"), limit + "…")
         self.assertEqual(display_player_name(LONG), LONG[:8] + "…")
+
+    def test_counts_each_chinese_character_as_two_units(self):
+        # 16 个半角字母正好占满；多一个就截到 16。
+        ascii16 = "abcdefghijklmnop"
+        self.assertEqual(display_player_name(ascii16), ascii16)
+        self.assertEqual(display_player_name(ascii16 + "q"), ascii16 + "…")
+        # 中英混排按宽度累加：2 + 14 = 16 不截，再宽就截。
+        mixed = "阿雪abcdefghijkl"
+        self.assertEqual(display_player_name(mixed), mixed)
+        self.assertEqual(display_player_name(mixed + "m"), mixed + "…")
+        # 宽度超出时不会截出半个全角字符之外的歧义：按整字符保留。
+        self.assertEqual(display_player_name("中文abc中文"), "中文abc中文")
 
     def test_only_truncates_the_nickname_inside_the_host_label(self):
         self.assertEqual(host_display_name(SHORT), "主持人(阿雪)")

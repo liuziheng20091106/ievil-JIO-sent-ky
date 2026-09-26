@@ -1,5 +1,6 @@
 """Persistent JSON state and small shared rule primitives."""
 
+import unicodedata
 from copy import deepcopy
 from random import SystemRandom
 from uuid import uuid4
@@ -20,25 +21,42 @@ def uid():
     return uuid4().hex
 
 
-# 昵称在界面上的展示上限：存储里保留完整昵称，发往客户端的展示名一律不超过 8 个字。
-PLAYER_NAME_LIMIT = 8
+# 昵称在界面上的展示上限：存储里保留完整昵称，发往客户端的展示名一律不超过 16 个
+# 半角宽度——中文等全角字符按 2 个算，字母数字按 1 个算（8 个汉字正好占满）。
+PLAYER_NAME_LIMIT = 16
 HOST_LABEL_PREFIX = "主持人("
 
 
-def display_player_name(name, limit=PLAYER_NAME_LIMIT):
-    """玩家/账号昵称的展示名：超过 8 个字截断并加省略号。
+def _name_width(char):
+    """单个字符的展示宽度：全角（中日韩、全角标点等）按 2，其余按 1。"""
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
 
-    昵称本身在存储里保持完整（账号昵称、参与身份快照、消息留档都不改写），只有
-    发往界面的字符串走这里。主持人展示名是「主持人(昵称)」这种组合标签，截断时
-    只动括号里的昵称，不能把「主持人(」也截掉。
+
+def display_player_name(name, limit=PLAYER_NAME_LIMIT):
+    """玩家/账号昵称的展示名：超过 16 个半角宽度截断并加省略号。
+
+    宽度按终端惯例计算：中文等全角字符算 2，字母数字算 1，所以 8 个汉字与
+    16 个字母都正好占满上限。昵称本身在存储里保持完整（账号昵称、参与身份
+    快照、消息留档都不改写），只有发往界面的字符串走这里。主持人展示名是
+    「主持人(昵称)」这种组合标签，截断时只动括号里的昵称，不能把「主持人(」
+    也截掉。
     """
     text = (name or "").strip()
     if text.startswith(HOST_LABEL_PREFIX) and text.endswith(")"):
         inner = text[len(HOST_LABEL_PREFIX) : -1]
         return f"{HOST_LABEL_PREFIX}{display_player_name(inner, limit)})"
-    if len(text) <= limit:
+    used = sum(_name_width(char) for char in text)
+    if used <= limit:
         return text
-    return text[:limit] + "…"
+    kept = []
+    used = 0
+    for char in text:
+        width = _name_width(char)
+        if used + width > limit:
+            break
+        kept.append(char)
+        used += width
+    return "".join(kept) + "…"
 
 
 def host_display_name(nickname):
@@ -98,7 +116,7 @@ def seat_name(game, s):
     role_id = s.get("avatar_role_id")
     if game.get("status") != "lobby" and role_id in ROLES:
         return ROLES[role_id]["name"]
-    # 候场时这里就是玩家的公开称呼：选择界面上的展示同样受 8 字上限约束。
+    # 候场时这里就是玩家的公开称呼：选择界面上的展示同样受 16 半角宽度上限约束。
     return display_player_name(s["name"])
 
 
@@ -988,6 +1006,22 @@ def save_snapshot(game):
     return snap
 
 
+def refresh_seat_avatar(game, s):
+    """按当前牌重算席位公开头像。
+
+    seats 不随快照还原（占位身份与公开形象属于真实时间），但头像必须与当前牌
+    一致：回溯恢复上层牌后，曾经因上层出局而切到下层牌的席位要改回来。
+    穗乃香示人锁定后头像继续用示人角色，与下层登场时的处理保持一致。
+    """
+    now = current(game, s)
+    if now is None:
+        return
+    if now["id"] == "honoka" and now["states"].get("disguise_locked"):
+        s["avatar_role_id"] = now["states"].get("disguise") or "honoka"
+    else:
+        s["avatar_role_id"] = now["role_id"]
+
+
 def rewind(game, snapshot_id, events, mode=None, keep_states=()):
     snap = next((s for s in game["snapshots"] if s["id"] == snapshot_id), None)
     require(snap is not None, "回溯时间点不存在")
@@ -1006,6 +1040,9 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
     game.update(mechanical)
     for s in game["seats"]:
         s["cards"] = cards_by_seat[s["id"]]
+        # 牌面已恢复到回溯点：曾经因上层出局切到下层牌的公开头像一并改回，
+        # 否则当前牌是上层、头像却停在下层。
+        refresh_seat_avatar(game, s)
     game["spiritual"] = spiritual
     for cid, states in spiritual["persistent_states"].items():
         game["cards"][cid]["states"].update(states)
@@ -1091,6 +1128,11 @@ def finish(game, events, winner, reason):
 def clear_seat_actions(game, seat_id, events=None):
     require(any(s["id"] == seat_id for s in game["seats"]), "席位不存在")
     night = game["night"]
+    # 寻宝提交后本夜定局：不能清除，也不能借「放弃并确认」在私下看到结果后弃单。
+    require(
+        not any(a["seat_id"] == seat_id and a["ability"] == "treasure" for a in night["actions"]),
+        "寻宝已提交，本夜不可修改或放弃",
+    )
     night["actions"] = [a for a in night["actions"] if a["seat_id"] != seat_id]
     night["confirmed"] = [s for s in night["confirmed"] if s != seat_id]
     # 米莉亚清除本夜选择时，正在生效的换血目标也一并作废，避免留下没有行动记录的替死。

@@ -1132,14 +1132,27 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             **deepcopy({k: v for k, v in data.items() if k != "ability"}),
         }
         if ability == "treasure":
+            # 寻宝提交后本夜定局：不可修改、不可清除、不可放弃并确认。否则踩雷后
+            # 重交能洗掉地雷结果、反复重交还能把 1/5 地雷概率磨没（对局实测 bug）。
+            require(
+                not any(a["ability"] == "treasure" for a in game["night"]["actions"] if a["seat_id"] == sid),
+                "寻宝已提交，本夜不可修改或放弃",
+            )
             # 寻宝只清空本席的其他夜间选择，不替其他席位锁夜；地雷伤害并入本夜预结算，
             # 且不接入替死。
             game["night"]["actions"] = [
                 a for a in game["night"]["actions"] if a["seat_id"] != sid
             ]
+            # 每夜只掷一次地雷骰：骰值按天记在牌状态里，主持人代操作或状态异常时
+            # 重复提交也复用第一次结果（状态白名单不外发这个键，前端看不到）。
+            saved = card["states"].get("treasure_roll")
+            if saved and saved.get("day") == game["day"]:
+                roll, mine = saved["roll"], saved["mine"]
+            else:
+                roll = SystemRandom().randrange(5)
+                mine = roll == 0
+                card["states"]["treasure_roll"] = {"day": game["day"], "roll": roll, "mine": mine}
             card["states"]["treasure_protected_day"] = game["day"]
-            roll = SystemRandom().randrange(5)
-            mine = roll == 0
             entry["roll"] = roll
             entry["mine"] = mine
             log_event(game, "roll", f"艾玛寻宝骰值{roll}：{'触发地雷' if mine else '安全'}。")
@@ -1745,7 +1758,9 @@ def timeout_seat(game, events, sid):
         )
         game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
     elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
-        clear_seat_actions(game, sid, events)
+        # 已提交寻宝的席位没有「放弃」可言：超时只补确认，寻宝照常结算。
+        if not any(a["seat_id"] == sid and a["ability"] == "treasure" for a in game["night"]["actions"]):
+            clear_seat_actions(game, sid, events)
         game["night"]["confirmed"].append(sid)
         unlock_coco(game, events)
     elif phase == "speech" and game["public"]["speaker"] == sid:

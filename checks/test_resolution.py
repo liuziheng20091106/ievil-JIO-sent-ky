@@ -20,7 +20,7 @@ from backend.app.game.actions import (
     outstanding_seats,
     seat_options,
 )
-from backend.app.game.engine import open_vote
+from backend.app.game.engine import open_vote, timeout_seat
 from backend.app.game.resolution import (
     begin_night,
     damage_preview,
@@ -408,6 +408,48 @@ class NewNightRules(unittest.TestCase):
         ]
         self.assertNotIn("treasure", offered)
         self.assertIn("massacre", offered)
+
+    def test_treasure_cannot_be_resubmitted_to_reroll_the_mine(self):
+        """寻宝提交后本夜定局：重交、清除、超时放弃都不能重掷地雷骰。"""
+        game = arranged_game("night", "night")
+        game["cards"]["millia"]["alive"] = False
+        begin_night(game, [])
+        with patch("backend.app.game.engine.SystemRandom") as random:
+            random.return_value.randrange.return_value = 0  # 第一次就踩雷
+            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+        entry = next(a for a in game["night"]["actions"] if a["ability"] == "treasure")
+        self.assertTrue(entry["mine"])
+        # 重交被拒：骰值不会被重掷成安全结果。
+        with patch("backend.app.game.engine.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1
+            with self.assertRaises(GameError):
+                command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+        # 清除被拒：不能私下看到地雷结果后弃单洗白。
+        with self.assertRaises(GameError):
+            command(game, player(game, "1"), "night.clear")
+        entry = next(a for a in game["night"]["actions"] if a["ability"] == "treasure")
+        self.assertTrue(entry["mine"])
+        # 行动表不再提供修改、清除或放弃入口，只剩确认。
+        offered = [item["id"] for item in actions_for(game, player(game, "1"))]
+        self.assertNotIn("night.submit", offered)
+        self.assertNotIn("night.clear", offered)
+        self.assertIn("night.confirm", offered)
+        # 超时强制推进只补确认，寻宝行动保留。
+        self.assertTrue(timeout_seat(game, [], "1"))
+        entry = next(a for a in game["night"]["actions"] if a["ability"] == "treasure")
+        self.assertTrue(entry["mine"])
+        self.assertIn("1", game["night"]["confirmed"])
+
+    def test_treasure_without_mine_keeps_protection(self):
+        """寻宝安全落地时保护照常生效，且换一天骰值重新掷。"""
+        game = arranged_game("night", "night")
+        game["cards"]["millia"]["alive"] = False
+        begin_night(game, [])
+        with patch("backend.app.game.engine.SystemRandom") as random:
+            random.return_value.randrange.return_value = 1
+            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+        self.assertEqual(game["cards"]["emma"]["states"]["treasure_protected_day"], 2)
+        self.assertEqual(game["cards"]["emma"]["states"]["treasure_roll"]["day"], 2)
 
     def test_treasure_mine_resolves_in_the_night_batch(self):
         game = arranged_game("night", "night")
@@ -1365,9 +1407,31 @@ class HostFreeAdjudication(unittest.TestCase):
         self.assertEqual(game["deaths"], [])
         self.assertTrue(game["cards"]["millia"]["alive"])
         self.assertTrue(game["cards"]["hiro"]["alive"])
-        self.assertIsNone(game["seats"][0]["avatar_role_id"])
+        # seats 不随快照还原：头像保持出局前的公开形象，即上层米莉亚。
+        self.assertEqual(game["seats"][0]["avatar_role_id"], "millia")
         self.assertFalse([event for event in events if "下层角色" in event["text"]])
         self.assertTrue(any("回溯" in event["text"] for event in events))
+
+    def test_a_rewind_restores_the_avatar_of_a_recovered_upper_card(self):
+        """回溯恢复上层牌后，公开头像要跟着改回上层，不能停在下层牌。"""
+        game = arranged_game()
+        game.update(day=1, phase="discussion")
+        save_snapshot(game)
+        game.update(day=2, phase="discussion")
+        # 1号上层米莉亚白天出局：公开头像切到下层艾玛，随后希罗死亡触发回溯。
+        game["cards"]["millia"]["alive"] = False
+        game["seats"][0]["avatar_role_id"] = "emma"
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["hiro"], "effect": "death", "source": "coco", "reason": "测试回溯头像"},
+        )
+        self.assertEqual(game["day"], 1)
+        self.assertTrue(game["cards"]["millia"]["alive"])
+        # 当前牌恢复为米莉亚（上层）：头像不能再是下层艾玛。
+        self.assertEqual(game["seats"][0]["avatar_role_id"], "millia")
+        self.assertEqual(current(game, game["seats"][0])["role_id"], "millia")
 
     def test_a_night_review_rewind_keeps_the_restored_phase(self):
         # 预结算回溯后不能再写回 night_review/night_results，否则会覆盖恢复的时间线。
