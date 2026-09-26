@@ -33,6 +33,7 @@ from backend.app.game.resolution import (
     unlock_coco,
     revive,
     treasure_protected,
+    witch_witness_targets,
 )
 from backend.app.game.state import (
     ballot_complete,
@@ -499,20 +500,75 @@ class NewNightRules(unittest.TestCase):
         self.assertTrue(preview["injured"]["hiro"])
         self.assertFalse(preview["deaths"])
 
-    def test_nanoka_hit_threshold_rises_from_one_to_six(self):
+    def test_nanoka_fires_all_six_bullets_re_picking_the_target_each_time(self):
+        """临刑枪是连发：每枪重新选目标，命中率 1/6→6/6，打空即完成响应。"""
         game = arranged_game("execution")
         game["cards"]["emma"]["alive"] = False
         game["execution"] = ["nanoka"]
         game["execution_ready"] = []
         game["execution_shots"] = []
         with patch("backend.app.game.engine.SystemRandom") as random:
-            random.return_value.randrange.return_value = 5
-            for _ in range(6):
-                command(game, player(game, "7"), "execution.shoot", {"target": "2"})
-                game["execution_ready"].clear()
-        self.assertEqual([roll["threshold"] for roll in game["execution_rolls"]], [1, 2, 3, 4, 5, 6])
+            random.return_value.randrange.return_value = 5  # 骰值恒为6：只有6/6那一枪命中
+            for index in range(6):
+                offered = [
+                    item
+                    for item in actions_for(game, player(game, "7"))
+                    if item["id"] == "execution.shoot"
+                ]
+                self.assertEqual(len(offered), 1, f"第{index + 1}枪没有给出行动")
+                # 每枪都重新选目标：目标席位在两席之间轮换。
+                command(
+                    game,
+                    player(game, "7"),
+                    "execution.shoot",
+                    {"target": "2" if index % 2 else "3"},
+                )
+        self.assertEqual(
+            [roll["threshold"] for roll in game["execution_rolls"]], [1, 2, 3, 4, 5, 6]
+        )
+        self.assertEqual(
+            [roll["target_card"] for roll in game["execution_rolls"]],
+            ["meruru", "hiro", "meruru", "hiro", "meruru", "hiro"],
+        )
         self.assertEqual(len(game["execution_shots"]), 1)
-        self.assertEqual(game["cards"]["nanoka"]["uses"]["shot_misses"], 0)
+        self.assertEqual(game["cards"]["nanoka"]["uses"], {"bullets": 0, "shot_misses": 0})
+        # 打空即完成响应：不再有待办，也不再给出开枪或收手行动。
+        self.assertIn("7", game["execution_ready"])
+        self.assertNotIn("7", outstanding_seats(game))
+        self.assertEqual(
+            [
+                item["id"]
+                for item in actions_for(game, player(game, "7"))
+                if item["id"].startswith("execution.")
+            ],
+            [],
+        )
+
+    def test_nanoka_may_stop_firing_early_and_a_hit_resets_the_ladder(self):
+        game = arranged_game("execution")
+        game["cards"]["emma"]["alive"] = False
+        game["execution"] = ["nanoka"]
+        game["execution_ready"] = []
+        game["execution_shots"] = []
+        with patch("backend.app.game.engine.SystemRandom") as random:
+            random.return_value.randrange.return_value = 0  # 骰值1：1/6 也命中
+            command(game, player(game, "7"), "execution.shoot", {"target": "3"})
+            next_shot = next(
+                item
+                for item in actions_for(game, player(game, "7"))
+                if item["id"] == "execution.shoot"
+            )
+            # 命中后重置：下一枪回到 1/6，并且行动说明要交代「每枪重新选目标」。
+            self.assertIn("1/6", next_shot["label"])
+            self.assertIn("重新选择目标", next_shot["description"])
+            # 也可以收手：收手后不再有待办，已打出的枪照常结算。
+            command(game, player(game, "7"), "execution.confirm", {})
+        self.assertEqual(game["cards"]["nanoka"]["uses"], {"bullets": 5, "shot_misses": 0})
+        self.assertIn("7", game["execution_ready"])
+        self.assertNotIn("7", outstanding_seats(game))
+        command(game, HOST, "host.advance", {})
+        self.assertFalse(game["cards"]["meruru"]["alive"])
+        self.assertFalse(game["cards"]["nanoka"]["alive"])
 
     def test_witch_honoka_renames_each_four_person_witness_list(self):
         game = arranged_game("night_results", "night")
@@ -1183,12 +1239,15 @@ class NightSummaryAndWitness(unittest.TestCase):
         self.assertIn(death["notice"], game["queued_notices"])
         self.assertTrue(any(item.get("death_id") == death["id"] for item in game["pending"]))
         command(game, player(game, "3"), "meruru.revive", {"death_id": death["id"]})
-        # 复活撤销该次死亡的全部痕迹：记录、公告、目击、半天出局与待办。
+        # 复活撤销死亡本身：记录、公告与半天出局都回滚。
         self.assertTrue(game["cards"]["millia"]["alive"])
         self.assertNotIn("millia", [item["target_card"] for item in game["deaths"]])
         self.assertNotIn(death["notice"], game["queued_notices"])
-        self.assertFalse(any(item.get("death_id") == death["id"] for item in game["pending"]))
-        self.assertIsNone(game["witness"])
+        # 目击看的是「被魔女刀指到」而不是「出局」：复活后名单照发，只把标题改成当事人还在场。
+        kept = [item for item in game["pending"] if item.get("death_id") == death["id"]]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("已被复活", kept[0]["title"])
+        self.assertIn("照发", kept[0]["title"])
         # 傀儡化：该牌无投票权、无技能，且控制者是 3 号的梅露露。
         self.assertEqual(game["cards"]["millia"]["states"]["puppet"], "meruru")
         self.assertTrue(game["cards"]["millia"]["states"]["no_ability"])
@@ -1330,6 +1389,165 @@ class NightSummaryAndWitness(unittest.TestCase):
         # 未隐藏的那条规则不适用：改由主持人填写名单，且不自动发目击。
         self.assertTrue(any(item["kind"] == "suspects" for item in game["pending"]))
         self.assertIsNone(game["witness"])
+
+
+class KnifeWitnessAlways(unittest.TestCase):
+    """目击的触发条件是「被魔女袭击指到」，不是「因此出局」：无论死没死都要有目击。
+
+    庇护把魔女刀降级成负伤、玛格的爱免除这一击、米莉亚替死把致死一击转走，当事人
+    都不是死者，但仍然看见了袭击，因此照发四人目击名单；真正出局的席位仍走普通
+    死亡路径，不重复发。
+    """
+
+    def knife_night(self, target="4", *, protect=None, love=None, swap=None):
+        game = arranged_game("night", "night")
+        # 2号的当前牌是希罗：把它变成魔女，就有了独立的一刀。
+        game["cards"]["hiro"]["witch"] = True
+        if love:
+            game["marg_love"] = {"seat_id": love, "day": 2}
+        begin_night(game, [])
+        if protect:
+            command(game, player(game, "3"), "night.submit", {"ability": "protect", "target": protect})
+            command(game, player(game, "3"), "night.confirm", {})
+        if swap:
+            command(game, player(game, "1"), "night.submit", {"ability": "swap", "target": swap})
+            command(game, player(game, "1"), "night.confirm", {})
+        command(game, player(game, "2"), "night.submit", {"ability": "knife", "target": target})
+        command(game, player(game, "2"), "night.confirm", {})
+        return game
+
+    def suspects_pending(self, game, seat):
+        return next(
+            (
+                item
+                for item in game["pending"]
+                if item["kind"] == "suspects" and item["seat_id"] == seat
+            ),
+            None,
+        )
+
+    def test_a_plain_knife_death_still_gets_exactly_one_list(self):
+        game = self.knife_night(target="4")
+        command(game, HOST, "host.advance")  # 锁夜并生成预结算
+        preview = game["night"]["preview"]
+        self.assertEqual({death["target_card"] for death in preview["deaths"]}, {"marg"})
+        command(game, HOST, "host.advance")  # 发布夜间结果
+        pendings = [item for item in game["pending"] if item["kind"] == "suspects"]
+        # 4号死于这一刀：由死亡路径发名单，新的「未出局」路径不能重复发一份。
+        self.assertEqual([item["seat_id"] for item in pendings], ["4"])
+
+    def test_a_protected_knife_target_gets_a_list_without_dying(self):
+        game = self.knife_night(target="4", protect="4")
+        command(game, HOST, "host.advance")
+        preview = game["night"]["preview"]
+        self.assertEqual(preview["deaths"], [])
+        self.assertTrue(preview["injured"]["marg"])
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["deaths"], [])
+        item = self.suspects_pending(game, "4")
+        self.assertIsNotNone(item, "被庇护降级成负伤的人也是被刀指到的人")
+        self.assertIn("未出局", item["title"])
+        # 主持人照常填四人名单，真凶（2号希罗）必须在里面，名单只发给被袭击的这一席。
+        command(
+            game,
+            HOST,
+            "host.resolve",
+            {"pending_id": item["id"], "suspects": ["hiro", "coco", "emma", "nanoka"]},
+        )
+        self.assertEqual(game["witness"]["seat_id"], "4")
+        self.assertIn("希罗", game["witness"]["text"])
+        audiences = [
+            entry["audience"] for entry in game["information"] if entry["title"] == "夜间目击名单"
+        ]
+        self.assertEqual(audiences, [["p4"]])
+
+    def test_an_immune_knife_target_gets_a_list_too(self):
+        # 玛格的爱把这一刀完全挡下：当事人没有受伤，但仍然算「被魔女刀指到」。
+        game = self.knife_night(target="3", love="3")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["night"]["preview"]["deaths"], [])
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["deaths"], [])
+        self.assertIsNotNone(self.suspects_pending(game, "3"))
+
+    def test_millia_substitution_leaves_the_original_target_with_a_list(self):
+        game = self.knife_night(target="4", swap="4")
+        command(game, HOST, "host.advance")
+        preview = game["night"]["preview"]
+        self.assertEqual({death["target_card"] for death in preview["deaths"]}, {"millia"})
+        command(game, HOST, "host.advance")
+        self.assertTrue(game["cards"]["marg"]["alive"])
+        # 顶替死亡的米莉亚按死亡路径拿名单，被刀指到的 4 号也拿一份。
+        self.assertIsNotNone(self.suspects_pending(game, "1"))
+        self.assertIsNotNone(self.suspects_pending(game, "4"))
+
+    def test_the_host_default_form_is_ready_to_submit(self):
+        """主持人拿到的「被袭击未出局」待办，表单默认值必须直接可提交。"""
+        game = self.knife_night(target="4", protect="4")
+        command(game, HOST, "host.advance")
+        command(game, HOST, "host.advance")
+        item = self.suspects_pending(game, "4")
+        ruling = next(
+            action
+            for action in game_view(game, HOST)["actions"]
+            if action["id"] == "host.resolve"
+            and action["payload"]["pending_id"] == item["id"]
+        )
+        payload = {
+            entry["name"]: entry.get("default")
+            for entry in ruling["fields"]
+            if entry.get("type") != "checkbox"
+        }
+        command(game, HOST, "host.resolve", {"pending_id": item["id"], **payload})
+        self.assertEqual(game["witness"]["seat_id"], "4")
+
+    def test_the_cause_scope_is_every_witch_attack_and_nothing_else(self):
+        """魔女刀、额外攻击、全场攻击都算「魔女袭击」；13水与邻座负伤不是。"""
+        game = arranged_game("night", "night")
+        attacks = [
+            {"target_card": "marg", "source_card": "emma", "cause": "knife"},
+            {"target_card": "sherry", "source_card": "emma", "cause": "massacre"},
+            {"target_card": "hiro", "source_card": "hanna", "cause": "extra_kill"},
+            {"target_card": "meruru", "source_card": "emma", "cause": "massacre"},
+            {"target_card": "leia", "source_card": "coco", "cause": "water"},
+            {"target_card": "noah", "source_card": "arisa", "cause": "arisa_injure"},
+        ]
+        # 全场攻击会把上下两张牌都列出来：名单按席位发，victim 取该席当前牌。
+        self.assertEqual(
+            [(item["seat_id"], item["victim"], item["cause"]) for item in witch_witness_targets(game, attacks)],
+            [("4", "marg", "knife"), ("2", "hiro", "extra_kill"), ("3", "meruru", "massacre")],
+        )
+
+    def test_water_is_not_a_knife_so_a_survivor_gets_nothing(self):
+        """13水不是魔女袭击：被庇护挡下、没出局就没有目击（死亡时仍按原规则发）。"""
+        game = arranged_game("night", "night")
+        begin_night(game, [])
+        command(game, HOST, "host.water", {"seat_id": "3"})
+        command(game, player(game, "3"), "night.submit", {"ability": "protect", "target": "4"})
+        command(game, player(game, "3"), "night.confirm", {})
+        command(game, player(game, "3"), "water.use", {"target": "4"})
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["deaths"], [])
+        self.assertTrue(game["night"]["preview"]["injured"]["marg"])
+        command(game, HOST, "host.advance")
+        self.assertFalse(any(item["kind"] == "suspects" for item in game["pending"]))
+
+    def test_reviving_a_water_victim_still_drops_its_witness(self):
+        game = arranged_game("night", "night")
+        game["cards"]["meruru"]["witch"] = True
+        begin_night(game, [])
+        # 先把米莉亚的换血钉死在2号：免得强制推进时随机换到4号，把毒杀转成替死。
+        command(game, player(game, "1"), "night.submit", {"ability": "swap", "target": "2"})
+        command(game, player(game, "1"), "night.confirm", {})
+        command(game, HOST, "host.water", {"seat_id": "3"})
+        command(game, player(game, "3"), "water.use", {"target": "4"})
+        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        command(game, HOST, "host.advance")  # 未隐藏死因：系统直接发固定四人目击
+        death = next(item for item in game["deaths"] if item["target_card"] == "marg")
+        self.assertEqual(game["witness"]["death_id"], death["id"])
+        command(game, player(game, "3"), "meruru.revive", {"death_id": death["id"]})
+        self.assertIsNone(game["witness"])
+        self.assertFalse(any(item["kind"] == "suspects" for item in game["pending"]))
 
 
 class HostFreeAdjudication(unittest.TestCase):

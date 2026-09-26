@@ -346,14 +346,16 @@ class HeuristicPolicy:
         view = client.view
         if view["phase"] != "execution":
             return None
-        confirm = client.action("execution.confirm")
-        if confirm is not None:
-            return Decision("execution.confirm", {}, "放弃临刑行动")
         shoot = client.action("execution.shoot")
         if shoot is not None:
             options = option_values(shoot, "target")
             if options:
+                # 临刑枪是连发：先打到子弹用完（每枪重新选目标），没有枪可开时再收手。
+                # 顺序反过来就永远走不到「命中率递增 / 打空即结束」这条分支。
                 return Decision("execution.shoot", {"target": self.random.choice(options)}, "临刑开枪")
+        confirm = client.action("execution.confirm")
+        if confirm is not None:
+            return Decision("execution.confirm", {}, "收手（不再开枪）")
         return None
 
     # ------------------------------------------------------------------ 傀儡

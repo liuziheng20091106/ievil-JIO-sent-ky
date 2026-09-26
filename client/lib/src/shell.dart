@@ -2992,11 +2992,12 @@ class ProfilePage extends StatelessWidget {
               ),
            SizedBox(height: AppSpacing.sm),
         ],
-        // 当日目击名单：服务端只在白天到投票结束前后发给死者与主持人，常驻卡片显示。
+        // 当日目击名单：服务端只在白天到投票结束前后发给当事人与主持人，常驻卡片显示。
+        // 名单的触发条件是「被魔女袭击指到」：夜间死者与遭刀却未出局的人都算当事人。
         if (view.raw['witness'] is Map) ...[
            SectionTitle(
             '当日目击名单',
-            subtitle: '昨夜出局者的目击结果，投票结束前常驻。',
+            subtitle: '昨夜死者与被魔女袭击者的目击结果，投票结束前常驻。',
           ),
           Card(
             color: context.palette.accentSoft,

@@ -360,6 +360,75 @@ def millia_substitute(game, attacks, protection=()):
     return rewritten
 
 
+# 魔女一方的袭击能力：目击的触发条件是「被它指到」，不是「因此出局」。
+# 庇护把这一击降级成负伤、玛格的爱免除它、米莉亚替死把致死一击转走，都算被指到。
+WITCH_ATTACK_CAUSES = frozenset({"knife", "extra_kill", "massacre"})
+
+
+def witch_witness_targets(game, attacks):
+    """本夜被魔女袭击（魔女刀、额外攻击、全场攻击）指到的席位，每个席位一条。
+
+    必须在米莉亚替死改写攻击目标之前调用：替死把致死一击转到米莉亚牌上，被指到的
+    原目标这一侧就再也看不出来了。全场攻击会同时列出上下两张牌，而名单是按席位发
+    的，所以按席位去重，victim 取该席当前牌。
+    """
+    targets, seen = [], set()
+    for attack in attacks:
+        cid = attack.get("target_card")
+        if attack.get("cause") not in WITCH_ATTACK_CAUSES or not cid:
+            continue
+        card = game["cards"].get(cid)
+        if not card or not card["alive"]:
+            continue
+        s = owner(game, cid)
+        if s["id"] in seen:
+            continue
+        seen.add(s["id"])
+        now = current(game, s)
+        targets.append(
+            {
+                "seat_id": s["id"],
+                "victim": now["id"] if now else cid,
+                "source_card": attack.get("source_card"),
+                "cause": attack["cause"],
+            }
+        )
+    return targets
+
+
+def publish_survivor_witnesses(game, events, preview, killed):
+    """被魔女袭击指到但没出局的席位同样要一份目击名单。
+
+    真正出局的席位由普通死亡路径发名单，这里只补「本夜没死」的那些：庇护降级为
+    负伤、爱人免疫、米莉亚替死都只改变结算结果，不改变「他被袭击了」这件事。
+    名单同样经主持人填写（技能处理后的真凶与穗乃香改名都走原路径）；当事人中毒时
+    与死者一样只掷一次信息骰。
+    """
+    died_cards = {death["target_card"] for death in killed}
+    died_seats = {death["seat_id"] for death in killed}
+    for target in preview.get("witch_targets", []):
+        if target["seat_id"] in died_seats or target["victim"] in died_cards:
+            continue
+        card = game["cards"][target["victim"]]
+        truthful = effect_effective(game, card, "夜间目击名单")
+        label = NIGHT_ABILITIES[target["cause"]][1]
+        title = (
+            f"{target['seat_id']}号夜间被{label}袭击（未出局）："
+            "填写四名疑似凶手（真凶、汉娜及额外两人）"
+        )
+        if not truthful:
+            title += "；本夜当事人中毒、目击信息骰失败，发给他的名单不含真凶"
+        pending(
+            game,
+            "suspects",
+            title,
+            seat_id=target["seat_id"],
+            victim=target["victim"],
+            source_card=target.get("source_card"),
+            truthful=truthful,
+        )
+
+
 def prepare_night_preview(game, events=None):
     night = game["night"]
     night["reactions"] = [r for r in night["reactions"] if r != "millia"]
@@ -421,8 +490,11 @@ def night_damage(game):
         if target:
             attacks.append({"target_card": target["id"], "source_card": "marg", "cause": "love", "once_injury": True})
     attacks.extend(night.get("extra_attacks", []))
+    # 「被魔女指到就有目击」按意图记账：必须在替死改写目标之前抓一份。
+    witch_targets = witch_witness_targets(game, attacks)
     attacks = millia_substitute(game, attacks, protection)
     preview = damage_preview(game, attacks, protection)
+    preview["witch_targets"] = witch_targets
     return preview, {death["target_card"] for death in preview["deaths"]}
 
 
@@ -611,14 +683,23 @@ def death_batch(game, events, preview):
                     [s["id"]],
                     "傀儡解除",
                 )
+    if game["half"] == "night":
+        # 被魔女袭击指到却没出局的席位同样要有目击：目击看的是「被指到」。
+        publish_survivor_witnesses(game, events, preview, killed)
     if killed:
         check_winner(game)
     return killed
 
 
 def revoke_death(game, events, death):
-    """梅露露复活：撤销该次死亡在公共记录、待办与已发目击里的全部痕迹。"""
+    """梅露露复活：撤销该次死亡在公共记录、待办与已发目击里的痕迹。
+
+    被魔女袭击（魔女刀、额外攻击、全场攻击）留下的目击不撤销：目击的触发条件是
+    「被指到」而不是「出局」，复活撤掉的是死亡本身（公告、死因与半天出局），当事人
+    仍然记得那一击。13水毒杀等其他死因照旧连目击一起撤销。
+    """
     cid, sid = death["target_card"], death["seat_id"]
+    keeps_witness = death.get("cause") in WITCH_ATTACK_CAUSES
     game["deaths"] = [item for item in game["deaths"] if item["id"] != death["id"]]
     game["queued_notices"] = [
         notice for notice in game["queued_notices"] if notice != death.get("notice")
@@ -627,9 +708,23 @@ def revoke_death(game, events, death):
     game["pending"] = [
         item
         for item in game["pending"]
-        if item.get("death_id") != death["id"] and not (item["kind"] == "suspects" and item.get("victim") == cid)
+        if not (
+            (
+                item.get("death_id") == death["id"]
+                or (item["kind"] == "suspects" and item.get("victim") == cid)
+            )
+            and not keeps_witness
+        )
     ]
-    if game.get("witness") and game["witness"].get("death_id") == death["id"]:
+    if keeps_witness:
+        # 待办标题原本写着「夜间死者」：复活后要跟主持人说清这人还在场、名单照发。
+        for item in game["pending"]:
+            if item["kind"] == "suspects" and (
+                item.get("death_id") == death["id"] or item.get("victim") == cid
+            ):
+                item["title"] = f"{sid}号已被复活，被袭击的目击照发：填写四名疑似凶手"
+                item["text"] = item["title"]
+    if game.get("witness") and game["witness"].get("death_id") == death["id"] and not keeps_witness:
         game["witness"] = None
     if game["half_exits"].get(sid) == half_key(game):
         del game["half_exits"][sid]

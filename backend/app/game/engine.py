@@ -1447,10 +1447,14 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         if any(cast.get(cid) == "yes" for cid in duel):
             game["duel_approvals"][sid] = True
     elif action == "execution.shoot":
+        # 奈乃香的临刑枪是连发：每开一枪都重新选目标，直到子弹用完或本人收手。
+        # 因此这里不写 execution_ready，只有 execution.confirm（收手）或打空才结束。
+        require(card["uses"].get("bullets", 0) > 0, "子弹已经用完")
         card["uses"]["bullets"] -= 1
         threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
         roll = SystemRandom().randrange(6) + 1
         target = current(game, data["target"])
+        require(target is not None, "目标当前没有登场角色牌")
         effective = True  # 临刑开枪不吃中毒效果骰
         hit = roll <= threshold and effective
         card["uses"]["shot_misses"] = 0 if hit else min(threshold, 6)
@@ -1466,14 +1470,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         )
         log_event(game, "roll", f"奈乃香临刑开枪：命中阈值{threshold}/6，骰值{roll}，{'命中' if hit else '未命中'}。")
         if hit:
-            game["execution_shots"].append(
+            game.setdefault("execution_shots", []).append(
                 {"target_card": target["id"], "source_card": card["id"], "cause": "shoot"}
             )
-        game["execution_ready"].append(sid)
+        bullets = card["uses"]["bullets"]
+        if bullets <= 0:
+            # 子弹打空即视为临刑响应完成：待办与提醒都以「还有子弹」为准，不会卡住推进。
+            game["execution_ready"].append(sid)
         notify(
             game,
             events,
-            f"{sid}号临刑开枪，命中率{threshold}/6，{'命中' if hit else '未命中'}。",
+            f"{sid}号临刑开枪，命中率{threshold}/6，{'命中' if hit else '未命中'}；剩余{bullets}颗子弹。",
             alert=True,
         )
     elif action == "execution.confirm":

@@ -70,6 +70,8 @@ class SetupRules(unittest.TestCase):
         game.pop("duel")
         game.pop("duel_approvals")
         game.pop("ballots")
+        game.pop("execution_shots")
+        game.pop("execution_rolls")
         # 第六版以前的计票表：一次性投票改成 ballots 后这个字段整体作废。
         game["votes"] = {"1": "yes", "2": "no"}
         game["water"] = {"holder": "1", "used": False}
@@ -88,6 +90,9 @@ class SetupRules(unittest.TestCase):
         # 第六版：旧的轮次计票表换成整票 ballots；这一局不在投票阶段，不迁移内容。
         self.assertEqual(game["ballots"], {})
         self.assertNotIn("votes", game)
+        # 处决阶段的临刑枪字段：旧局补齐为空，奈乃香开枪不再因缺键报错。
+        self.assertEqual(game["execution_shots"], [])
+        self.assertEqual(game["execution_rolls"], [])
         self.assertEqual(game["information"], [{"id": "kept"}])
         # 旧局的单瓶13水迁为一个未使用的持有席位；旧待办直接作废。
         self.assertEqual(game["water"], {"holders": ["1"]})
@@ -99,6 +104,28 @@ class SetupRules(unittest.TestCase):
             {"day": 3, "declaration_id": "old"},
         )
         self.assertFalse(upgrade_game(game))
+
+    def test_a_legacy_save_stuck_in_the_execution_phase_can_still_fire_the_gun(self):
+        """停在处决阶段的旧存档没有临刑枪字段：奈乃香开枪不能崩在写状态上。"""
+        game = staged_game(day=2, half="day", phase="execution")
+        game["execution"] = ["nanoka"]
+        game["execution_ready"] = []
+        del game["execution_shots"]
+        game["rules_revision"] = 5
+        self.assertTrue(upgrade_game(game))
+        actor = {
+            "id": game["seats"][6]["occupant_id"],
+            "kind": "player",
+            "game_id": game["id"],
+            "seat_id": "7",
+            "access_ids": [game["seats"][6]["occupant_id"]],
+        }
+        apply_command(game, actor, "execution.shoot", {"target": "3"})
+        # 命中与否由骰子决定，只核对这一枪确实结算、扣了子弹，并且还能继续开枪。
+        self.assertEqual(game["cards"]["nanoka"]["uses"]["bullets"], 5)
+        self.assertEqual(len(game["execution_rolls"]), 1)
+        self.assertLessEqual(len(game["execution_shots"]), 1)
+        self.assertIn("execution.shoot", [item["id"] for item in actions_for(game, actor)])
 
     def test_upgrade_game_moves_a_mid_vote_save_into_the_ballot(self):
         """正停在投票阶段的旧存档：已经投出的当前轮选票要搬进 ballots，不逼玩家重投。"""

@@ -117,11 +117,11 @@ DESCRIPTIONS = {
     "speech.speak": "提前写下发言内容，轮到你时由系统以本人身份公开，并自动略过你的顺序。",
     "vote.nominate": "提名一名候选人，提交即生效；提名过同一候选的玩家之后自动投同意票。",
     "vote.pass": "放弃本次提名；提名在白天随时可以提交。",
-    "execution.shoot": "临刑开枪：命中则目标按标准结算出局，未命中则下次命中率提高1/6。",
-    "execution.confirm": "放弃临刑行动并确认，进入处决结算。",
+    "execution.shoot": "临刑开枪：命中则目标按标准结算出局，未命中则下次命中率提高1/6；每枪重新选目标，可连发到子弹用完。",
+    "execution.confirm": "收手并确认，进入处决结算；剩余子弹不再使用。",
     "photo.permission": "可可赠送的信物：设置是否允许她查看你的夜间行动。",
     "water.use": "用掉本夜的一瓶13水并立即指定目标，毒杀直接进入本夜预结算，无需主持人确认。",
-    "meruru.revive": "魔女化梅露露复活当夜由自己击杀的牌；复活者是无投票权、无技能的傀儡，该次死亡的公告与目击一并撤销。",
+    "meruru.revive": "魔女化梅露露复活当夜由自己击杀的牌；复活者是无投票权、无技能的傀儡，该次死亡的公告与死因一并撤销（被魔女刀等袭击击中的目击照发）。",
     "evidence.submit": "提交夜间遗留证物；公开范围由主持人裁定。",
     "player.surrender": "私信主持人申请本阵营交牌；未满足集体条件前继续游戏。",
     "discussion.request_end": "提交一次结束自由发言的请求；六个不同席位提交后10秒自动进入提名。",
@@ -139,7 +139,7 @@ DESCRIPTIONS = {
 # 主持人待办的说明：标题已经写明是哪件事，这里补上「裁定后按什么结算」。
 PENDING_DESCRIPTIONS = {
     "information": "这段裁定信息会按标题指定的范围发给当事人。",
-    "suspects": "为夜间死者填写四名疑似凶手（真凶与汉娜优先），用于当日目击名单。",
+    "suspects": "为夜间死者或被魔女袭击指到而未出局的当事人填写四名疑似凶手（真凶与汉娜优先），用于当日目击名单。",
     "evidence": "裁定证物内容与公开范围；不公开时只发给指定席位。",
     "codex": "魔典未按时结算时选择跳过或指定特殊转化对象。",
     "madness": "疯狂行为裁定：警告、符合要求，或判定不够疯狂并执行不利裁定。",
@@ -1283,12 +1283,13 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                     danger=True,
                     description=(
                         f"本次命中率{threshold}/6；未命中则下次提高1/6，命中后重置为1/6。"
-                        f"命中后目标按标准结算出局（庇护仍然生效）。剩余子弹{card['uses'].get('bullets', 0)}发。"
+                        f"命中后目标按标准结算出局（庇护仍然生效）。剩余子弹{card['uses'].get('bullets', 0)}发；"
+                        "每开一枪都重新选择目标，可以一直开枪到子弹用完，也可以随时收手。"
                     ),
                 )
             )
             result.append(
-                action("execution.confirm", "放弃临刑行动并确认", group="处决", blocking=True)
+                action("execution.confirm", "收手并确认", group="处决", blocking=True)
             )
     for photo in game["photos"]:
         if photo["target"] == sid:

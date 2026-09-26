@@ -392,7 +392,8 @@ def game_view(game, actor):
     # 分母随之下发：在场不足六人时是「全员」，由服务端算好，客户端不写死 6。
     public["discussion_end_requests"] = list(game.get("discussion_end_requests", []))
     public["discussion_end_required"] = discussion_end_required(game)
-    # 当日目击名单：白天到投票结束前，死者和主持人常驻可见；进入处决或隔天自动消失。
+    # 当日目击名单：白天到投票结束前，当事人（夜间死者或被魔女袭击指到却没出局的人）
+    # 和主持人常驻可见；进入处决或隔天自动消失。
     witness = game.get("witness")
     if (
         witness

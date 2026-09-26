@@ -741,6 +741,10 @@ def upgrade_game(game):
         "duel_approvals": {},
     }.items():
         add(game, key, value)
+    # 处决阶段的临刑枪字段此前只由 open_vote 创建：停在处决阶段的旧存档缺这两个键时，
+    # 奈乃香开枪会因写 execution_shots 报错（advance 读的是 .get，所以只有枪会崩）。
+    add(game, "execution_shots", [])
+    add(game, "execution_rolls", [])
     for photo in game["photos"]:
         if "target" not in photo and photo.get("recipient"):
             photo["target"] = photo["recipient"]
@@ -916,6 +920,11 @@ def create_game(codex):
         "vote_rounds": [],
         "execution": [],
         "execution_ready": [],
+        # 本日处决阶段的临刑开枪：已提交的射击与每次掷骰。落在处决阶段的旧存档可能
+        # 没有这两个键（此前只在 open_vote 里创建），因此 upgrade_game 也要补齐，
+        # 否则奈乃香开枪写 execution_shots 时会抛 KeyError。
+        "execution_shots": [],
+        "execution_rolls": [],
         "water": {"holders": []},
         "millia_swap": None,
         "discussion_end_requests": [],
