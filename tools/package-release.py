@@ -34,12 +34,14 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -84,6 +86,13 @@ PUBLIC_VERIFY_DELAY_SECONDS = 5
 # 对外校验必须显式带 UA：实测自定义域（Cloudflare）直接 403 掉 `Python-urllib/x.y`，
 # 而客户端自己的 UA（seven-double-flutter/…、magicjudge-updater/…）与这个 UA 都能正常下载。
 PUBLIC_VERIFY_AGENT = "MagicJudgeReleaseCheck/1.0"
+
+
+# 分片上传参数：实测单连接 PUT 只有 ~0.2 MB/s，拆片并发能吃满带宽。
+# 片太小时请求数太多，太大时单片重传代价高；8MB × 6 路对本项目的 40-60MB 包比较合适。
+MULTIPART_THRESHOLD = 8 * 1024 * 1024  # 超过这个大小走分片上传
+MULTIPART_PART_SIZE = 8 * 1024 * 1024
+MULTIPART_CONCURRENCY = 6
 
 
 class ReleaseError(Exception):
@@ -219,9 +228,15 @@ def _sign(key: bytes, message: str) -> bytes:
 
 
 def build_signature(
-    values: dict, method: str, canonical_uri: str, host: str, payload_hash: str, extra: dict
+    values: dict, method: str, canonical_uri: str, host: str, payload_hash: str, extra: dict,
+    query: str = "",
 ) -> tuple[str, str]:
-    """按 AWS SigV4 计算请求头，返回 (x-amz-date 的值, Authorization 头的值)。"""
+    """按 AWS SigV4 计算请求头，返回 (x-amz-date 的值, Authorization 头的值)。
+
+    ``query`` 是规范查询串（参数按字典序、值按 RFC3986 编码，见 :func:`canonical_query`）；
+    不带参数的请求传空串。分片上传的 ``?partNumber`` / ``?uploadId`` / ``?uploads``
+    都必须参与签名，否则 S3 端会因规范请求不一致而 403。
+    """
     now = datetime.now(timezone.utc)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
@@ -236,7 +251,7 @@ def build_signature(
     canonical_headers = "".join(f"{name}:{headers[name]}\n" for name in signed_names)
     signed_header_list = ";".join(signed_names)
     canonical_request = "\n".join(
-        [method, canonical_uri, "", canonical_headers, signed_header_list, payload_hash]
+        [method, canonical_uri, query, canonical_headers, signed_header_list, payload_hash]
     )
     string_to_sign = "\n".join(
         [
@@ -286,13 +301,33 @@ def describe_http_error(error: urllib.error.HTTPError) -> str:
     return detail
 
 
-def request_once(url: str, method: str, data=None, headers: dict | None = None, timeout: int = 300):
+def request_once(url: str, method: str, data=None, headers: dict | None = None, timeout: int = 300,
+                 read_body: bool = False):
     request = urllib.request.Request(url, data=data, method=method)
     for name, value in (headers or {}).items():
         request.add_header(name, value)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         # 保留 HTTPMessage 原样：它的 get() 不区分大小写，S3 各实现的头名拼写并不统一。
-        return response.status, response.headers
+        body = response.read() if read_body else b""
+        return response.status, response.headers, body
+
+
+def canonical_query(params: dict) -> str:
+    """SigV4 规范查询串：参数按名字排序，名字与值都按 RFC3986 编码。"""
+    encoded = [
+        (urllib.parse.quote(str(name), safe="-_.~"), urllib.parse.quote(str(value), safe="-_.~"))
+        for name, value in params.items()
+    ]
+    return "&".join(f"{name}={value}" for name, value in sorted(encoded))
+
+
+def content_type_of(local: Path) -> str:
+    """发布对象的 Content-Type：zip 与 apk 各自的固定值。"""
+    return (
+        "application/zip"
+        if local.suffix.lower() == ".zip"
+        else "application/vnd.android.package-archive"
+    )
 
 
 def with_retry(action, what: str, attempts: int = 3):
@@ -314,45 +349,161 @@ def with_retry(action, what: str, attempts: int = 3):
     raise ReleaseError(f"{what} 连续 {attempts} 次失败：{last}")
 
 
-def upload(values: dict, local: Path, key: str) -> dict:
-    """单个对象 PUT 上传，返回远端元信息。"""
-    url = object_url(values, key)
+def _signed_request(values: dict, method: str, url: str, payload_hash: str, extra: dict,
+                    query_params: dict | None = None, data=None, read_body: bool = False):
+    """构造并发送一个 SigV4 签名请求，返回 (status, headers, body)。"""
     split = urllib.parse.urlsplit(url)
+    query = canonical_query(query_params) if query_params else ""
+    amz_date, authorization = build_signature(
+        values, method, split.path, split.netloc, payload_hash, extra, query
+    )
+    target = f"{url}?{query}" if query else url
+    headers = {
+        **extra,
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date": amz_date,
+        "Authorization": authorization,
+    }
+    return request_once(target, method, data, headers, timeout_of(values), read_body=read_body)
+
+
+def _s3_object_put(values: dict, local: Path, key: str) -> None:
+    """小文件一次性 PUT（Updater.exe 这类）。"""
+    url = object_url(values, key)
     size = local.stat().st_size
     payload_hash = sha256_file(local)
-    content_type = (
-        "application/zip"
-        if local.suffix.lower() == ".zip"
-        else "application/vnd.android.package-archive"
-    )
+    content_type = content_type_of(local)
     extra = {"Content-Type": content_type}
 
     log(f"上传 {key}（{human(size)}）…")
     started = time.monotonic()
 
     def send():
-        # 每次尝试都重新签名并重新打开文件句柄，重试时从头开始读。
-        amz_date, authorization = build_signature(
-            values, "PUT", split.path, split.netloc, payload_hash, extra
-        )
+        # 每次尝试都重新签名；文件句柄在 send 里打开，重试时从头开始读。
         with local.open("rb") as handle:
-            headers = {
-                **extra,
-                "Content-Length": str(size),
-                "x-amz-content-sha256": payload_hash,
-                "x-amz-date": amz_date,
-                "Authorization": authorization,
-            }
-            return request_once(url, "PUT", handle, headers, timeout_of(values))
+            return _signed_request(
+                values, "PUT", url, payload_hash, extra, data=handle.read(size),
+            )
 
-    status, response_headers = with_retry(send, f"上传 {key}")
+    status, _, _ = with_retry(send, f"上传 {key}")
     elapsed = time.monotonic() - started
     speed = size / elapsed if elapsed > 0 else 0
     log(f"  完成 HTTP {status}，用时 {elapsed:.1f}s（{human(int(speed))}/s）")
+
+
+def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
+    """大文件分片并发上传：8MB/片 × 6 路，单片失败整片重传，不需要断点续传。"""
+    url = object_url(values, key)
+    size = local.stat().st_size
+    content_type = content_type_of(local)
+
+    # 1) 发起分片上传。x-amz-content-sha256 用 UNSIGNED-PAYLOAD，免去逐片算哈希。
+    empty = hashlib.sha256(b"").hexdigest()
+    started = time.monotonic()
+
+    def create():
+        return _signed_request(
+            values, "POST", url, empty, {"Content-Type": content_type},
+            {"uploads": ""}, read_body=True,
+        )
+
+    status, _, body = with_retry(create, f"发起分片上传 {key}")
+    # CreateMultipartUpload 的响应体是 XML，UploadId 在 <UploadId>…</UploadId> 里。
+    match = re.search(r"<UploadId>([^<]+)</UploadId>", body.decode("utf-8", "replace"))
+    if status != 200 or not match:
+        raise ReleaseError(f"发起分片上传 {key} 失败：HTTP {status}，响应里没有 UploadId")
+    upload_id = match.group(1)
+    log(f"分片上传 {key}（{human(size)}，{MULTIPART_PART_SIZE // (1024 * 1024)}MB/片 × "
+        f"{MULTIPART_CONCURRENCY} 路）…")
+
+    # 2) 计算分片并并发 PUT（partNumber 从 1 开始，除最后一片外都必须等长）。
+    parts = []
+    offset = 0
+    part_number = 1
+    while offset < size:
+        length = min(MULTIPART_PART_SIZE, size - offset)
+        parts.append((part_number, offset, length))
+        part_number += 1
+        offset += length
+
+    uploaded_etags: dict[int, str] = {}
+    failures: list[str] = []
+
+    def send_part(number: int, offset: int, length: int) -> tuple[int, str]:
+        with local.open("rb") as handle:
+            handle.seek(offset)
+            block = handle.read(length)
+            if len(block) != length:
+                raise ReleaseError(f"读取分片 {number} 时文件变短了，重试发布")
+        digest = hashlib.sha256(block).hexdigest()
+
+        def attempt():
+            _, response_headers, _ = _signed_request(
+                values, "PUT", url, digest, {},
+                {"partNumber": number, "uploadId": upload_id}, data=block,
+            )
+            return response_headers.get("ETag") or ""
+
+        etag = with_retry(attempt, f"上传分片 {number}")
+        return number, etag.strip('"')
+
+    with ThreadPoolExecutor(max_workers=MULTIPART_CONCURRENCY) as pool:
+        futures = [pool.submit(send_part, *item) for item in parts]
+        for future in as_completed(futures):
+            try:
+                number, etag = future.result()
+                uploaded_etags[number] = etag
+            except Exception as error:  # noqa: BLE001 - 汇总后统一报错
+                failures.append(str(error))
+
+    if failures or len(uploaded_etags) != len(parts):
+        # 有失败分片就放弃整个上传（abort 清掉服务端残留），用户重跑即可。
+        try:
+            _signed_request(
+                values, "DELETE", url, empty, {},
+                {"uploadId": upload_id},
+            )
+        except Exception:  # pragma: no cover - 清理失败不影响报错
+            pass
+        detail = "；".join(failures[:3]) or "有分片没有上传成功"
+        raise ReleaseError(f"分片上传 {key} 失败：{detail}")
+
+    # 3) 合并分片。
+    complete_xml = (
+        "<CompleteMultipartUpload>"
+        + "".join(
+            f"<Part><PartNumber>{number}</PartNumber><ETag>{uploaded_etags[number]}</ETag></Part>"
+            for number in sorted(uploaded_etags)
+        )
+        + "</CompleteMultipartUpload>"
+    )
+    payload = complete_xml.encode("utf-8")
+    body_hash = hashlib.sha256(payload).hexdigest()
+
+    def complete():
+        _, response_headers, _ = _signed_request(
+            values, "POST", url, body_hash, {},
+            {"uploadId": upload_id}, data=payload,
+        )
+        return response_headers
+
+    with_retry(complete, f"合并分片 {key}")
+    elapsed = time.monotonic() - started
+    speed = size / elapsed if elapsed > 0 else 0
+    log(f"  完成，用时 {elapsed:.1f}s（{human(int(speed))}/s，{len(parts)} 片）")
+
+
+def upload(values: dict, local: Path, key: str) -> dict:
+    """按大小选上传方式：大文件分片并发，小文件单次 PUT。返回远端元信息。"""
+    size = local.stat().st_size
+    if size > MULTIPART_THRESHOLD:
+        _s3_multipart_put(values, local, key)
+    else:
+        _s3_object_put(values, local, key)
     return {
         "key": key,
         "size": size,
-        "etag": (response_headers.get("ETag") or "").strip('"'),
+        "etag": "",
         "md5": md5_file(local),
     }
 
@@ -371,7 +522,8 @@ def head_object(values: dict, key: str) -> dict:
             "x-amz-date": amz_date,
             "Authorization": authorization,
         }
-        return request_once(url, "HEAD", None, headers, timeout_of(values))
+        status, response_headers, _ = request_once(url, "HEAD", None, headers, timeout_of(values))
+        return status, response_headers
 
     _, response_headers = with_retry(send, f"回读 {key}")
     return response_headers
