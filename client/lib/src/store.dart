@@ -92,12 +92,23 @@ class GameStore extends ChangeNotifier {
   String messageScope = 'all';
   String selectedChannelId = 'public';
 
-  /// 聊天设置：公开我的输入状态 / 自动切换到可用聊天频道。本机全局偏好
-  /// （同 release.dart 的全局键风格，不属于任何对局数据），默认都开启。
+  /// 聊天设置：公开我的输入状态 / 自动切换到可用聊天频道 / 按 Enter 发送。
+  /// 本机全局偏好（同 release.dart 的全局键风格，不属于任何对局数据）；
+  /// 前两项默认开启，「按 Enter 发送」的默认值随平台走（见 [defaultEnterToSendFor]）。
   static const _typingPublicKey = 'chat_typing_public';
   static const _autoSwitchKey = 'chat_auto_switch_channel';
+  static const _enterToSendKey = 'chat_enter_to_send';
   bool typingPublicEnabled = true;
   bool autoSwitchChannel = true;
+
+  /// 「按 Enter 发送」当前的取值：开启时输入框里按 Enter 直接发出。
+  bool enterToSendEnabled = true;
+
+  /// 「按 Enter 发送」的默认值：安卓（软键盘）默认换行，桌面（Windows）默认回车发送。
+  /// 用 [TargetPlatform] 而不是 Platform.isAndroid：前者能在测试里覆写
+  /// （同 predictive_sheet.dart）。
+  static bool defaultEnterToSendFor(TargetPlatform platform) =>
+      platform != TargetPlatform.android;
 
   /// 「正在输入」状态：频道 → 参与者 → (条目, 过期时间)。
   /// 纯内存瞬态，不落库；换局与登出时清空，条目 8 秒无刷新自动过期。
@@ -111,6 +122,9 @@ class GameStore extends ChangeNotifier {
   void _loadChatSettings() {
     typingPublicEnabled = preferences.getBool(_typingPublicKey) ?? true;
     autoSwitchChannel = preferences.getBool(_autoSwitchKey) ?? true;
+    // 没存过就按平台默认：安卓换行、桌面回车发送。
+    enterToSendEnabled = preferences.getBool(_enterToSendKey) ??
+        defaultEnterToSendFor(defaultTargetPlatform);
   }
 
   void setTypingPublicEnabled(bool value) {
@@ -131,6 +145,13 @@ class GameStore extends ChangeNotifier {
     if (autoSwitchChannel == value) return;
     autoSwitchChannel = value;
     unawaited(preferences.setBool(_autoSwitchKey, value));
+    notifyListeners();
+  }
+
+  void setEnterToSendEnabled(bool value) {
+    if (enterToSendEnabled == value) return;
+    enterToSendEnabled = value;
+    unawaited(preferences.setBool(_enterToSendKey, value));
     notifyListeners();
   }
 
@@ -166,6 +187,15 @@ class GameStore extends ChangeNotifier {
 
   List<GameMessage> messages = [];
   Map<String, dynamic>? challengeInfo;
+
+  /// 登录挑战的工作量证明进度（登录页据此显示计算动画）。
+  /// 只在服务端真的要求证明时点亮：防护关闭或旧服务端下始终为 false，
+  /// 登录页不会闪一下没有内容的进度卡片。
+  bool powSolving = false;
+  int powDifficulty = 0;
+  int powAttempts = 0;
+  DateTime? powStartedAt;
+
   String? pendingPhaseKey;
 
   /// 新到的私密信息：由外壳弹一条醒目横幅后清空。
@@ -494,13 +524,46 @@ class GameStore extends ChangeNotifier {
   /// 没有授权的账号会在核销后被服务端拒绝，并在这里显示原因。
   Future<void> startHostLogin() => _startLogin(host: true);
 
+  /// 服务端确认需要工作量证明：点亮登录页的计算进度。
+  void _beginPowProof(int difficulty) {
+    powSolving = true;
+    powDifficulty = difficulty;
+    powAttempts = 0;
+    powStartedAt = DateTime.now();
+    notifyListeners();
+  }
+
+  /// isolate 汇报的已尝试次数（约每 120ms 一次），直接驱动进度文字。
+  void _reportPowAttempts(int attempts) {
+    if (!powSolving) return;
+    powAttempts = attempts;
+    notifyListeners();
+  }
+
+  /// 求解结束（成功、失败或抛异常）都必须清掉，否则动画会一直转。
+  void _endPowProof() {
+    if (!powSolving) return;
+    powSolving = false;
+    powAttempts = 0;
+    powStartedAt = null;
+    notifyListeners();
+  }
+
   Future<void> _startLogin({required bool host}) async {
     if (api == null) return;
     final generation = ++_challengeGeneration;
     error = null;
     Map<String, dynamic> info;
     try {
-      info = host ? await api!.createHostChallenge() : await api!.createChallenge();
+      info = host
+          ? await api!.createHostChallenge(
+              onPowStart: _beginPowProof,
+              onPowAttempts: _reportPowAttempts,
+            )
+          : await api!.createChallenge(
+              onPowStart: _beginPowProof,
+              onPowAttempts: _reportPowAttempts,
+            );
     } on ApiException catch (failure) {
       // 获取登录码是用户直接点击的动作：失败必须当场反馈，
       // 否则按钮恢复原状而界面毫无变化（此前该异常会被 main 吞掉）。
@@ -515,6 +578,9 @@ class GameStore extends ChangeNotifier {
         notifyListeners();
       }
       return;
+    } finally {
+      // 只清自己这一次的进度：新一轮登录已经点亮动画时，旧请求的收尾不得把它关掉。
+      if (generation == _challengeGeneration) _endPowProof();
     }
     if (generation != _challengeGeneration) return;
     challengeInfo = info;

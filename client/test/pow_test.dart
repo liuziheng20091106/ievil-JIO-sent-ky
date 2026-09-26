@@ -64,5 +64,36 @@ void main() {
       final digest = sha256.convert(utf8.encode('${puzzle.token}$nonce')).toString();
       expect(digest.substring(0, 3), '000');
     });
+
+    test('求解过程按节流回报真实尝试次数（递增且都是 512 的倍数）', () {
+      const token = 'v1.123.4.progress.deadbeef';
+      final reported = <int>[];
+      final nonce = computeNonce(
+        token,
+        3,
+        onProgress: reported.add,
+        progressInterval: Duration.zero,
+      );
+      expect(nonce, greaterThan(0));
+      expect(reported, isNotEmpty);
+      // 汇报的是真实已尝试次数：严格递增、步进为 512、且都不超过最终解。
+      for (var i = 0; i < reported.length; i++) {
+        expect(reported[i] % 512, 0);
+        expect(reported[i], lessThanOrEqualTo(nonce));
+        if (i > 0) expect(reported[i], greaterThan(reported[i - 1]));
+      }
+      // 解本身没被算漏：哈希满足难度，且最后一次汇报不晚于它。
+      final digest = sha256.convert(utf8.encode('$token$nonce')).toString();
+      expect(digest.substring(0, 3), '000');
+    });
+
+    test('默认节流下不会为短任务发大量消息', () {
+      const token = 'v1.123.4.throttle.deadbeef';
+      final reported = <int>[];
+      computeNonce(token, 2, onProgress: reported.add);
+      // 难度 2 平均几百上千次就出解：默认 120ms 窗口内最多一两条，
+      // 绝不会每 512 次就发一条（那会把 isolate 消息通道刷爆）。
+      expect(reported.length, lessThanOrEqualTo(1));
+    });
   });
 }

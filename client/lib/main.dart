@@ -13,6 +13,7 @@ import 'src/history_pages.dart';
 import 'src/host_pages.dart';
 import 'src/models.dart';
 import 'src/picks.dart';
+import 'src/pow_progress.dart';
 import 'src/predictive_sheet.dart';
 import 'src/release.dart';
 import 'src/role_visuals.dart';
@@ -407,7 +408,11 @@ class _LoginPageState extends State<LoginPage>
                      AppLogo(size: 88, rounded: true),
                      SizedBox(height: AppSpacing.xl),
                     Text(
-                      challenge == null ? '使用 QQ 群完成身份验证' : '请在指定 QQ 群发送',
+                      widget.store.powSolving
+                          ? '正在进行安全验证'
+                          : challenge == null
+                              ? '使用 QQ 群完成身份验证'
+                              : '请在指定 QQ 群发送',
                       style:  TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -415,65 +420,15 @@ class _LoginPageState extends State<LoginPage>
                       ),
                     ),
                      SizedBox(height: AppSpacing.md),
-                    if (challenge != null) ...[
-                      Container(
-                        padding:  EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          color: context.palette.accentSoft,
-                          borderRadius: BorderRadius.circular(AppRadius.card),
-                        ),
-                        child: Column(
-                          children: [
-                             Text(
-                              '活动登录',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: context.palette.textSecondary,
-                              ),
-                            ),
-                             SizedBox(height: AppSpacing.xs),
-                            SelectableText(
-                              code,
-                              style:  TextStyle(
-                                fontSize: 34,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 6,
-                                color: context.palette.accent,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.md),
-                      OutlinedButton.icon(
-                        onPressed: copyLoginCommand,
-                        icon: const Icon(Icons.content_copy_rounded, size: 18),
-                        label: Text('一键复制「${loginCommandText(code)}」'),
-                      ),
-                    ],
+                    _LoginWaitingSection(
+                      store: widget.store,
+                      code: code,
+                      onCopy: copyLoginCommand,
+                    ),
                     const SizedBox(height: AppSpacing.xl),
-                    FilledButton.icon(
-                      onPressed: challenge == null
-                          ? () async {
-                              try {
-                                await widget.store.startPlayerLogin();
-                              } catch (_) {
-                                // 具体原因由 store.error 呈现。
-                              }
-                            }
-                          : null,
-                      icon: Icon(
-                        challenge == null
-                            ? Icons.verified_user_outlined
-                            : Icons.hourglass_top_rounded,
-                        size: 18,
-                      ),
-                      label: Text(
-                        challenge == null ? '获取登录码' : '等待群内验证…',
-                      ),
+                    _LoginSubmitButton(
+                      store: widget.store,
+                      onStart: widget.store.startPlayerLogin,
                     ),
                     if (widget.store.error != null) ...[
                        SizedBox(height: AppSpacing.md),
@@ -530,7 +485,11 @@ class _LoginPageState extends State<LoginPage>
                     Center(child: AppLogo(size: 88, rounded: true)),
                     const SizedBox(height: AppSpacing.lg),
                     Text(
-                      challenge == null ? '用 QQ 群完成主持人验证' : '请在指定 QQ 群发送',
+                      widget.store.powSolving
+                          ? '正在进行安全验证'
+                          : challenge == null
+                              ? '用 QQ 群完成主持人验证'
+                              : '请在指定 QQ 群发送',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 18,
@@ -538,66 +497,16 @@ class _LoginPageState extends State<LoginPage>
                         color: context.palette.text,
                       ),
                     ),
-                    if (challenge != null) ...[
-                       SizedBox(height: AppSpacing.md),
-                      Container(
-                        padding:  EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          color: context.palette.accentSoft,
-                          borderRadius: BorderRadius.circular(AppRadius.card),
-                        ),
-                        child: Column(
-                          children: [
-                             Text(
-                              '活动登录',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: context.palette.textSecondary,
-                              ),
-                            ),
-                             SizedBox(height: AppSpacing.xs),
-                            SelectableText(
-                              code,
-                              style:  TextStyle(
-                                fontSize: 34,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 6,
-                                color: context.palette.accent,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.md),
-                      OutlinedButton.icon(
-                        onPressed: copyLoginCommand,
-                        icon: const Icon(Icons.content_copy_rounded, size: 18),
-                        label: Text('一键复制「${loginCommandText(code)}」'),
-                      ),
-                    ],
-                     SizedBox(height: AppSpacing.xl),
-                    FilledButton.icon(
-                      onPressed: challenge == null
-                          ? () async {
-                              try {
-                                await widget.store.startHostLogin();
-                              } catch (_) {
-                                // 具体原因由 store.error 呈现（例如没有主持授权）。
-                              }
-                            }
-                          : null,
-                      icon: Icon(
-                        challenge == null
-                            ? Icons.verified_user_outlined
-                            : Icons.hourglass_top_rounded,
-                        size: 18,
-                      ),
-                      label: Text(
-                        challenge == null ? '获取登录码' : '等待群内验证…',
-                      ),
+                    const SizedBox(height: AppSpacing.md),
+                    _LoginWaitingSection(
+                      store: widget.store,
+                      code: code,
+                      onCopy: copyLoginCommand,
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+                    _LoginSubmitButton(
+                      store: widget.store,
+                      onStart: widget.store.startHostLogin,
                     ),
                     if (widget.store.error != null) ...[
                        SizedBox(height: AppSpacing.md),
@@ -616,6 +525,125 @@ class _LoginPageState extends State<LoginPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 登录页共用：等待区在「计算工作量证明」与「六位登录码」之间平滑切换。
+///
+/// 服务端没开启 PoW 时 [GameStore.powSolving] 始终为 false，这里就只渲染登录码，
+/// 不会闪出进度卡片。
+class _LoginWaitingSection extends StatelessWidget {
+  const _LoginWaitingSection({
+    required this.store,
+    required this.code,
+    required this.onCopy,
+  });
+
+  final GameStore store;
+  final String code;
+  final VoidCallback onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final solving = store.powSolving;
+    final Widget child;
+    if (solving) {
+      child = PowProgressPanel(
+        key: const ValueKey('pow-progress'),
+        attempts: store.powAttempts,
+        difficulty: store.powDifficulty,
+        startedAt: store.powStartedAt,
+      );
+    } else if (code.isNotEmpty) {
+      child = Column(
+        key: const ValueKey('login-code'),
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              color: context.palette.accentSoft,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  '活动登录',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: context.palette.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                SelectableText(
+                  code,
+                  style: TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 6,
+                    color: context.palette.accent,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          OutlinedButton.icon(
+            onPressed: onCopy,
+            icon: const Icon(Icons.content_copy_rounded, size: 18),
+            label: Text('一键复制「${loginCommandText(code)}」'),
+          ),
+        ],
+      );
+    } else {
+      child = const SizedBox.shrink(key: ValueKey('login-idle'));
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 240),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeIn,
+      child: child,
+    );
+  }
+}
+
+/// 登录页共用：取码按钮。计算证明期间按钮禁用并改写文案，
+/// 避免玩家连点出多个求解 isolate。
+class _LoginSubmitButton extends StatelessWidget {
+  const _LoginSubmitButton({required this.store, required this.onStart});
+
+  final GameStore store;
+  final Future<void> Function() onStart;
+
+  @override
+  Widget build(BuildContext context) {
+    final solving = store.powSolving;
+    final hasChallenge = store.challengeInfo != null;
+    return FilledButton.icon(
+      onPressed: solving || hasChallenge
+          ? null
+          : () async {
+              try {
+                await onStart();
+              } catch (_) {
+                // 具体原因由 store.error 呈现（例如没有主持授权）。
+              }
+            },
+      icon: Icon(
+        solving
+            ? Icons.memory_rounded
+            : hasChallenge
+                ? Icons.hourglass_top_rounded
+                : Icons.verified_user_outlined,
+        size: 18,
+      ),
+      label: Text(
+        solving
+            ? '正在验证，请稍候…'
+            : hasChallenge
+                ? '等待群内验证…'
+                : '获取登录码',
       ),
     );
   }

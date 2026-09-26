@@ -17,8 +17,17 @@ class GameApi {
   final HttpClient _client = HttpClient();
   String? token;
 
-  Future<Map<String, dynamic>> createChallenge() async =>
-      jsonObject(await _createChallenge('/api/native/auth/challenges'));
+  /// [onPowStart] / [onPowAttempts] 只在服务端真的要求工作量证明时才回调：
+  /// 防护关闭（或旧服务端）时不会有任何回调，登录页也就不会闪一下进度动画。
+  Future<Map<String, dynamic>> createChallenge({
+    void Function(int difficulty)? onPowStart,
+    void Function(int attempts)? onPowAttempts,
+  }) async =>
+      jsonObject(await _createChallenge(
+        '/api/native/auth/challenges',
+        onPowStart: onPowStart,
+        onPowAttempts: onPowAttempts,
+      ));
 
   Future<Map<String, dynamic>> challenge(String id) async => jsonObject(
         await _request(
@@ -30,15 +39,22 @@ class GameApi {
   /// 服务端未开启工作量验证时 /api/pow/challenges 返回 required=false，
   /// 直接转发创建请求，行为与旧版完全一致；开启后旧服务端没有领题接口，
   /// 领题 404 同样按「无防护」处理，两端版本错开也不会挡登录。
-  Future<Map<String, dynamic>> _createChallenge(String path) async {
+  Future<Map<String, dynamic>> _createChallenge(
+    String path, {
+    void Function(int difficulty)? onPowStart,
+    void Function(int attempts)? onPowAttempts,
+  }) async {
     Map<String, dynamic>? proof;
     try {
       final puzzle = PowPuzzle.fromJson(
         jsonObject(await _request('POST', '/api/pow/challenges')),
       );
-      final nonce = await puzzle.solve();
-      if (nonce != null) {
-        proof = {'token': puzzle.token, 'nonce': nonce};
+      if (puzzle.solvable) {
+        onPowStart?.call(puzzle.difficulty);
+        final nonce = await puzzle.solve(onAttempts: onPowAttempts);
+        if (nonce != null) {
+          proof = {'token': puzzle.token, 'nonce': nonce};
+        }
       }
     } on ApiException catch (failure) {
       if (failure.statusCode != 404) rethrow;
@@ -274,8 +290,15 @@ class GameApi {
   }
 
   /// 主持人也是 QQ 账号：与玩家同一个群登录码，只是换成主持人挑战端点。
-  Future<Map<String, dynamic>> createHostChallenge() async =>
-      jsonObject(await _createChallenge('/api/native/auth/host/challenges'));
+  Future<Map<String, dynamic>> createHostChallenge({
+    void Function(int difficulty)? onPowStart,
+    void Function(int attempts)? onPowAttempts,
+  }) async =>
+      jsonObject(await _createChallenge(
+        '/api/native/auth/host/challenges',
+        onPowStart: onPowStart,
+        onPowAttempts: onPowAttempts,
+      ));
 
   Future<Map<String, dynamic>> hostChallenge(String id) async => jsonObject(
         await _request(
