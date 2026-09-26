@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 
@@ -27,15 +28,16 @@ class PowPuzzle {
 
   bool get solvable => required && token.isNotEmpty && difficulty > 0;
 
-  /// 求解谜题；登录是低频操作，难度 20 以内（服务端上限 19）同步枚举即可。
+  /// 在独立 isolate 里求解：枚举是 CPU 密集的同步循环，
+  /// 直接在主 isolate 跑会把整个 UI（包括 Android 的 ANR 判定）卡死。
   /// 返回 null 表示服务端不需要证明。
   Future<int?> solve() async {
     if (!solvable) return null;
-    return computeNonce(token, difficulty);
+    return Isolate.run(() => computeNonce(token, difficulty));
   }
 }
 
-/// 枚举 nonce；哈希在本地同步循环里完成，单题难度上限受服务端约束（≤19）。
+/// 枚举 nonce；十六进制前缀每 +1 位计算量 ×16，服务端难度上限 8。
 int computeNonce(String token, int difficulty) {
   final prefix = '0' * difficulty;
   var nonce = 0;
@@ -45,3 +47,4 @@ int computeNonce(String token, int difficulty) {
     nonce += 1;
   }
 }
+

@@ -28,8 +28,10 @@ import time
 # HMAC 覆盖前面所有字段：任何一位被改（尤其是 difficulty 调小）都会校验失败。
 _TOKEN_VERSION = "v1"
 _TOKEN_TTL_SECONDS = 300
-# difficulty 上限防误配把所有用户锁在门外：19 位起单题平均就要 2^19≈52 万次哈希。
-MAX_DIFFICULTY = 19
+# difficulty 上限防误配把所有用户锁在门外。注意单位：十六进制前缀每 +1 位，
+# 计算量 ×16（不是 ×2）。8 位约 43 亿次哈希，服务器能算但手机已到分钟级，
+# 再高就只有脚本算得动了，失去防护意义。
+MAX_DIFFICULTY = 8
 MIN_DIFFICULTY = 0
 
 

@@ -43,9 +43,13 @@ class PuzzleToken(unittest.TestCase):
             self.assertTrue(pow_guard.verify_solution("garbage", -1))
 
     def test_ignores_broken_difficulty_and_clamps(self):
-        for raw, expected in (("abc", 0), ("-3", 0), ("8", 8), ("99", pow_guard.MAX_DIFFICULTY)):
+        for raw, expected in (("abc", 0), ("-3", 0), ("5", 5), ("99", pow_guard.MAX_DIFFICULTY)):
             with patch.dict(os.environ, {"GAME_POW_DIFFICULTY": raw}, clear=False):
                 self.assertEqual(pow_guard.difficulty(), expected, raw)
+
+    def test_clamped_difficulty_is_feasible(self):
+        """上限必须保持可解：钳制值不能高到连服务器都算不完。"""
+        self.assertLessEqual(pow_guard.MAX_DIFFICULTY, 8)
 
     def test_issue_and_verify_roundtrip(self):
         with patch.dict(os.environ, {"GAME_POW_DIFFICULTY": "3"}, clear=False):

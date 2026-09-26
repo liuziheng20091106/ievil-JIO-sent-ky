@@ -57,5 +57,12 @@ void main() {
       const token = 'v1.99.2.token.deadbeef';
       expect(computeNonce(token, 2), computeNonce(token, 2));
     });
+
+    test('solve 走 isolate：UI 不被阻塞，结果与同步计算一致', () async {
+      final puzzle = PowPuzzle(required: true, token: 'v1.123.4.isolate.deadbeef', difficulty: 3);
+      final nonce = await puzzle.solve().timeout(const Duration(seconds: 30));
+      final digest = sha256.convert(utf8.encode('${puzzle.token}$nonce')).toString();
+      expect(digest.substring(0, 3), '000');
+    });
   });
 }
