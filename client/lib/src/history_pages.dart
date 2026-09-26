@@ -712,7 +712,13 @@ class _EventRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          RoleAvatar(roleId: event.avatarRoleId, size: 30),
+          // 主持人消息在留档里 avatar_role_id 就是 'host'：与对局内消息列表同源，
+          // 头像固定渲染月代雪立绘，不能落成「?」占位。
+          RoleAvatar(
+            roleId: event.avatarRoleId,
+            host: event.avatarRoleId == 'host',
+            size: 30,
+          ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(

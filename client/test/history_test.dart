@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:seven_double_client/src/design.dart';
 import 'package:seven_double_client/src/history_pages.dart';
 import 'package:seven_double_client/src/models.dart';
+import 'package:seven_double_client/src/role_visuals.dart';
 import 'package:seven_double_client/src/store.dart';
 
 /// 历史对局页面：列表、单局详情（身份与公开时间线）与空状态。
@@ -146,6 +147,14 @@ void main() {
               'text': '公屏上说过的话',
               'created_at': '2026-09-26T01:30:00+00:00',
             },
+            {
+              'seq': 2,
+              'kind': 'chat',
+              'sender_name': '主持人(阿雪)',
+              'avatar_role_id': 'host',
+              'text': '主持人公屏上说过的话',
+              'created_at': '2026-09-26T01:35:00+00:00',
+            },
           ],
         }),
       ),
@@ -158,6 +167,17 @@ void main() {
     expect(find.text('公屏上说过的话'), findsOneWidget);
     expect(find.text('公开时间线'), findsOneWidget);
     expect(find.textContaining('私信与只发给个人的情报不入库'), findsOneWidget);
+
+    // 回归：主持人消息的头像是月代雪立绘，不能退化成「?」占位。
+    final hostAvatar = tester.widget<RoleAvatar>(
+      find.descendant(
+        of: find.widgetWithText(Row, '主持人公屏上说过的话').first,
+        matching: find.byType(RoleAvatar),
+      ).last,
+    );
+    expect(hostAvatar.host, isTrue);
+    expect(hostAvatar.roleId, 'host');
+    expect(find.text('?'), findsNothing);
   });
 
   testWidgets('没有历史对局时显示空状态', (tester) async {
