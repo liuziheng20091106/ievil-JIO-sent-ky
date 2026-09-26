@@ -42,13 +42,13 @@ start.cmd
 ```json
 {
   "downloads": [
-    { "name": "Windows 版", "url": "https://example.com/魔法裁判Windows.zip" },
-    { "name": "安卓版", "url": "https://example.com/app-release.apk" }
+    { "name": "Windows 版", "url": "https://s3.tkcloud.online/releases/魔法裁判Windows.zip" },
+    { "name": "安卓版", "url": "https://s3.tkcloud.online/releases/app-release.apk" }
   ]
 }
 ```
 
-文件不存在时页面显示「下载链接准备中，敬请期待」。
+安装包放在 S3 兼容存储（Cloudflare R2）的 `releases/` 子目录，对外由 `https://s3.tkcloud.online` 公开访问。这两条链接由 `package-release.cmd` 在每次发布成功后自动重写（文件里的其它条目原样保留），所以正常发版不用手工改这里，见「发布发行版」。文件不存在时页面显示「下载链接准备中，敬请期待」。
 
 主持人登录与玩家一样走 QQ 群登录码，**必须在服务端配置管理员 QQ 号**：在 `start.cmd.local.cmd` 里设置 `GAME_ADMIN_QQ=你的QQ号`（多个用英文逗号分隔），否则没有任何账号能进入主持人端。其余主持等级由 4/5 级主持在「主持授权」页授权，授权与 QQ 账号绑定。
 
@@ -143,6 +143,30 @@ flutter build windows --debug
 
 表情在文本里就是 `[/微笑]` 这样的纯文本 token，输入框与消息气泡再把它画成内联图片。因此草稿、2000 字上限、服务端校验与实时推送都不用改动；网页端不渲染 token，但仍能读懂原文。
 
+### 发布发行版
+
+Windows 与安卓发行产物打包上传到 S3 兼容存储（Cloudflare R2），不再走局域网共享目录。配置写在仓库根目录的 `package-release.env`（dotenv 写法，含密钥，已在 `.gitignore` 中）：
+
+| 变量 | 说明 |
+| --- | --- |
+| `S3_ENDPOINT` | S3 端点，只写到域名，如 `https://<账户ID>.r2.cloudflarestorage.com` |
+| `S3_REGION` | R2 固定填 `auto`，自建 MinIO 按服务端配置填 |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 访问密钥 |
+| `S3_BUCKET` | 桶名 |
+| `S3_PREFIX` | 子目录（对象键前缀），默认 `releases` |
+| `S3_PUBLIC_BASE` | 对外访问地址，默认 `https://s3.tkcloud.online` |
+| `S3_TIMEOUT` | 可选，单次请求超时秒数，默认 300 |
+
+编译好客户端后执行：
+
+```cmd
+package-release.cmd
+```
+
+脚本把 `client/build/windows/x64/runner/Release` 打成 `魔法裁判Windows.zip`，与 `client/build/app/outputs/flutter-apk/app-release.apk` 一起上传到 `<S3_PREFIX>/` 子目录，再回读远端对象核对大小，最后把两条对外链接写进 `data/downloads.json`（网页首页的下载栏目）。可加 `--dry-run` 只打包并打印计划（不联网、不改配置）、`--skip-zip` 复用已有压缩包、`--no-downloads` 不写下载链接、`--env <路径>` 换配置文件。
+
+上传用 AWS Signature V4，只用 Python 标准库（`hmac`/`hashlib`/`urllib`），不新增依赖；同名的进程环境变量优先于 `package-release.env`。密钥需要该桶的写权限，`S3_PUBLIC_BASE` 对应的域名需要能匿名读取（R2 自定义域或公开桶）；配置缺项或仍是 `*` 占位符时脚本直接报错退出，不会上传半截。
+
 ## 反向代理
 
 服务可以挂在 nginx / Caddy / Cloudflare 之类的反向代理后面。代理需要：
@@ -199,7 +223,7 @@ frontend/       公告、规则与下载的静态网页首页（无框架）
 client/         Flutter Android / Windows 原生客户端
 gateway/        NapCat OneBot QQ 登录网关
 checks/         后端回归检查
-tools/          应用图标与表情资源生成脚本
+tools/          应用图标、表情资源与发行打包上传脚本
 docs/          游戏规则与设计方案
 img/           角色头像
 ```
