@@ -4,6 +4,7 @@
 只需要登录，不做逐局放行；私信与只发给个人的情报在归档时就被排除了（见
 ``history_storage``）。主持人用的是同一条令牌，只是身份种类不同，因此鉴权用
 ``auth.actor_for_token`` 而不是只认玩家账号的 ``auth.require_account``。
+删除整条历史是 4 级及以上主持人的账号级维护操作，不需要先进入某一局的管理界面。
 """
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -39,3 +40,13 @@ async def match_detail(match_id: str, request: Request):
     if not detail:
         raise HTTPException(404, "历史对局不存在")
     return detail
+
+
+@router.delete("/{match_id}")
+async def delete_match(match_id: str, request: Request):
+    """删除一条历史对局：4 级及以上主持人的维护操作（与是否进入某局管理界面无关）。"""
+    with storage.connect() as db:
+        auth.require_host_level(db, request, 4)
+    if not history_storage.delete(match_id):
+        raise HTTPException(404, "历史对局不存在")
+    return {"ok": True}

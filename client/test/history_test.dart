@@ -191,4 +191,103 @@ void main() {
     );
     expect(find.textContaining('本局已终止（未宣判）'), findsOneWidget);
   });
+
+  testWidgets('4 级主持能看到删除入口，确认后就地移除这一局', (tester) async {
+    final store = await previewStore();
+    store.actor = Actor.fromJson({
+      'id': 'host',
+      'account_id': 'a-host',
+      'kind': 'host',
+      'name': '主持人',
+      'host_level': 4,
+    });
+    final deleted = <String>[];
+    await pump(
+      tester,
+      MatchHistoryPage(
+        store: store,
+        loader: ({String? before, int limit = 20}) async =>
+            (matches: [MatchSummary.fromJson(matchJson())], hasMore: false),
+        deleter: (matchId) async => deleted.add(matchId),
+      ),
+    );
+    expect(find.byTooltip('删除这条历史对局'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('删除这条历史对局'));
+    await tester.pumpAndSettle();
+    // 确认弹窗写清后果，取消不删。
+    expect(find.text('删除这条历史对局？'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(deleted, isEmpty);
+    expect(find.text('第 3 日 · 好人获胜'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('删除这条历史对局'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    expect(deleted, ['game-1']);
+    expect(find.text('还没有历史对局'), findsOneWidget);
+  });
+
+  testWidgets('普通玩家与低级主持看不到删除入口', (tester) async {
+    final store = await previewStore();
+    await pump(
+      tester,
+      MatchHistoryPage(
+        store: store,
+        loader: ({String? before, int limit = 20}) async =>
+            (matches: [MatchSummary.fromJson(matchJson())], hasMore: false),
+      ),
+    );
+    expect(find.byTooltip('删除这条历史对局'), findsNothing);
+
+    // 3 级主持（能管成就）也不给删除历史对局。
+    store.actor = Actor.fromJson({
+      'id': 'host',
+      'account_id': 'a-host',
+      'kind': 'host',
+      'name': '主持人',
+      'host_level': 3,
+    });
+    await pump(
+      tester,
+      MatchHistoryPage(
+        store: store,
+        loader: ({String? before, int limit = 20}) async =>
+            (matches: [MatchSummary.fromJson(matchJson())], hasMore: false),
+      ),
+    );
+    expect(find.byTooltip('删除这条历史对局'), findsNothing);
+  });
+
+  testWidgets('详情页里删除成功后退出详情页', (tester) async {
+    final store = await previewStore();
+    store.actor = Actor.fromJson({
+      'id': 'host',
+      'account_id': 'a-host',
+      'kind': 'host',
+      'name': '主持人',
+      'host_level': 5,
+    });
+    final deleted = <String>[];
+    await pump(
+      tester,
+      MatchDetailPage(
+        store: store,
+        matchId: 'game-1',
+        loader: (matchId) async => MatchDetail.fromJson({
+          ...matchJson(),
+          'events': <dynamic>[],
+        }),
+        deleter: (matchId) async => deleted.add(matchId),
+      ),
+    );
+    expect(find.byTooltip('删除这条历史对局'), findsOneWidget);
+    await tester.tap(find.byTooltip('删除这条历史对局'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    expect(deleted, ['game-1']);
+  });
 }

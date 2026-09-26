@@ -219,6 +219,20 @@ def archive_pending(game_db):
     )
 
 
+def delete(match_id):
+    """删除一条历史对局（连同参与身份与公开时间线）。不存在时返回 False。
+
+    4 级及以上主持人的维护操作：历史是独立库，删除只动这里的三张表，与对局库无关。
+    """
+    with transaction() as db:
+        deleted = db.execute("DELETE FROM matches WHERE id=?", (match_id,)).rowcount
+        if not deleted:
+            return False
+        db.execute("DELETE FROM match_players WHERE match_id=?", (match_id,))
+        db.execute("DELETE FROM match_events WHERE match_id=?", (match_id,))
+    return True
+
+
 def _match_row(row):
     return {
         "id": row["id"],

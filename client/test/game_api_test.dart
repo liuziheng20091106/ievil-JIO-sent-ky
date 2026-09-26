@@ -243,6 +243,11 @@ void main() {
     expect(calls.last, 'GET /api/history/game-1');
     expect(detail.match.winner, 'witch');
     expect(detail.events.single.text, '公屏上说过的话');
+
+    // 删除历史对局：DELETE 请求打到同一资源的接口上（4 级主持由服务端校验）。
+    body = {'ok': true};
+    await api.deleteMatch('game-1');
+    expect(calls.last, 'DELETE /api/history/game-1');
     api.close();
   });
 

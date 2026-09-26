@@ -14,6 +14,9 @@ typedef MatchHistoryLoader = Future<({List<MatchSummary> matches, bool hasMore})
 /// 单局历史详情的数据来源；默认走 `store.api`。
 typedef MatchDetailLoader = Future<MatchDetail> Function(String matchId);
 
+/// 删除一条历史对局的数据来源；默认走 `store.api`（服务端只放行 4 级及以上主持）。
+typedef MatchDeleter = Future<void> Function(String matchId);
+
 /// 历史对局：已结束（或没结束就被清空）的对局留档。
 ///
 /// 服务端把它存在独立库里（`data/history.sqlite3`），建新局与一键初始化都不会清掉。
@@ -24,12 +27,16 @@ class MatchHistoryPage extends StatefulWidget {
     super.key,
     required this.store,
     @visibleForTesting this.loader,
+    @visibleForTesting this.deleter,
   });
 
   final GameStore store;
 
   /// 仅回归检查使用：覆盖默认的数据来源。
   final MatchHistoryLoader? loader;
+
+  /// 仅回归检查使用：覆盖默认的删除来源。
+  final MatchDeleter? deleter;
 
   @override
   State<MatchHistoryPage> createState() => _MatchHistoryPageState();
@@ -39,7 +46,12 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
   List<MatchSummary> matches = const [];
   bool hasMore = false;
   bool loading = true;
+  bool deleting = false;
   String? error;
+
+  bool get canDelete => widget.store.actor?.canDeleteHistory ?? false;
+
+  MatchDeleter? get _deleter => widget.deleter ?? widget.store.api?.deleteMatch;
 
   @override
   void initState() {
@@ -101,6 +113,57 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
     }
   }
 
+  /// 删除一条历史对局：先确认，成功后就地从列表移除（不必整页重拉）。
+  Future<void> remove(MatchSummary match) async {
+    final deleter = _deleter;
+    if (deleter == null || deleting) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.delete_outline, color: context.palette.danger),
+        title: const Text('删除这条历史对局？'),
+        content: Text(
+          '「第 ${match.day} 日 · ${matchResultTitle(match)}」的胜负、身份与公开时间线'
+          '都会删掉，删除后不可恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: context.palette.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => deleting = true);
+    try {
+      await deleter(match.id);
+      if (!mounted) return;
+      setState(() {
+        matches = [
+          for (final item in matches)
+            if (item.id != match.id) item,
+        ];
+        deleting = false;
+      });
+    } on ApiException catch (failure) {
+      if (!mounted) return;
+      setState(() => deleting = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    } on FormatException catch (failure) {
+      if (!mounted) return;
+      setState(() => deleting = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -128,14 +191,20 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
                 padding: const EdgeInsets.only(bottom: AppSpacing.md),
                 child: _MatchCard(
                   match: item,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => MatchDetailPage(
-                        store: widget.store,
-                        matchId: item.id,
+                  canDelete: canDelete,
+                  onDelete: canDelete ? () => remove(item) : null,
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => MatchDetailPage(
+                          store: widget.store,
+                          matchId: item.id,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                    // 详情页里也可能删掉了这一局：回来后重新拉一次列表。
+                    if (canDelete) refresh();
+                  },
                 ),
               ),
             if (hasMore)
@@ -170,10 +239,19 @@ String matchResultTitle(MatchSummary match) {
 }
 
 class _MatchCard extends StatelessWidget {
-  const _MatchCard({required this.match, required this.onTap});
+  const _MatchCard({
+    required this.match,
+    required this.onTap,
+    this.canDelete = false,
+    this.onDelete,
+  });
 
   final MatchSummary match;
   final VoidCallback onTap;
+
+  /// 4 级及以上主持人的删除入口；普通玩家与低级主持不显示。
+  final bool canDelete;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -191,6 +269,7 @@ class _MatchCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: Text(
@@ -202,7 +281,19 @@ class _MatchCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const Icon(Icons.chevron_right, size: 20),
+                  if (canDelete) ...[
+                    IconButton(
+                      tooltip: '删除这条历史对局',
+                      onPressed: onDelete,
+                      icon: Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: context.palette.danger,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                  ],
+                  Icon(Icons.chevron_right, size: 20),
                 ],
               ),
               const SizedBox(height: AppSpacing.xs),
@@ -254,6 +345,7 @@ class MatchDetailPage extends StatefulWidget {
     required this.store,
     required this.matchId,
     @visibleForTesting this.loader,
+    @visibleForTesting this.deleter,
   });
 
   final GameStore store;
@@ -262,6 +354,9 @@ class MatchDetailPage extends StatefulWidget {
   /// 仅回归检查使用：覆盖默认的数据来源。
   final MatchDetailLoader? loader;
 
+  /// 仅回归检查使用：覆盖默认的删除来源。
+  final MatchDeleter? deleter;
+
   @override
   State<MatchDetailPage> createState() => _MatchDetailPageState();
 }
@@ -269,7 +364,12 @@ class MatchDetailPage extends StatefulWidget {
 class _MatchDetailPageState extends State<MatchDetailPage> {
   MatchDetail? detail;
   bool loading = true;
+  bool deleting = false;
   String? error;
+
+  bool get canDelete => widget.store.actor?.canDeleteHistory ?? false;
+
+  MatchDeleter? get _deleter => widget.deleter ?? widget.store.api?.deleteMatch;
 
   @override
   void initState() {
@@ -304,11 +404,70 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
     }
   }
 
+  /// 删除这一局：确认后调用接口，成功就退出详情页（列表页回来时会刷新）。
+  Future<void> remove() async {
+    final deleter = _deleter;
+    if (deleter == null || deleting) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.delete_outline, color: context.palette.danger),
+        title: const Text('删除这条历史对局？'),
+        content: Text(
+          '「第 ${detail?.match.day ?? '?'} 日 · '
+          '${detail == null ? '' : matchResultTitle(detail!.match)}」的胜负、身份与'
+          '公开时间线都会删掉，删除后不可恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: context.palette.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => deleting = true);
+    try {
+      await deleter(widget.matchId);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+    } on ApiException catch (failure) {
+      if (!mounted) return;
+      setState(() => deleting = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    } on FormatException catch (failure) {
+      if (!mounted) return;
+      setState(() => deleting = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final value = detail;
     return Scaffold(
-      appBar: AppBar(title: const Text('对局记录')),
+      appBar: AppBar(
+        title: const Text('对局记录'),
+        actions: [
+          if (canDelete)
+            IconButton(
+              tooltip: '删除这条历史对局',
+              onPressed: deleting ? null : remove,
+              icon: Icon(
+                Icons.delete_outline,
+                color: context.palette.danger,
+              ),
+            ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: load,
         child: value == null

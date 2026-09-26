@@ -157,8 +157,11 @@ class Actor {
   /// 3 级起可以定义与分发成就（稀有度上限由服务端按等级校验）。
   bool get canManageAchievements => isHost && hostLevel >= 3;
 
-  /// 4 级起可以授权/取消 1-3 级主持。
+  /// 4 级起可以授权/取消 1-3 级主持，也可以删除历史对局。
   bool get canManageHosts => isHost && hostLevel >= 4;
+
+  /// 4 级起可以删除历史对局（服务端同样按等级校验）。
+  bool get canDeleteHistory => isHost && hostLevel >= 4;
 
   /// 5 级是系统管理员：可以发布公告、分发全等级成就、授权 1-5 级主持。
   bool get isAdmin => isHost && hostLevel >= 5;

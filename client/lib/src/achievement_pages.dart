@@ -243,6 +243,27 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
   }
 }
 
+/// 成就卡右端的「佩戴」按钮：内边距与 [Tag] 完全一致，所以与「已佩戴 / 未获得」
+/// 标签同高、同右边界，多张卡片叠起来时这些标识上下对齐成一列。
+///
+/// 注意别用 `Flexible(徽章) + Spacer()`：两者都占一份弹性空间，松约束的徽章用不完
+/// 的那份不会让给 Spacer，桌面宽屏下标识会停在卡片中间而不是右端。
+Widget _equipAction(BuildContext context, {required VoidCallback? onPressed}) =>
+    TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        minimumSize: Size.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: const TextStyle(
+          fontFamily: kAppFontFamily,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      child: const Text('佩戴'),
+    );
+
 /// 玩家视角的一条成就。
 class _AchievementCard extends StatelessWidget {
   const _AchievementCard({
@@ -276,19 +297,24 @@ class _AchievementCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Flexible(
-                  child: AchievementBadge(
-                    name: grant.name,
-                    rarity: grant.rarity,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: AchievementBadge(
+                          name: grant.name,
+                          rarity: grant.rarity,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Text(
+                        '稀有度 ${grant.rarity}',
+                        style: TextStyle(
+                            fontSize: 11, color: context.palette.textTertiary),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                Text(
-                  '稀有度 ${grant.rarity}',
-                  style: TextStyle(
-                      fontSize: 11, color: context.palette.textTertiary),
-                ),
-                const Spacer(),
                 if (equipped)
                   Tag(
                     '已佩戴',
@@ -296,10 +322,7 @@ class _AchievementCard extends StatelessWidget {
                     background: rarity.background.withValues(alpha: .16),
                   )
                 else
-                  TextButton(
-                    onPressed: busy ? null : onEquip,
-                    child: const Text('佩戴'),
-                  ),
+                  _equipAction(context, onPressed: busy ? null : onEquip),
               ],
             ),
             const SizedBox(height: AppSpacing.xs),
@@ -362,10 +385,12 @@ class _AchievementCatalogRow extends StatelessWidget {
         ),
       ),
       child: Padding(
+        // 右内边距与「获得的成就」卡一致（都是 16）：两处的「佩戴 / 已佩戴 /
+        // 未获得」标识才会落在同一条竖线上。
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.lg,
           AppSpacing.md,
-          AppSpacing.md,
+          AppSpacing.lg,
           AppSpacing.md,
         ),
         child: Column(
@@ -373,22 +398,28 @@ class _AchievementCatalogRow extends StatelessWidget {
           children: [
             Row(
               children: [
-                Flexible(
-                  child: Opacity(
-                    // 未获得的成就不给彩色徽章，用淡色表示「还差这一个」。
-                    opacity: owned ? 1 : .45,
-                    child: AchievementBadge(
-                      name: definition.name,
-                      rarity: definition.rarity,
-                    ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Opacity(
+                          // 未获得的成就不给彩色徽章，用淡色表示「还差这一个」。
+                          opacity: owned ? 1 : .45,
+                          child: AchievementBadge(
+                            name: definition.name,
+                            rarity: definition.rarity,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Text(
+                        '稀有度 ${definition.rarity}',
+                        style:
+                            TextStyle(fontSize: 11, color: palette.textTertiary),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                Text(
-                  '稀有度 ${definition.rarity}',
-                  style: TextStyle(fontSize: 11, color: palette.textTertiary),
-                ),
-                const Spacer(),
                 if (equipped)
                   Tag(
                     '已佩戴',
@@ -396,10 +427,7 @@ class _AchievementCatalogRow extends StatelessWidget {
                     background: rarity.background.withValues(alpha: .16),
                   )
                 else if (owned)
-                  TextButton(
-                    onPressed: busy ? null : onEquip,
-                    child: const Text('佩戴'),
-                  )
+                  _equipAction(context, onPressed: busy ? null : onEquip)
                 else
                   Tag(
                     '未获得',
@@ -646,19 +674,25 @@ class _DefinitionsTabState extends State<_DefinitionsTab> {
                 children: [
                   Row(
                     children: [
-                      Flexible(
-                        child: AchievementBadge(
-                          name: definition.name,
-                          rarity: definition.rarity,
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: AchievementBadge(
+                                name: definition.name,
+                                rarity: definition.rarity,
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              '稀有度 ${definition.rarity}',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: context.palette.textTertiary),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: AppSpacing.sm),
-                      Text(
-                        '稀有度 ${definition.rarity}',
-                        style: TextStyle(
-                            fontSize: 11, color: context.palette.textTertiary),
-                      ),
-                      const Spacer(),
                       IconButton(
                         tooltip: '编辑',
                         onPressed: () => edit(existing: definition),

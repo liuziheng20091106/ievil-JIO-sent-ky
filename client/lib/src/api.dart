@@ -456,6 +456,11 @@ class GameApi {
         await _request('GET', '/api/history/${Uri.encodeComponent(matchId)}'),
       );
 
+  /// 删除一条历史对局；服务端只放行 4 级及以上的主持人。
+  Future<void> deleteMatch(String matchId) async {
+    await _request('DELETE', '/api/history/${Uri.encodeComponent(matchId)}');
+  }
+
   Future<Object?> _request(
     String method,
     String path, {
