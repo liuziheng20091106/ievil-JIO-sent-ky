@@ -17,6 +17,7 @@ from . import (
     client_release,
     evidence,
     history_storage,
+    pow_guard,
     realtime,
     schemas,
     storage,
@@ -191,8 +192,26 @@ async def catalog():
     return {"roles": CATALOG, "default_codex": DEFAULT_CODEX}
 
 
+@router.post("/pow/challenges")
+async def pow_challenge():
+    """领一道 PoW 谜题：防护关闭时返回 required=false，客户端直接创建登录挑战。"""
+    return pow_guard.issue_puzzle()
+
+
+def require_pow(body: schemas.PoWSolution | None):
+    """创建登录挑战前的工作量校验；未通过时 428，旧客户端据此提示更新。
+
+    防护关闭时验证恒过，所以不带请求体的旧客户端在关闭状态下照常创建挑战。
+    """
+    if pow_guard.enabled() and (
+        body is None or not pow_guard.verify_solution(body.token, body.nonce)
+    ):
+        raise HTTPException(428, pow_guard.reject_detail())
+
+
 @router.post("/auth/challenges")
-async def web_challenge():
+async def web_challenge(body: schemas.PoWSolution | None = None):
+    require_pow(body)
     return auth_storage.create_challenge("web")
 
 
@@ -209,7 +228,8 @@ async def web_challenge_status(challenge_id: str, request: Request, response: Re
 
 
 @router.post("/native/auth/challenges")
-async def native_challenge():
+async def native_challenge(body: schemas.PoWSolution | None = None):
+    require_pow(body)
     return auth_storage.create_challenge("native")
 
 
@@ -224,7 +244,8 @@ async def native_challenge_status(challenge_id: str):
 
 
 @router.post("/auth/host/challenges")
-async def web_host_challenge():
+async def web_host_challenge(body: schemas.PoWSolution | None = None):
+    require_pow(body)
     return auth_storage.create_challenge("web_host")
 
 
@@ -239,7 +260,8 @@ async def web_host_challenge_status(challenge_id: str, request: Request, respons
 
 
 @router.post("/native/auth/host/challenges")
-async def native_host_challenge():
+async def native_host_challenge(body: schemas.PoWSolution | None = None):
+    require_pow(body)
     return auth_storage.create_challenge("native_host")
 
 
@@ -397,7 +419,7 @@ async def online_players(
                 }
             )
         accounts.sort(key=lambda item: item["name"])
-        # 排序按完整昵称做，展示名最后才截断：8 字以内不可能截出重名，但同前缀的名字
+        # 排序按完整昵称做，展示名最后才截断：上限以内不可能截出重名，但同前缀的名字
         # 不该因为截断而换位。
         for item in accounts:
             item["name"] = display_player_name(item["name"])

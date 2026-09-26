@@ -29,6 +29,13 @@ class Participation(Input):
     kind: Literal["player", "spectator"]
 
 
+class PoWSolution(Input):
+    """登录挑战创建时随请求提交的工作量证明；防护关闭时两个字段都可省略。"""
+
+    token: str = Field(default="", max_length=200)
+    nonce: StrictInt | None = Field(default=None)
+
+
 class QQLogin(Input):
     code: str = Field(pattern=r"^\d{6}$")
     qq_id: str = Field(pattern=r"^\d{5,20}$")

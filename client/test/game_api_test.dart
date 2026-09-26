@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:seven_double_client/src/api.dart';
 import 'package:seven_double_client/src/models.dart';
@@ -48,11 +49,17 @@ void main() {
   final bodies = <String>[];
   var status = 200;
   var body = stateJson();
+  // 按路径覆盖响应：模拟「PoW 领题」与「挑战创建」返回不同内容。
+  final routes = <String, Object?>{};
+  // 按路径覆盖状态码：模拟旧服务端没有 PoW 领题接口（404）。
+  final statusByPath = <String, int>{};
 
   setUp(() async {
     requests.clear();
     calls.clear();
     bodies.clear();
+    routes.clear();
+    statusByPath.clear();
     status = 200;
     body = stateJson();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -62,9 +69,10 @@ void main() {
       if (request.method == 'POST') {
         bodies.add(await utf8.decoder.bind(request).join());
       }
-      request.response.statusCode = status;
+      final path = request.uri.path;
+      request.response.statusCode = statusByPath[path] ?? status;
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode(body));
+      request.response.write(jsonEncode(routes[path] ?? body));
       await request.response.close();
     });
     endpoint = ServerEndpoint.parse('http://127.0.0.1:${server.port}');
@@ -87,9 +95,53 @@ void main() {
   });
 
   test('requests without a token send no Authorization header', () async {
+    final api = GameApi(endpoint, token: null);
+    // PoW 领题与挑战创建都是无令牌请求：两个请求都不该带 Authorization。
+    await api.createChallenge();
+    expect(
+      requests.every((headers) =>
+          headers.value(HttpHeaders.authorizationHeader) == null),
+      isTrue,
+    );
+    expect(calls, contains('POST /api/native/auth/challenges'));
+    api.close();
+  });
+
+  test('PoW 开启：先领题求解，再把证明带进挑战创建请求', () async {
+    const token = 'v1.123.4.abc.deadbeef';
+    routes['/api/pow/challenges'] = {'required': true, 'difficulty': 3, 'token': token};
     final api = GameApi(endpoint);
     await api.createChallenge();
-    expect(requests.single.value(HttpHeaders.authorizationHeader), isNull);
+    expect(calls[0], 'POST /api/pow/challenges');
+    expect(calls.last, 'POST /api/native/auth/challenges');
+    final proof = jsonDecode(bodies.last) as Map<String, dynamic>;
+    expect(proof['token'], token);
+    // 提交的解必须真的满足前缀条件，而不是随便一个整数。
+    final nonce = proof['nonce'] as int;
+    expect(
+      sha256.convert(utf8.encode('$token$nonce')).toString().substring(0, 3),
+      '000',
+    );
+    api.close();
+  });
+
+  test('PoW 未开启：领题后跳过求解，创建挑战不带证明', () async {
+    routes['/api/pow/challenges'] = {'required': false};
+    final api = GameApi(endpoint);
+    await api.createChallenge();
+    expect(calls, ['POST /api/pow/challenges', 'POST /api/native/auth/challenges']);
+    // 未开启防护：创建挑战不带证明字段（body 为空字符串，即无 JSON 体）。
+    expect(bodies.last, isEmpty);
+    api.close();
+  });
+
+  test('旧服务端没有领题接口（404）：回退为直接创建挑战', () async {
+    statusByPath['/api/pow/challenges'] = 404;
+    final api = GameApi(endpoint);
+    await api.createChallenge();
+    expect(calls, ['POST /api/pow/challenges', 'POST /api/native/auth/challenges']);
+    // 回退时同样不带证明，行为与旧客户端一致。
+    expect(bodies.last, isEmpty);
     api.close();
   });
 

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'client_version.dart';
 import 'models.dart';
+import 'pow.dart';
 
 class GameApi {
   GameApi(this.endpoint, {this.token}) {
@@ -17,12 +18,34 @@ class GameApi {
   String? token;
 
   Future<Map<String, dynamic>> createChallenge() async =>
-      jsonObject(await _request('POST', '/api/native/auth/challenges'));
+      jsonObject(await _createChallenge('/api/native/auth/challenges'));
 
   Future<Map<String, dynamic>> challenge(String id) async => jsonObject(
         await _request(
             'GET', '/api/native/auth/challenges/${Uri.encodeComponent(id)}'),
       );
+
+  /// 领取 PoW 谜题并在本地求解后创建登录挑战。
+  ///
+  /// 服务端未开启工作量验证时 /api/pow/challenges 返回 required=false，
+  /// 直接转发创建请求，行为与旧版完全一致；开启后旧服务端没有领题接口，
+  /// 领题 404 同样按「无防护」处理，两端版本错开也不会挡登录。
+  Future<Map<String, dynamic>> _createChallenge(String path) async {
+    Map<String, dynamic>? proof;
+    try {
+      final puzzle = PowPuzzle.fromJson(
+        jsonObject(await _request('POST', '/api/pow/challenges')),
+      );
+      final nonce = await puzzle.solve();
+      if (nonce != null) {
+        proof = {'token': puzzle.token, 'nonce': nonce};
+      }
+    } on ApiException catch (failure) {
+      if (failure.statusCode != 404) rethrow;
+      // 旧服务端：没有 PoW 领题接口，视为未开启防护。
+    }
+    return jsonObject(await _request('POST', path, body: proof));
+  }
 
   Future<Map<String, dynamic>> health() async =>
       jsonObject(await _request('GET', '/api/health'));
@@ -252,7 +275,7 @@ class GameApi {
 
   /// 主持人也是 QQ 账号：与玩家同一个群登录码，只是换成主持人挑战端点。
   Future<Map<String, dynamic>> createHostChallenge() async =>
-      jsonObject(await _request('POST', '/api/native/auth/host/challenges'));
+      jsonObject(await _createChallenge('/api/native/auth/host/challenges'));
 
   Future<Map<String, dynamic>> hostChallenge(String id) async => jsonObject(
         await _request(
