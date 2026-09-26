@@ -183,7 +183,7 @@ flutter build windows --debug
 
 ```cmd
 .venv\Scripts\python.exe -m unittest discover -s checks -v
-.venv\Scripts\python.exe -m ruff check backend checks run.py gateway run-simulator.py
+.venv\Scripts\python.exe -m ruff check backend checks run.py gateway run-simulator.py supervisor.py
 cd frontend && npm.cmd run build
 ```
 

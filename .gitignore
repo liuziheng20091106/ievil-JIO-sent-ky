@@ -9,6 +9,7 @@ data/
 gateway/.env
 gateway/napcat/
 gateway/*.log
+logs/
 *.cmd.local
 *.env.local
 client/test/failures/

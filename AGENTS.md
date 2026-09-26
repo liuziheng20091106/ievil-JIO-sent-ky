@@ -25,7 +25,7 @@
 - 默认数据目录 `data/` 属于用户。验证必须设置 `GAME_DATA_DIR` 为独立临时目录；不得删除或改写用户对局。
 - 反向代理：代理必须透传原始 `Host` 或补 `X-Forwarded-Host`/`X-Forwarded-Proto`；代理不在本机时用 `--trusted-proxies` 或 `GAME_TRUSTED_PROXIES` 声明。显式放行来源默认是 `super.tkcloud.online`，用 `GAME_ALLOWED_ORIGINS` 覆盖。
 - 后端检查：`.venv/Scripts/python.exe -m unittest discover -s checks -v`。
-- 静态检查：`.venv/Scripts/python.exe -m ruff check backend checks run.py`。
+- 静态检查：`.venv/Scripts/python.exe -m ruff check backend checks run.py gateway run-simulator.py supervisor.py`。
 - 前端检查/构建：在 `frontend/` 执行 `npm.cmd run build`。
 - 客户端编译发行：在 `client/` 执行 `flutter build apk --release --target-platform android-arm64` 与 `flutter build windows --release`。
 - 每次编译后运行 `package-release.cmd`：把 `client/build/windows/x64/runner/Release` 重新打成 `魔法裁判Windows.zip`，并与 `app-release.apk` 一起覆盖复制到 `\\192.168.0.114\烟台一中\云控\信息技术`。
@@ -34,6 +34,14 @@
 - 客户端版本标签：后端 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`（`x.y.z` 三段），低于 latest 提示可更新、低于 minimum 强制更新；客户端内置版本号写在 `client/lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `client/pubspec.yaml` 的版本名同步手改，不动安卓 versionCode/versionName。部署环境的标签在本地不入库的 `start.cmd.local.cmd` 里，改完必须重启服务端进程，`/api/health` 才会下发新版本。
 - 有意义的行为修改必须实际启动并验证相关服务或浏览器路径；新增回归检查只保护真实规则、权限或数据丢失边界。
 - 更新现有 TXT 运行说明；保持改动最小，不为假设需求搭框架。并发代理修改不同文件，统一在集成结束后格式化、构建和运行检查。
+
+## 守护进程（后端 + 登录网关）
+- `supervisor.py`（用 `run-supervisor.cmd` 启动）托管两个子进程：后端 `run.py` 与登录网关 `python -m gateway.gateway`。它代替 `start.cmd` 与 `run-gateway.cmd`，不要两边同时启动（会抢端口）。默认自动拉起两者；子进程意外退出按 2s→60s 退避自动重启；退出守护进程会一并停掉子进程。子进程输出追加在 `logs/backend.log`、`logs/gateway.log`（`logs/` 已 gitignore）。
+- 默认只监听 `127.0.0.1:13900`（`GAME_SUPERVISOR_HOST` / `GAME_SUPERVISOR_PORT` 可改）。`GET /status` 给出两个进程的 pid、存活时长、重启次数、日志路径与后端 `/api/health` 是否可达；重启走 POST（设了令牌就带 `-H "X-Supervisor-Token: <令牌>"`）：
+  - `POST /restart/backend` 重启后端；`POST /restart/gateway` 重启登录网关；`POST /restart/all` 先把两个都停掉再拉起（先后端后网关，避免网关空转重连）。
+  - `POST /start|stop/{backend|gateway|all}` 是同一套生命周期；进程名不在白名单返回 404，起不来返回 500 且 body 带退出码与日志末尾，`/status` 里该进程为 `stopped`。
+- 后端端口默认 8000，用 `--backend-port` 或 `GAME_SUPERVISOR_BACKEND_PORT` 覆盖；显式改端口时守护进程会把网关子进程的 `GAME_BACKEND_URL` 一起改到该端口。网关的环境变量默认读 `gateway/.env`，测试或换端口用 `--gateway-env` 指向别的文件；后端的环境变量（`GAME_ADMIN_QQ`、`GAME_GATEWAY_TOKEN`、`GAME_DATA_DIR`、客户端版本标签等）由守护进程原样继承，所以部署时写一份不入库的 `run-supervisor.cmd.local.cmd`（`*.cmd.local` 已 gitignore）设好再启动。
+- 绑定非回环地址必须先设 `GAME_SUPERVISOR_TOKEN`，否则拒绝启动；设了令牌后除 `GET /health` 外的请求都要带 `X-Supervisor-Token`。带 `Origin` 的浏览器请求一律 403——这个接口只给本机脚本用，不能让网页重启服务。端口被占用会直接报错退出，不会静默双开。
 
 ## 版本管理
 - 使用本地 Git 管理可回退版本；改动前保留基线，验证完成后提交功能变更。自动推送远端。
