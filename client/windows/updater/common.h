@@ -69,6 +69,10 @@ struct Options {  std::wstring command;   // install / update-app / prepare / ta
   bool elevated = false;  // 提权后的自调用标记，避免 UAC 递归
   bool noLaunch = false;
   bool skipProgramFiles = false;  // 卸载时只清数据，不动程序文件
+  // 安装向导的第一项选择：true＝只下载解压便携版（不写注册表、不建快捷方式、不装证书与计划任务）。
+  bool portable = false;
+  // 安装模式下是否创建桌面快捷方式（开始菜单快捷方式总是创建，含卸载入口）。
+  bool desktopShortcut = true;
 };
 
 // 进度上报：命令行路径传 nullptr（走日志），GUI 路径传回调（走消息）。

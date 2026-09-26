@@ -2,7 +2,7 @@ import 'dart:io';
 
 /// 客户端内置版本号：发版时与 `client/pubspec.yaml` 的版本名同步手改；
 /// 后端按 UA 里的这个版本做更新下发与入局门槛，故意不用 package_info_plus。
-const kClientVersion = '1.0.10';
+const kClientVersion = '1.0.11';
 
 /// 默认后端服务地址：首次进入「连接服务器」时预填，但玩家可以随意改成别的地址。
 const kDefaultServerEndpoint = 'https://super.tkcloud.online:447';

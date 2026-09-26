@@ -27,11 +27,17 @@ enum ControlId {
   kIdChoiceUpdate,
   kIdChoiceUninstall,
   kIdChoiceQuit,
+  kIdChoicePortable,
   kIdUninstallText,
   kIdUninstallList,
   kIdRemoveFiles,
   kIdRemoveData,
   kIdUninstallStart,
+  kIdModeLabel,
+  kIdModeInstall,
+  kIdModePortable,
+  kIdDesktopShortcut,
+  kIdModeHint,
 };
 
 enum WindowMessage {
@@ -40,9 +46,9 @@ enum WindowMessage {
 };
 
 constexpr int kWizardWidth = 640;
-constexpr int kWizardHeight = 330;
+constexpr int kWizardHeight = 420;
 constexpr int kChoiceWidth = 560;
-constexpr int kChoiceHeight = 230;
+constexpr int kChoiceHeight = 280;
 constexpr int kUninstallWidth = 620;
 constexpr int kUninstallHeight = 360;
 
@@ -125,14 +131,17 @@ LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                   kIdChoiceText);
       CreateChild(window, L"STATIC", create->lpszName, SS_LEFT, 20, 46, 500, 22, kIdChoiceText + 1000);
       CreateChild(window, L"STATIC",
-                  L"请选择要执行的操作。更新到最新会下载并覆盖当前安装，卸载会删除程序文件"
+                  L"请选择要执行的操作。「更新到最新」会下载并覆盖当前安装；「下载便携版」只把整包"
+                  L"解压到你指定的目录，不动现有安装；「卸载」会删除程序文件与快捷方式"
                   L"（Updater.exe 自身保留）。",
-                  SS_LEFT, 20, 76, 500, 44, kIdChoiceText + 1001);
-      CreateChild(window, L"BUTTON", L"更新到最新", BS_DEFPUSHBUTTON | WS_TABSTOP, 190, 150, 110, 30,
+                  SS_LEFT, 20, 76, 500, 56, kIdChoiceText + 1001);
+      CreateChild(window, L"BUTTON", L"更新到最新", BS_DEFPUSHBUTTON | WS_TABSTOP, 40, 156, 110, 30,
                   kIdChoiceUpdate);
-      CreateChild(window, L"BUTTON", L"卸载", BS_PUSHBUTTON | WS_TABSTOP, 310, 150, 110, 30,
+      CreateChild(window, L"BUTTON", L"下载便携版", BS_PUSHBUTTON | WS_TABSTOP, 160, 156, 110, 30,
+                  kIdChoicePortable);
+      CreateChild(window, L"BUTTON", L"卸载", BS_PUSHBUTTON | WS_TABSTOP, 280, 156, 110, 30,
                   kIdChoiceUninstall);
-      CreateChild(window, L"BUTTON", L"退出", BS_PUSHBUTTON | WS_TABSTOP, 430, 150, 110, 30,
+      CreateChild(window, L"BUTTON", L"退出", BS_PUSHBUTTON | WS_TABSTOP, 400, 156, 110, 30,
                   kIdChoiceQuit);
       return 0;
     }
@@ -145,6 +154,8 @@ LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         state->result = kInstalledChoiceUpdate;
       } else if (id == kIdChoiceUninstall) {
         state->result = kInstalledChoiceUninstall;
+      } else if (id == kIdChoicePortable) {
+        state->result = kInstalledChoicePortable;
       } else {
         state->result = kInstalledChoiceQuit;
       }
@@ -168,6 +179,8 @@ LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
 // ==== 安装向导 ====
 
+std::wstring ReadWindowText(HWND control);
+
 struct WizardState {
   HWND window = nullptr;
   HWND backendEdit = nullptr;
@@ -178,12 +191,53 @@ struct WizardState {
   HWND progressBar = nullptr;
   HWND installButton = nullptr;
   HWND cancelButton = nullptr;
+  HWND modeInstallRadio = nullptr;
+  HWND modePortableRadio = nullptr;
+  HWND modeHint = nullptr;
+  HWND desktopShortcutCheck = nullptr;
   HANDLE thread = nullptr;
   std::wstring directory;
+  // 三种自动填的目录：用户没自己改过时，切换安装/便携模式跟着换。
+  std::wstring installDefaultDir;
+  std::wstring portableDefaultDir;
+  std::wstring programFilesDir;
   bool programFiles = false;
   bool launch = true;
+  bool portable = false;
+  bool desktopShortcut = true;
   int result = kExitOk;  // 用户直接关窗口＝什么都没做
 };
+
+// 目录框当前值是不是「自动填的三种之一」（是就允许切换模式时改写）。
+bool DirectoryIsAutomatic(const WizardState* state, const std::wstring& value) {
+  return _wcsicmp(value.c_str(), state->installDefaultDir.c_str()) == 0 ||
+         _wcsicmp(value.c_str(), state->portableDefaultDir.c_str()) == 0 ||
+         _wcsicmp(value.c_str(), state->programFilesDir.c_str()) == 0;
+}
+
+void ApplyWizardMode(HWND window, WizardState* state, bool portable) {
+  state->portable = portable;
+  ::EnableWindow(state->programFilesCheck, portable ? FALSE : TRUE);
+  ::EnableWindow(state->desktopShortcutCheck, portable ? FALSE : TRUE);
+  if (state->modeHint != nullptr) {
+    ::SetWindowTextW(state->modeHint,
+                     portable ? L"便携版：把整包解压到上面的目录，不写注册表、不建快捷方式，"
+                                L"也没有卸载入口；换电脑直接拷走整个文件夹即可。"
+                              : L"安装：装到上面的目录，创建开始菜单快捷方式"
+                                L"（含「卸载魔法裁判」入口），桌面快捷方式可选，"
+                                L"并准备好应用内静默更新。");
+  }
+  if (state->installButton != nullptr) {
+    ::SetWindowTextW(state->installButton, portable ? L"开始下载" : L"开始安装");
+  }
+  // 目录还是自动值时跟着模式换；用户自己填过就不动他填的路径。
+  const std::wstring current = Trim(ReadWindowText(state->directoryEdit));
+  if (DirectoryIsAutomatic(state, current)) {
+    ::SetWindowTextW(state->directoryEdit,
+                     (portable ? state->portableDefaultDir : state->installDefaultDir).c_str());
+  }
+  (void)window;
+}
 
 void WizardProgress(void* context, int percent, const std::wstring& message) {
   WizardState* state = static_cast<WizardState*>(context);
@@ -214,7 +268,10 @@ DWORD WINAPI WizardThread(LPVOID parameter) {
   options.command = L"install";
   options.from = ReadWindowText(state->backendEdit);
   options.dir = state->directory;
-  options.toProgramFiles = state->programFiles;
+  options.portable = state->portable;
+  options.desktopShortcut = state->desktopShortcut;
+  // 便携版不往 Program Files 里装（目录由用户在界面上选）。
+  options.toProgramFiles = state->portable ? false : state->programFiles;
   options.noLaunch = true;  // 启动由界面负责，提权后的子进程不再启动一次
   ProgressSink sink;
   sink.report = &WizardProgress;
@@ -236,14 +293,22 @@ void BeginInstall(HWND window, WizardState* state) {
     return;
   }
   state->directory = TrimTrailingSlash(directory);
+  state->portable =
+      ::SendMessageW(state->modePortableRadio, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state->programFiles = ::SendMessageW(state->programFilesCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  state->desktopShortcut =
+      ::SendMessageW(state->desktopShortcutCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state->launch = ::SendMessageW(state->launchCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
   ::EnableWindow(state->installButton, FALSE);
   ::EnableWindow(state->backendEdit, FALSE);
   ::EnableWindow(state->directoryEdit, FALSE);
   ::EnableWindow(state->programFilesCheck, FALSE);
-  ::SetWindowTextW(state->statusLabel, L"正在准备……");
+  ::EnableWindow(state->desktopShortcutCheck, FALSE);
+  ::EnableWindow(state->modeInstallRadio, FALSE);
+  ::EnableWindow(state->modePortableRadio, FALSE);
+  ::SetWindowTextW(state->statusLabel,
+                   state->portable ? L"正在准备下载便携版……" : L"正在准备安装……");
   state->thread = ::CreateThread(nullptr, 0, &WizardThread, state, 0, nullptr);
   if (state->thread == nullptr) {
     ::EnableWindow(state->installButton, TRUE);
@@ -278,20 +343,37 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                                        BS_AUTOCHECKBOX | WS_TABSTOP, 120, 114, 400, 22, kIdLaunch);
       ::SendMessageW(state->launchCheck, BM_SETCHECK, BST_CHECKED, 0);
 
-      state->statusLabel =
-          CreateChild(window, L"STATIC", L"点击「开始安装」下载并安装最新版本。", SS_LEFT, 20, 150,
-                      580, 40, kIdStatus);
-      state->progressBar = CreateChild(window, PROGRESS_CLASS, L"", WS_BORDER, 20, 200, 580, 22,
+      // 两种方式：安装（带快捷方式与卸载入口）或只下载便携版。
+      CreateChild(window, L"STATIC", L"选择方式", SS_LEFT, 20, 152, 90, 22, kIdModeLabel);
+      state->modeInstallRadio =
+          CreateChild(window, L"BUTTON", L"安装（推荐）",
+                      BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 120, 150, 160, 22, kIdModeInstall);
+      state->modePortableRadio =
+          CreateChild(window, L"BUTTON", L"仅下载便携版",
+                      BS_AUTORADIOBUTTON | WS_TABSTOP, 290, 150, 160, 22, kIdModePortable);
+      state->modeHint = CreateChild(window, L"STATIC", L"", SS_LEFT, 120, 176, 480, 40, kIdModeHint);
+      state->desktopShortcutCheck =
+          CreateChild(window, L"BUTTON", L"创建桌面快捷方式（可选；开始菜单快捷方式总是创建）",
+                      BS_AUTOCHECKBOX | WS_TABSTOP, 120, 220, 480, 22, kIdDesktopShortcut);
+      ::SendMessageW(state->desktopShortcutCheck, BM_SETCHECK, BST_CHECKED, 0);
+      ::SendMessageW(state->portable ? state->modePortableRadio : state->modeInstallRadio,
+                     BM_SETCHECK, BST_CHECKED, 0);
+
+      state->statusLabel = CreateChild(
+          window, L"STATIC", L"选好方式后点「开始安装」下载并安装最新版本。", SS_LEFT, 20, 256, 580,
+          40, kIdStatus);
+      state->progressBar = CreateChild(window, PROGRESS_CLASS, L"", WS_BORDER, 20, 306, 580, 22,
                                        kIdProgress);
       if (state->progressBar != nullptr) {
         ::SendMessageW(state->progressBar, PBM_SETRANGE32, 0, 100);
       }
       state->installButton = CreateChild(window, L"BUTTON", L"开始安装",
-                                         BS_DEFPUSHBUTTON | WS_TABSTOP, 380, 245, 100, 30,
+                                         BS_DEFPUSHBUTTON | WS_TABSTOP, 380, 351, 100, 30,
                                          kIdInstall);
       state->cancelButton =
-          CreateChild(window, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, 500, 245, 100, 30,
+          CreateChild(window, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, 500, 351, 100, 30,
                       kIdCancel);
+      ApplyWizardMode(window, state, state->portable);
       return 0;
     }
     case WM_COMMAND: {
@@ -301,6 +383,10 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       }
       if (id == kIdInstall) {
         BeginInstall(window, state);
+        return 0;
+      }
+      if (id == kIdModeInstall || id == kIdModePortable) {
+        ApplyWizardMode(window, state, id == kIdModePortable);
         return 0;
       }
       if (id == kIdCancel && state->thread == nullptr) {
@@ -363,8 +449,25 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         if (state->launch) {
           LaunchApplication(JoinPath(state->directory, kAppExeName), state->directory);
         }
-        ::MessageBoxW(window, L"魔法裁判已安装完成。", L"魔法裁判 安装向导",
-                      MB_OK | MB_ICONINFORMATION);
+        if (state->portable) {
+          const std::wstring done =
+              Format(L"便携版已下载到：\n%s\n\n直接运行里面的 %s 即可，不需要安装，"
+                     L"也不会写入注册表或创建快捷方式。\n\n要打开这个文件夹吗？",
+                     state->directory.c_str(), kAppExeName);
+          if (::MessageBoxW(window, done.c_str(), L"魔法裁判 便携版",
+                            MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+            ::ShellExecuteW(nullptr, L"open", state->directory.c_str(), nullptr, nullptr,
+                            SW_SHOWNORMAL);
+          }
+        } else {
+          const std::wstring done =
+              state->desktopShortcut
+                  ? std::wstring(L"魔法裁判已安装完成。\n\n已创建开始菜单与桌面快捷方式"
+                                 L"（开始菜单里还有「卸载魔法裁判」）。")
+                  : std::wstring(L"魔法裁判已安装完成。\n\n已创建开始菜单快捷方式"
+                                 L"（里面还有「卸载魔法裁判」）。");
+          ::MessageBoxW(window, done.c_str(), L"魔法裁判 安装向导", MB_OK | MB_ICONINFORMATION);
+        }
       } else {
         ::MessageBoxW(window,
                       Format(L"安装没有完成（退出码 %d）。\n详细信息见 %s", result,
@@ -629,7 +732,17 @@ int RunInstallWizard(const Options& options) {
   commonControls.dwICC = ICC_PROGRESS_CLASS;
   ::InitCommonControlsEx(&commonControls);
   WizardState state;
-  state.directory = options.dir.empty() ? CurrentDirectory() : TrimTrailingSlash(options.dir);
+  // 三份自动目录：安装默认当前目录（或 --dir），便携版默认在其下建一个子目录，
+  // 免得几百个文件直接散进用户选的目录里；--dir 明确给了就两个模式都用它。
+  state.installDefaultDir =
+      options.dir.empty() ? TrimTrailingSlash(CurrentDirectory()) : TrimTrailingSlash(options.dir);
+  state.portableDefaultDir = options.dir.empty()
+                                 ? JoinPath(state.installDefaultDir, kProductDirName)
+                                 : state.installDefaultDir;
+  state.programFilesDir = JoinPath(ProgramFilesDir(), kProductDirName);
+  state.portable = options.portable;
+  state.desktopShortcut = options.desktopShortcut;
+  state.directory = state.portable ? state.portableDefaultDir : state.installDefaultDir;
   std::wstring backend = options.from.empty() ? std::wstring(kDefaultBackend) : options.from;
   const std::wstring title = L"魔法裁判 安装向导";
   HWND window = ::CreateWindowExW(0, L"MagicJudgeUpdaterWizard", backend.c_str(),
@@ -687,6 +800,14 @@ int RunInstallerEntry(const Options& options) {
     uninstallOptions.command = L"uninstall";
     uninstallOptions.dir = info.installDir;
     return RunUninstallWizard(uninstallOptions);
+  }
+  if (choice == kInstalledChoicePortable) {
+    // 只下载便携版：不清空目录字段，让向导用「便携版默认目录」。
+    Options portableOptions = options;
+    portableOptions.command = L"install";
+    portableOptions.portable = true;
+    portableOptions.dir.clear();
+    return RunInstallWizard(portableOptions);
   }
   if (choice == kInstalledChoiceUpdate) {
     Options updateOptions = options;

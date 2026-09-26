@@ -17,9 +17,14 @@
     package-release.cmd                     # 打包 + 上传 + 校验 + 更新下载与更新清单
     package-release.cmd --dry-run           # 只打包并打印将上传的对象，不联网
     package-release.cmd --skip-zip          # 复用已有 zip，只做上传
+    package-release.cmd --skip-upload       # 复用已上传的对象，只做校验与配置刷新
     package-release.cmd --no-updater        # 不上传 Updater.exe
     package-release.cmd --no-updates        # 不刷新 data/updates.json
     .venv\\Scripts\\python.exe tools\\package-release.py --help
+
+对象键一律带版本号（`releases/app-release-1.2.3.apk` 这样）：实测自定义域会把同名对象
+在边缘缓存住（连 query 都忽略），复用同一个键会让客户端与更新器下到上一版的旧包。
+上传后除对象存储回读外，还会用真实 GET 回读一次对外地址，长度对不上就判失败。
 """
 
 from __future__ import annotations
@@ -73,6 +78,12 @@ PLACEHOLDER_CHARS = "*<>"
 
 CHUNK = 1024 * 1024
 SIGNING_SERVICE = "s3"
+# 刚上传完的自定义域可能短暂 403/404，对外校验按这个次数与间隔重试。
+PUBLIC_VERIFY_ATTEMPTS = 6
+PUBLIC_VERIFY_DELAY_SECONDS = 5
+# 对外校验必须显式带 UA：实测自定义域（Cloudflare）直接 403 掉 `Python-urllib/x.y`，
+# 而客户端自己的 UA（seven-double-flutter/…、magicjudge-updater/…）与这个 UA 都能正常下载。
+PUBLIC_VERIFY_AGENT = "MagicJudgeReleaseCheck/1.0"
 
 
 class ReleaseError(Exception):
@@ -389,6 +400,54 @@ def public_url(values: dict, key: str) -> str:
     return f"{base}/{urllib.parse.quote(key, safe='/~')}"
 
 
+def verify_public(values: dict, uploaded: list[dict]) -> list[str]:
+    """回读「对外地址」：CDN 会缓存同名旧对象，所以只取 1 字节比对总长度。
+
+    必须走真实 GET（而不是 HEAD）：实测 Cloudflare 对 HEAD 不回缓存、对 GET 回缓存，
+    只测 HEAD 会漏掉「客户端下到上一版旧包」这种事故。
+
+    刚上传完的自定义域可能短暂返回 403/404（对象还没传播到边缘），这类瞬时错误
+    按短退避重试；但**长度不一致不重试**——那正是要被拦住的缓存旧对象。
+    """
+    base = values["S3_PUBLIC_BASE"].rstrip("/")
+    problems = []
+    for item in uploaded:
+        url = f"{base}/{urllib.parse.quote(item['key'], safe='/~')}"
+        total = -1
+        cache = ""
+        failure = None
+        for attempt in range(1, PUBLIC_VERIFY_ATTEMPTS + 1):
+            request = urllib.request.Request(
+                url, headers={"Range": "bytes=0-0", "User-Agent": PUBLIC_VERIFY_AGENT}
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    content_range = response.headers.get("Content-Range") or ""
+                    if "/" in content_range:
+                        total = int(content_range.rsplit("/", 1)[-1])
+                    else:
+                        total = int(response.headers.get("Content-Length") or -1)
+                    cache = response.headers.get("cf-cache-status") or ""
+                failure = None
+                break
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as error:
+                failure = error
+                total = -1
+                if attempt < PUBLIC_VERIFY_ATTEMPTS:
+                    log(f"  对外地址第 {attempt} 次取不到（{error}），{PUBLIC_VERIFY_DELAY_SECONDS}s 后重试")
+                    time.sleep(PUBLIC_VERIFY_DELAY_SECONDS)
+        if failure is not None:
+            problems.append(f"{url} 取不到：{failure}")
+            continue
+        if total != item["size"]:
+            problems.append(
+                f"{url} 对外长度 {total} 与本地 {item['size']} 不一致（CDN 缓存了旧对象）"
+            )
+            continue
+        log(f"  对外可下载 {item['key']}：{total} B{('，' + cache) if cache else ''}")
+    return problems
+
+
 def update_downloads(path: Path, entries: list[dict]) -> None:
     """把网页首页的下载链接写进 data/downloads.json，保留其它手工条目。
 
@@ -424,6 +483,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env", type=Path, default=DEFAULT_ENV_FILE, help="配置文件路径")
     parser.add_argument("--dry-run", action="store_true", help="只打包并打印计划，不联网、不改配置")
     parser.add_argument("--skip-zip", action="store_true", help="跳过打包，直接复用已有 zip")
+    parser.add_argument("--skip-upload", action="store_true", help="复用已上传的对象，只做校验与配置刷新")
     parser.add_argument("--no-downloads", action="store_true", help="不更新 data/downloads.json")
     parser.add_argument("--no-updater", action="store_true", help="不上传 Updater.exe")
     parser.add_argument("--no-updates", action="store_true", help="不刷新 data/updates.json")
@@ -467,30 +527,52 @@ def main(argv: list[str] | None = None) -> int:
         def key_for(name: str) -> str:
             return f"{prefix}/{name}" if prefix else name
 
+        def versioned(path: Path) -> str:
+            """对象键必须带版本号：CDN 会把同名对象缓存住（连 query 都忽略），
+            复用同一个键会让客户端与更新器下到上一版的旧包。"""
+            return key_for(f"{path.stem}-{version}{path.suffix}")
+
+        version = update_manifest.client_version()
         uploads = [
-            (WINDOWS_ZIP, key_for(WINDOWS_ZIP.name)),
-            (APK, key_for(APK.name)),
+            (WINDOWS_ZIP, versioned(WINDOWS_ZIP)),
+            (APK, versioned(APK)),
         ]
         if args.no_updater:
             log("--no-updater：本次不上传 Updater.exe")
         else:
-            uploads.append((UPDATER, key_for(UPDATER.name)))
+            uploads.append((UPDATER, versioned(UPDATER)))
 
         if args.dry_run:
             log("\n--dry-run：不会上传，也不会改动 downloads.json / updates.json")
             for local, key in uploads:
                 log(f"  将上传 {local}（{human(local.stat().st_size)}）→ {key}")
                 log(f"    对外地址 {public_url(values, key)}")
-            log(f"  将刷新 {updates_path}（客户端版本 {update_manifest.client_version()}）")
+            log(f"  将刷新 {updates_path}（客户端版本 {version}）")
             return 0
 
-        log(f"\n上传到 {values['S3_ENDPOINT']} 的 bucket {values['S3_BUCKET']} …")
-        uploaded = [upload(values, local, key) for local, key in uploads]
+        if args.skip_upload:
+            log("\n--skip-upload：复用已经上传的对象，只做对外校验与配置刷新")
+            uploaded = [
+                {"key": key, "size": local.stat().st_size, "etag": "", "md5": ""}
+                for local, key in uploads
+            ]
+        else:
+            log(f"\n上传到 {values['S3_ENDPOINT']} 的 bucket {values['S3_BUCKET']} …")
+            uploaded = [upload(values, local, key) for local, key in uploads]
 
-        log("\n回读校验：")
-        problems = verify_remote(values, uploaded)
-        if problems:
-            raise ReleaseError("上传结果与本地不一致：\n  - " + "\n  - ".join(problems))
+            log("\n回读校验（对象存储）：")
+            problems = verify_remote(values, uploaded)
+            if problems:
+                raise ReleaseError("上传结果与本地不一致：\n  - " + "\n  - ".join(problems))
+
+        log("\n回读校验（对外地址）：")
+        public_problems = verify_public(values, uploaded)
+        if public_problems:
+            raise ReleaseError(
+                "对外地址拿到的不是刚上传的对象（多半是 CDN 缓存了旧文件）：\n  - "
+                + "\n  - ".join(public_problems)
+                + "\n请确认对象键带版本号，或清理 CDN 缓存后重试"
+            )
 
         if args.no_downloads:
             log("\n--no-downloads：跳过 data/downloads.json")
@@ -500,21 +582,21 @@ def main(argv: list[str] | None = None) -> int:
                 download_entries.append(
                     {
                         "name": WINDOWS_INSTALLER_LABEL,
-                        "url": public_url(values, key_for(UPDATER.name)),
+                        "url": public_url(values, versioned(UPDATER)),
                         "note": "双击运行，填入服务器地址即可自动安装最新版本；装好后自带静默更新与卸载入口。",
                     }
                 )
             download_entries.append(
                 {
                     "name": WINDOWS_LABEL,
-                    "url": public_url(values, key_for(WINDOWS_ZIP.name)),
+                    "url": public_url(values, versioned(WINDOWS_ZIP)),
                     "note": "解压即用，不含安装程序；同样支持应用内更新。",
                 }
             )
             download_entries.append(
                 {
                     "name": ANDROID_LABEL,
-                    "url": public_url(values, key_for(APK.name)),
+                    "url": public_url(values, versioned(APK)),
                     "note": "下载后直接安装；应用内可自动更新。",
                 }
             )
@@ -525,15 +607,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # 应用内更新清单：只刷新两个平台兜底区间的下载信息与版本号，
             # 手工写的更新日志（notes）、minimum、guide_url 与更窄的区间条目都保留。
-            version = update_manifest.client_version()
             windows_entry = {
                 "platform": "windows",
-                "url": public_url(values, key_for(WINDOWS_ZIP.name)),
+                "url": public_url(values, versioned(WINDOWS_ZIP)),
                 "size": WINDOWS_ZIP.stat().st_size,
                 "sha256": sha256_file(WINDOWS_ZIP),
             }
             if not args.no_updater:
-                windows_entry["updater_url"] = public_url(values, key_for(UPDATER.name))
+                windows_entry["updater_url"] = public_url(values, versioned(UPDATER))
             log(f"\n刷新应用内更新清单（客户端版本 {version}）：")
             update_manifest.refresh_manifest(
                 updates_path,
@@ -542,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
                     windows_entry,
                     {
                         "platform": "android",
-                        "url": public_url(values, key_for(APK.name)),
+                        "url": public_url(values, versioned(APK)),
                         "size": APK.stat().st_size,
                         "sha256": sha256_file(APK),
                     },

@@ -15,6 +15,10 @@ logs/
 *.cmd.local
 *.env.local
 client/test/failures/
+# 并发验证用的临时产物（验证完即删，不入库）。
+temp/
+client/test/tmp_*
+client/test/goldens/tmp_*
 start.cmd.local.cmd
 run-supervisor.cmd.local.cmd
 package-release.env

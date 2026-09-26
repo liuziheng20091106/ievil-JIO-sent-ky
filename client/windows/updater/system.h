@@ -50,6 +50,17 @@ bool InstallCertificate(std::wstring* error);
 std::wstring CertificateSha256();
 bool CertificateEmbedded();
 
+// ==== 快捷方式 ====
+// 安装模式（非便携）会创建：开始菜单程序组里的「魔法裁判」+「卸载魔法裁判」，
+// 以及可选的桌面快捷方式。卸载时由 RemoveShortcuts 一并删掉。
+std::wstring StartMenuFolder();             // %APPDATA%\...\Start Menu\Programs\魔法裁判
+std::wstring StartMenuAppShortcutPath();    // 上面的「魔法裁判.lnk」
+std::wstring StartMenuUninstallShortcutPath();  // 上面的「卸载魔法裁判.lnk」
+std::wstring DesktopShortcutPath();         // 桌面「魔法裁判.lnk」
+bool CreateShortcuts(const std::wstring& installDir, const std::wstring& updaterPath,
+                     bool desktop, std::wstring* error);
+bool RemoveShortcuts(std::wstring* error);
+
 // ==== 其它 ====
 // %LOCALAPPDATA%\MagicJudge\Updater.exe 是否与当前这份内容一致（大小 + SHA-256）。
 bool UpdaterCopyIsCurrent();

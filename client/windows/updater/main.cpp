@@ -62,6 +62,12 @@ ParseResult ParseCommandLine() {
       result.options.dryRun = true;
     } else if (argument == L"--to-program-files") {
       result.options.toProgramFiles = true;
+    } else if (argument == L"--portable") {
+      result.options.portable = true;
+    } else if (argument == L"--desktop-shortcut") {
+      result.options.desktopShortcut = true;
+    } else if (argument == L"--no-desktop-shortcut") {
+      result.options.desktopShortcut = false;
     } else if (argument == L"--purge-data") {
       result.options.purgeData = true;
     } else if (argument == L"--no-launch") {
@@ -144,8 +150,12 @@ void PrintUsage() {
   ConsoleWriteLine(L"魔法裁判 Updater " UPDATER_VERSION_STRING);
   ConsoleWriteLine(L"");
   ConsoleWriteLine(L"用法：");
-  ConsoleWriteLine(L"  Updater.exe                                            下载器 / 安装向导（图形界面）");
-  ConsoleWriteLine(L"  Updater.exe --install --from <后端地址> [--dir <目录>] [--silent] [--to-program-files]");
+  ConsoleWriteLine(L"  Updater.exe                                            安装向导（图形界面）");
+  ConsoleWriteLine(L"  Updater.exe --install --from <后端地址> [--dir <目录>] [--silent]");
+  ConsoleWriteLine(L"      [--to-program-files] [--portable] [--no-desktop-shortcut]");
+  ConsoleWriteLine(L"      安装：创建开始菜单快捷方式（含「卸载魔法裁判」），桌面快捷方式默认也建，");
+  ConsoleWriteLine(L"            用 --no-desktop-shortcut 关掉；");
+  ConsoleWriteLine(L"      加 --portable 只下载解压便携版（不写注册表、不建快捷方式、不装更新组件）。");
   ConsoleWriteLine(L"  Updater.exe --update-app --from <地址> --target <安装目录> --restart <exe> [--wait-pid N] [--silent]");
   ConsoleWriteLine(L"  Updater.exe --prepare [--silent] [--dry-run]");
   ConsoleWriteLine(L"  Updater.exe --task-entry");

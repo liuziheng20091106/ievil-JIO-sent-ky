@@ -29,6 +29,19 @@ target_compile_definitions(Updater PRIVATE "WINVER=0x0A00")
 target_include_directories(Updater PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(Updater PRIVATE "${CMAKE_SOURCE_DIR}")
 
+# 版本号只在一处维护：从 client/pubspec.yaml 的版本名取（与客户端内置版本号同源），
+# 免得发版时还要记得手改 version.h。
+set(UPDATER_VERSION "0.0.0")
+if(EXISTS "${CMAKE_SOURCE_DIR}/../pubspec.yaml")
+  file(READ "${CMAKE_SOURCE_DIR}/../pubspec.yaml" UPDATER_PUBSPEC)
+  string(REGEX MATCH "version:[ \t]*([0-9]+\\.[0-9]+\\.[0-9]+)" _updater_version "${UPDATER_PUBSPEC}")
+  if(CMAKE_MATCH_1)
+    set(UPDATER_VERSION "${CMAKE_MATCH_1}")
+  endif()
+endif()
+message(STATUS "Updater 版本 ${UPDATER_VERSION}（来自 client/pubspec.yaml）")
+target_compile_definitions(Updater PRIVATE "UPDATER_VERSION_STRING=L\"${UPDATER_VERSION}\"")
+
 target_link_libraries(Updater PRIVATE
   "advapi32.lib"
   "bcrypt.lib"

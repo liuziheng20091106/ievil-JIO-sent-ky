@@ -173,10 +173,12 @@ package-release.cmd
 
 脚本把 `client/build/windows/x64/runner/Release` 打成 `魔法裁判Windows.zip`，与 `client/build/app/outputs/flutter-apk/app-release.apk`、以及**独立发布产物** `Updater.exe`（Windows 安装程序）一起上传到 `<S3_PREFIX>/` 子目录，再回读远端对象核对大小，最后写两处后端下发的配置：
 
-- `data/downloads.json`：网页首页「下载游戏」的三条链接——**Windows 安装程序**（`Updater.exe`，双击运行、填服务器地址即自动安装最新版，装好后自带静默更新与卸载）、Windows 便携版（zip）、安卓版；
+- `data/downloads.json`：网页首页「下载游戏」的三条链接——**Windows 安装程序**（`Updater.exe`）、Windows 便携版（zip）、安卓版；
 - `data/updates.json`：客户端应用内更新的「平台 + 版本区间」清单，刷新两个平台兜底区间的 latest/url/size/sha256 与 Windows 的 `updater_url`（手工写的更新日志 `notes`、`minimum`、`guide_url` 与更窄的区间条目都保留）。
 
-可加 `--dry-run` 只打包并打印计划（不联网、不改配置）、`--skip-zip` 复用已有压缩包、`--no-downloads` / `--no-updates` 分别跳过两处配置刷新、`--no-updater` 不上传安装程序、`--env <路径>` 换配置文件。
+**对象键一律带版本号**（`releases/app-release-1.0.11.apk`、`releases/Updater-1.0.11.exe`）：实测 `s3.tkcloud.online` 会把同名对象缓存在边缘（GET 命中缓存、HEAD 不命中，且缓存键忽略 query），复用同一个键会让客户端与更新器下到上一版的旧包——发布后校验因此**用真实 GET 回读对外地址**比对总长度，对不上直接判失败。注意该校验必须显式带 UA：该域名会把 `Python-urllib/*` 直接 403。
+
+可加 `--dry-run` 只打包并打印计划（不联网、不改配置）、`--skip-zip` 复用已有压缩包、`--skip-upload` 复用已上传的对象只做校验与配置刷新、`--no-downloads` / `--no-updates` 分别跳过两处配置刷新、`--no-updater` 不上传安装程序、`--env <路径>` 换配置文件。
 
 上传用 AWS Signature V4，只用 Python 标准库（`hmac`/`hashlib`/`urllib`），不新增依赖；同名的进程环境变量优先于 `package-release.env`。密钥需要该桶的写权限，`S3_PUBLIC_BASE` 对应的域名需要能匿名读取（R2 自定义域或公开桶）；配置缺项或仍是 `*` 占位符时脚本直接报错退出，不会上传半截。
 
@@ -238,7 +240,14 @@ package-release.cmd
 - `notes` 是 Markdown，客户端在更新弹窗里渲染；`guide_url` 非空时多一个「打开网页」按钮；`url` 留空时只引导网页。
 - `size` / `sha256` / `updater_url` 由 `package-release.cmd`（`tools/package-release.py` + `tools/update_manifest.py`）自动刷新（只更新该平台「没有区间边界」的那条兜底区间，手工写的 `title` / `notes` / `minimum` / `guide_url` 与更窄的区间条目都保留）。
 
-Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，由它「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限静默替换程序 → 自动重启客户端，全程无需 UAC。`Updater.exe` 是**独立发布产物**（网页首页的「Windows 安装程序」，也是首次安装入口）：无参数启动时是安装器（检测已有安装 → 输入后端地址 → 下载安装 → 写注册表与卸载入口），`--uninstall` 是卸载引导；所有功能都有对应命令行参数，参数足够时零交互，且它不删除自己。
+Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，由它「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限静默替换程序 → 自动重启客户端，全程无需 UAC。
+
+`Updater.exe` 是**独立发布产物**（网页首页的「Windows 安装程序」，也是首次安装入口）。它的向导给两个选择：
+
+- **安装**（推荐）：填服务器地址与目录即下载安装，并创建快捷方式——**开始菜单**组一定创建，里面是「魔法裁判」与「卸载魔法裁判」（后者就是带 `--uninstall` 参数的更新器）；**桌面**快捷方式默认也建，可以在向导里取消勾选（命令行用 `--no-desktop-shortcut`）。同时写入注册表安装信息（含「应用和功能」里的卸载入口）并准备好应用内静默更新。
+- **仅下载便携版**：只把整包解压到指定目录，不写注册表、不建快捷方式、也不装更新组件；换机器直接拷走整个文件夹即可。命令行是 `--install --portable`。
+
+检测到已经装过时可以先选「更新到最新」「下载便携版」「卸载」或「退出」。`--uninstall` 是卸载引导，会一并删掉开始菜单与桌面的快捷方式、注册表键与计划任务，但不会删除 `Updater.exe` 自己。所有功能都有对应命令行参数（`--install --from <地址> [--dir <目录>] [--silent] [--portable] [--to-program-files] [--no-desktop-shortcut]`、`--update-app`、`--prepare`、`--task-entry`、`--uninstall`、`--check-install`），参数足够时零交互。
 
 安卓客户端的更新流程：下载 APK 到应用缓存目录（同版本只下一次）→ 经 FileProvider 交给系统安装器 → 安装完成或失败后清理残留安装包。
 

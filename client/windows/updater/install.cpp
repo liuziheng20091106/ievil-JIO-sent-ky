@@ -100,7 +100,10 @@ bool VerifyPackage(const std::wstring& path, const PackageRef& reference, std::w
   if (reference.size > 0) {
     const unsigned long long actual = FileSizeOf(path);
     if (actual != static_cast<unsigned long long>(reference.size)) {
-      *error = Format(L"更新包大小不符：期望 %lld 字节，实际 %llu 字节",
+      // 实测 CDN 会把同名旧对象缓存住（GET 命中缓存、HEAD 不命中），
+      // 所以这里点明「可能是缓存了旧文件」，让用户/运维知道该换对象名或清缓存。
+      *error = Format(L"更新包大小不符：期望 %lld 字节，实际 %llu 字节"
+                      L"（可能是 CDN 缓存了旧文件，请稍后重试）",
                       reference.size, actual);
       return false;
     }
@@ -113,7 +116,9 @@ bool VerifyPackage(const std::wstring& path, const PackageRef& reference, std::w
       return false;
     }
     if (!HexEqualI(actual, WideToUtf8(reference.sha256))) {
-      *error = Format(L"更新包校验失败：期望 %s，实际 %hs", reference.sha256.c_str(), actual.c_str());
+      *error = Format(L"更新包校验失败：期望 %s，实际 %hs"
+                      L"（可能是 CDN 缓存了旧文件，请稍后重试）",
+                      reference.sha256.c_str(), actual.c_str());
       return false;
     }
   }
@@ -402,12 +407,15 @@ bool LaunchApplication(const std::wstring& exePath, const std::wstring& workingD
 
 int RunInstall(const Options& options, const ProgressSink* progress) {
   Options effective = options;
+  // 便携版：只把整包解压到目标目录，不写注册表、不建快捷方式、不装证书与计划任务。
+  const bool portable = effective.portable;
   if (effective.dir.empty()) {
     effective.dir = effective.toProgramFiles ? JoinPath(ProgramFilesDir(), kProductDirName)
                                              : CurrentDirectory();
   }
   effective.dir = TrimTrailingSlash(effective.dir);
-  ReportProgress(progress, 0, Format(L"安装目录：%s", effective.dir.c_str()));
+  ReportProgress(progress, 0,
+                 Format(portable ? L"便携版目录：%s" : L"安装目录：%s", effective.dir.c_str()));
 
   if (!IsProcessElevated() && !DirectoryIsWritable(effective.dir)) {
     ReportProgress(progress, 0, L"目标目录需要管理员权限，正在请求提权");
@@ -465,7 +473,14 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
     }
   }
   DeleteTree(staging, L"", &ignored);
-  ReportProgress(progress, 80, L"文件已就位");
+  ReportProgress(progress, 80, portable ? L"文件已就位（便携版）" : L"文件已就位");
+
+  if (portable) {
+    // 便携版到此为止：不做系统集成，也不启动程序（用户自己决定放哪、什么时候开）。
+    ReportProgress(progress, 100, Format(L"便携版已下载到 %s，可直接运行 %s",
+                                         effective.dir.c_str(), kAppExeName));
+    return kExitOk;
+  }
 
   const std::wstring targetUpdater = JoinPath(effective.dir, kUpdaterExeName);
   const std::wstring selfPath = ExePath();
@@ -491,6 +506,18 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
     return kExitFailure;
   }
   ReportProgress(progress, 90, L"已写入注册表安装信息");
+
+  // 开始菜单快捷方式必建（含「卸载魔法裁判」入口，它就是带 --uninstall 的更新器）；
+  // 桌面快捷方式按用户的选择。创建失败不影响程序可用，只记录并提示。
+  std::wstring shortcutError;
+  if (!CreateShortcuts(effective.dir, targetUpdater, effective.desktopShortcut, &shortcutError)) {
+    LogError(shortcutError);
+    ReportProgress(progress, 92, Format(L"快捷方式创建失败：%s", shortcutError.c_str()));
+  } else {
+    ReportProgress(progress, 92, effective.desktopShortcut
+                                     ? L"已创建开始菜单与桌面快捷方式"
+                                     : L"已创建开始菜单快捷方式（含卸载入口）");
+  }
 
   Options prepareOptions = effective;
   prepareOptions.command = L"prepare";
@@ -639,7 +666,14 @@ int RunUninstall(const Options& options, const ProgressSink* progress) {
     }
   }
 
-  ReportProgress(progress, 80, L"正在清理注册表与计划任务");
+  ReportProgress(progress, 80, L"正在清理快捷方式、注册表与计划任务");
+  // 快捷方式指向的 exe 已经被删掉了，这里必须把开始菜单与桌面的 .lnk 一并清掉，
+  // 否则开始菜单里会留下点不开的死链接。
+  std::wstring shortcutError;
+  if (!RemoveShortcuts(&shortcutError)) {
+    LogError(shortcutError);
+    ++failures;
+  }
   std::wstring registryError;
   if (!DeleteRegistryInstall(&registryError)) {
     LogError(registryError);

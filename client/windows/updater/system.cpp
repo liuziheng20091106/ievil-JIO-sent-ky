@@ -1,5 +1,8 @@
 #include "system.h"
 
+#include <objbase.h>
+#include <shlobj.h>
+#include <shobjidl.h>
 #include <tlhelp32.h>
 #include <wincrypt.h>
 
@@ -558,6 +561,155 @@ bool DirectoryIsWritable(const std::wstring& dir) {
   }
   ::CloseHandle(file);
   return true;
+}
+
+// ==== 快捷方式 ====
+
+namespace {
+
+// 已知文件夹路径（桌面、开始菜单程序组…）；失败返回空串。
+std::wstring KnownFolderPath(REFKNOWNFOLDERID id) {
+  PWSTR raw = nullptr;
+  if (FAILED(::SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, nullptr, &raw)) || raw == nullptr) {
+    return std::wstring();
+  }
+  std::wstring path(raw);
+  ::CoTaskMemFree(raw);
+  return path;
+}
+
+// 写一个 .lnk；可能在工作线程里调用，所以在本线程按需初始化 COM。
+bool WriteShortcut(const std::wstring& linkPath, const std::wstring& target,
+                   const std::wstring& arguments, const std::wstring& workingDirectory,
+                   const std::wstring& description, std::wstring* error) {
+  const HRESULT initialized = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const bool uninit = SUCCEEDED(initialized);
+  if (!uninit && initialized != RPC_E_CHANGED_MODE) {
+    *error = Format(L"初始化 COM 失败：0x%08X", static_cast<unsigned int>(initialized));
+    return false;
+  }
+
+  IShellLinkW* link = nullptr;
+  HRESULT result =
+      ::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
+                         reinterpret_cast<void**>(&link));
+  bool ok = false;
+  if (SUCCEEDED(result) && link != nullptr) {
+    link->SetPath(target.c_str());
+    link->SetArguments(arguments.c_str());
+    link->SetDescription(description.c_str());
+    // 图标直接用目标程序自己的（没有独立图标资源）。
+    link->SetIconLocation(target.c_str(), 0);
+    if (!workingDirectory.empty()) {
+      link->SetWorkingDirectory(workingDirectory.c_str());
+    }
+    IPersistFile* file = nullptr;
+    result = link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&file));
+    if (SUCCEEDED(result) && file != nullptr) {
+      ok = SUCCEEDED(file->Save(linkPath.c_str(), TRUE));
+      if (!ok) {
+        *error = Format(L"写入快捷方式失败：%s", linkPath.c_str());
+      }
+      file->Release();
+    } else {
+      *error = L"无法保存快捷方式（IPersistFile 不可用）";
+    }
+    link->Release();
+  } else {
+    *error = Format(L"创建快捷方式对象失败：0x%08X", static_cast<unsigned int>(result));
+  }
+  if (uninit) {
+    ::CoUninitialize();
+  }
+  return ok;
+}
+
+}  // namespace
+
+std::wstring StartMenuFolder() {
+  const std::wstring programs = KnownFolderPath(FOLDERID_Programs);
+  if (programs.empty()) {
+    return std::wstring();
+  }
+  return JoinPath(programs, kDisplayName);
+}
+
+std::wstring StartMenuAppShortcutPath() {
+  const std::wstring folder = StartMenuFolder();
+  return folder.empty() ? std::wstring() : JoinPath(folder, std::wstring(kDisplayName) + L".lnk");
+}
+
+std::wstring StartMenuUninstallShortcutPath() {
+  const std::wstring folder = StartMenuFolder();
+  return folder.empty() ? std::wstring()
+                        : JoinPath(folder, std::wstring(L"卸载") + kDisplayName + L".lnk");
+}
+
+std::wstring DesktopShortcutPath() {
+  const std::wstring desktop = KnownFolderPath(FOLDERID_Desktop);
+  return desktop.empty() ? std::wstring() : JoinPath(desktop, std::wstring(kDisplayName) + L".lnk");
+}
+
+bool CreateShortcuts(const std::wstring& installDir, const std::wstring& updaterPath, bool desktop,
+                     std::wstring* error) {
+  const std::wstring folder = StartMenuFolder();
+  if (folder.empty()) {
+    *error = L"无法定位开始菜单目录";
+    return false;
+  }
+  std::wstring directoryError;
+  if (!EnsureDir(folder, &directoryError)) {
+    *error = directoryError;
+    return false;
+  }
+
+  // 开始菜单是必选：程序入口 + 卸载入口（卸载入口就是带 --uninstall 的更新器）。
+  const std::wstring appExe = JoinPath(installDir, kAppExeName);
+  const std::wstring updater =
+      updaterPath.empty() ? JoinPath(installDir, kUpdaterExeName) : updaterPath;
+  if (!WriteShortcut(StartMenuAppShortcutPath(), appExe, L"", installDir, kDisplayName, error)) {
+    return false;
+  }
+  if (!WriteShortcut(StartMenuUninstallShortcutPath(), updater, L"--uninstall", installDir,
+                     L"卸载魔法裁判", error)) {
+    return false;
+  }
+
+  if (desktop) {
+    const std::wstring link = DesktopShortcutPath();
+    if (link.empty()) {
+      *error = L"无法定位桌面目录";
+      return false;
+    }
+    if (!WriteShortcut(link, appExe, L"", installDir, kDisplayName, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool RemoveShortcuts(std::wstring* error) {
+  bool ok = true;
+  const std::wstring links[] = {StartMenuAppShortcutPath(), StartMenuUninstallShortcutPath(),
+                                DesktopShortcutPath()};
+  for (const std::wstring& link : links) {
+    if (link.empty() || !FileExists(link)) {
+      continue;
+    }
+    if (!::DeleteFileW(LongPath(link).c_str())) {
+      ok = false;
+      if (error->empty()) {
+        *error = Format(L"删除快捷方式失败 %s：%s", link.c_str(),
+                        Win32ErrorMessage(::GetLastError()).c_str());
+      }
+    }
+  }
+  // 开始菜单程序组目录：里面只有我们的两个快捷方式，删空后把目录一起删掉。
+  const std::wstring folder = StartMenuFolder();
+  if (!folder.empty() && DirExists(folder) && !::RemoveDirectoryW(LongPath(folder).c_str())) {
+    LogFormat(L"开始菜单目录未能删除（可能还有别的文件）：%s", folder.c_str());
+  }
+  return ok;
 }
 
 std::vector<std::wstring> PersistentDataDirs() {
