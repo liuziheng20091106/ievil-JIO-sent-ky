@@ -55,6 +55,9 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Windows 更新器（安装向导 / 应用内更新 / 卸载）；见 updater/CMakeLists.txt。
+add_subdirectory("updater")
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
@@ -77,6 +80,9 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
+
+# Updater 与主程序同目录，方便整目录打包（package-release.cmd）。
+install(TARGETS Updater RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)

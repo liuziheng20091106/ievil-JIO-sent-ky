@@ -11,15 +11,23 @@
   ]
 }
 ```
+
+另有一个同源分发接口 GET /releases/{文件名}：把 `data/releases/` 里的更新包
+（`魔法裁判Windows.zip`、`app-release.apk`、`Updater.exe`）直接发给客户端，
+应用内更新因此不必依赖局域网共享。`data/updates.json` 里的 `url` 可以写
+`/releases/app-release.apk` 这样的相对路径，也可以写绝对地址。
 """
 
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
-from . import storage
+from . import client_release, storage
 
 router = APIRouter(prefix="/api/downloads")
+
+releases_router = APIRouter(prefix="/releases")
 
 
 def load_downloads():
@@ -46,3 +54,20 @@ def load_downloads():
 @router.get("")
 async def get_downloads():
     return {"downloads": load_downloads()}
+
+
+@releases_router.get("/{name}")
+async def get_release(name: str):
+    """同源下发更新包：只认 `data/releases/` 下的单个文件名，不做目录穿透。
+
+    不需要登录：安卓客户端在更新时可能正好处于登录失效状态，更新不该因此被卡住；
+    这里提供的都是公开分发的安装包，没有对局数据。
+    """
+    path = client_release.release_path(name)
+    if path is None:
+        raise HTTPException(404, "安装包不存在")
+    return FileResponse(
+        path,
+        filename=name,
+        headers={"Cache-Control": "private, no-store"},
+    )

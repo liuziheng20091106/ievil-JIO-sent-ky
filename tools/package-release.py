@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""发布脚本：把 Windows 发行目录打成 zip，与安卓 APK 一起上传到 S3 兼容存储。
+"""发布脚本：把 Windows 发行目录打成 zip，与安卓 APK、更新器一起上传到 S3 兼容存储。
 
 配置写在仓库根目录的 `package-release.env`（dotenv 写法、UTF-8、不入库，
 模板见 `package-release.env`），进程环境变量优先于该文件，便于临时覆盖。
 
 上传使用 AWS Signature V4，只用标准库（hmac/hashlib/urllib），不引入新依赖；
 兼容 Cloudflare R2（region 填 `auto`）、MinIO 等任何 S3 兼容端点。上传完成后
-逐个回读远端对象核对大小与 ETag，最后把网页首页要用的下载链接写进
-`data/downloads.json`（保留文件里其它条目）。
+逐个回读远端对象核对大小与 ETag，最后写两处后端下发的配置：
+
+- `data/downloads.json`：网页首页「下载游戏」的两条链接；
+- `data/updates.json`：客户端应用内更新的「平台 + 版本区间」清单（见
+  `tools/update_manifest.py`），刷新每个平台兜底区间的 latest/url/size/sha256。
 
 用法：
 
-    package-release.cmd                     # 打包 + 上传 + 校验 + 更新下载链接
+    package-release.cmd                     # 打包 + 上传 + 校验 + 更新下载与更新清单
     package-release.cmd --dry-run           # 只打包并打印将上传的对象，不联网
     package-release.cmd --skip-zip          # 复用已有 zip，只做上传
+    package-release.cmd --no-updater        # 不上传 Updater.exe
+    package-release.cmd --no-updates        # 不刷新 data/updates.json
     .venv\\Scripts\\python.exe tools\\package-release.py --help
 """
 
@@ -33,17 +38,28 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# 同目录的 update_manifest.py：直接运行本脚本时 sys.path[0] 就是 tools/，
+# 但被别的入口（例如检查脚本）importlib 加载时不一定，这里显式补一次。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import update_manifest  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 
 WINDOWS_RELEASE = ROOT / "client" / "build" / "windows" / "x64" / "runner" / "Release"
 WINDOWS_EXE = WINDOWS_RELEASE / "seven_double_client.exe"
 WINDOWS_ZIP = WINDOWS_RELEASE / "魔法裁判Windows.zip"
+UPDATER = WINDOWS_RELEASE / "Updater.exe"
 APK = ROOT / "client" / "build" / "app" / "outputs" / "flutter-apk" / "app-release.apk"
 DEFAULT_ENV_FILE = ROOT / "package-release.env"
 
-# 网页首页「下载游戏」里两项的名字，与 data/downloads.json 里的 name 对应。
-WINDOWS_LABEL = "Windows 版"
+# 网页首页「下载游戏」的条目名，与 data/downloads.json 里的 name 对应。
+# Windows 安装程序（Updater.exe）是**独立发布产物**：双击运行、填服务器地址即自动下载
+# 安装最新版本，装完自带静默更新与卸载入口；便携版是解压即用的整包。
+WINDOWS_INSTALLER_LABEL = "Windows 安装程序"
+WINDOWS_LABEL = "Windows 便携版"
 ANDROID_LABEL = "安卓版"
+# 以前用过、现在还可能在 data/downloads.json 里的名字：发布时一并替换，避免网页出现重复项。
+LEGACY_DOWNLOAD_LABELS = ("Windows 版",)
 
 REQUIRED_KEYS = ("S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET")
 DEFAULTS = {
@@ -374,7 +390,11 @@ def public_url(values: dict, key: str) -> str:
 
 
 def update_downloads(path: Path, entries: list[dict]) -> None:
-    """把网页首页的两条下载链接写进 data/downloads.json，保留其它手工条目。"""
+    """把网页首页的下载链接写进 data/downloads.json，保留其它手工条目。
+
+    本次写入的名字连同 [LEGACY_DOWNLOAD_LABELS] 里改名前的老名字一起替换掉，
+    这样升级到「安装程序 + 便携版」的新结构后网页不会同时列出新旧两套链接。
+    """
     existing = []
     if path.exists():
         try:
@@ -384,10 +404,16 @@ def update_downloads(path: Path, entries: list[dict]) -> None:
         except (OSError, ValueError) as error:
             raise ReleaseError(f"{path} 不是合法的 JSON，未改动：{error}") from error
     names = {entry["name"] for entry in entries}
-    merged = [item for item in existing if item.get("name") not in names] + entries
+    merged = [
+        item
+        for item in existing
+        if item.get("name") not in names and item.get("name") not in LEGACY_DOWNLOAD_LABELS
+    ] + entries
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps({"downloads": merged}, ensure_ascii=False, indent=2) + "\n"
     path.write_text(payload, encoding="utf-8")
+    for entry in entries:
+        log(f"  下载项 {entry['name']} → {entry['url']}")
     log(f"已更新下载链接 {path}")
 
 
@@ -399,12 +425,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="只打包并打印计划，不联网、不改配置")
     parser.add_argument("--skip-zip", action="store_true", help="跳过打包，直接复用已有 zip")
     parser.add_argument("--no-downloads", action="store_true", help="不更新 data/downloads.json")
+    parser.add_argument("--no-updater", action="store_true", help="不上传 Updater.exe")
+    parser.add_argument("--no-updates", action="store_true", help="不刷新 data/updates.json")
     parser.add_argument("--data-dir", type=Path, default=None, help="data 目录（默认 GAME_DATA_DIR 或 ./data）")
     args = parser.parse_args(argv)
 
     values = load_env(args.env)
     data_dir = args.data_dir or Path(os.environ.get("GAME_DATA_DIR") or (ROOT / "data"))
     downloads_path = data_dir / "downloads.json"
+    updates_path = data_dir / "updates.json"
 
     log(f"发布配置：{args.env}")
     try:
@@ -419,6 +448,11 @@ def main(argv: list[str] | None = None) -> int:
             raise ReleaseError(
                 f"缺少安卓发行 APK {APK}\n请先执行 flutter build apk --release --target-platform android-arm64"
             )
+        if not args.no_updater and not UPDATER.exists():
+            raise ReleaseError(
+                f"缺少 Windows 更新器 {UPDATER}\n它随 flutter build windows --release 一起构建；"
+                "确实不需要时用 --no-updater 跳过"
+            )
 
         if args.skip_zip:
             if not WINDOWS_ZIP.exists():
@@ -429,20 +463,29 @@ def main(argv: list[str] | None = None) -> int:
         log(f"  压缩后 {human(WINDOWS_ZIP.stat().st_size)}")
 
         prefix = values["S3_PREFIX"].strip("/")
-        targets = [
-            (WINDOWS_ZIP, f"{prefix}/{WINDOWS_ZIP.name}" if prefix else WINDOWS_ZIP.name),
-            (APK, f"{prefix}/{APK.name}" if prefix else APK.name),
+
+        def key_for(name: str) -> str:
+            return f"{prefix}/{name}" if prefix else name
+
+        uploads = [
+            (WINDOWS_ZIP, key_for(WINDOWS_ZIP.name)),
+            (APK, key_for(APK.name)),
         ]
+        if args.no_updater:
+            log("--no-updater：本次不上传 Updater.exe")
+        else:
+            uploads.append((UPDATER, key_for(UPDATER.name)))
 
         if args.dry_run:
-            log("\n--dry-run：不会上传，也不会改动 downloads.json")
-            for local, key in targets:
+            log("\n--dry-run：不会上传，也不会改动 downloads.json / updates.json")
+            for local, key in uploads:
                 log(f"  将上传 {local}（{human(local.stat().st_size)}）→ {key}")
                 log(f"    对外地址 {public_url(values, key)}")
+            log(f"  将刷新 {updates_path}（客户端版本 {update_manifest.client_version()}）")
             return 0
 
         log(f"\n上传到 {values['S3_ENDPOINT']} 的 bucket {values['S3_BUCKET']} …")
-        uploaded = [upload(values, local, key) for local, key in targets]
+        uploaded = [upload(values, local, key) for local, key in uploads]
 
         log("\n回读校验：")
         problems = verify_remote(values, uploaded)
@@ -452,19 +495,66 @@ def main(argv: list[str] | None = None) -> int:
         if args.no_downloads:
             log("\n--no-downloads：跳过 data/downloads.json")
         else:
-            update_downloads(
-                downloads_path,
-                [
-                    {"name": WINDOWS_LABEL, "url": public_url(values, targets[0][1])},
-                    {"name": ANDROID_LABEL, "url": public_url(values, targets[1][1])},
-                ],
+            download_entries = []
+            if not args.no_updater:
+                download_entries.append(
+                    {
+                        "name": WINDOWS_INSTALLER_LABEL,
+                        "url": public_url(values, key_for(UPDATER.name)),
+                        "note": "双击运行，填入服务器地址即可自动安装最新版本；装好后自带静默更新与卸载入口。",
+                    }
+                )
+            download_entries.append(
+                {
+                    "name": WINDOWS_LABEL,
+                    "url": public_url(values, key_for(WINDOWS_ZIP.name)),
+                    "note": "解压即用，不含安装程序；同样支持应用内更新。",
+                }
             )
-    except ReleaseError as error:
+            download_entries.append(
+                {
+                    "name": ANDROID_LABEL,
+                    "url": public_url(values, key_for(APK.name)),
+                    "note": "下载后直接安装；应用内可自动更新。",
+                }
+            )
+            update_downloads(downloads_path, download_entries)
+
+        if args.no_updates:
+            log("\n--no-updates：跳过 data/updates.json")
+        else:
+            # 应用内更新清单：只刷新两个平台兜底区间的下载信息与版本号，
+            # 手工写的更新日志（notes）、minimum、guide_url 与更窄的区间条目都保留。
+            version = update_manifest.client_version()
+            windows_entry = {
+                "platform": "windows",
+                "url": public_url(values, key_for(WINDOWS_ZIP.name)),
+                "size": WINDOWS_ZIP.stat().st_size,
+                "sha256": sha256_file(WINDOWS_ZIP),
+            }
+            if not args.no_updater:
+                windows_entry["updater_url"] = public_url(values, key_for(UPDATER.name))
+            log(f"\n刷新应用内更新清单（客户端版本 {version}）：")
+            update_manifest.refresh_manifest(
+                updates_path,
+                version,
+                [
+                    windows_entry,
+                    {
+                        "platform": "android",
+                        "url": public_url(values, key_for(APK.name)),
+                        "size": APK.stat().st_size,
+                        "sha256": sha256_file(APK),
+                    },
+                ],
+                log=log,
+            )
+    except (ReleaseError, update_manifest.ManifestError) as error:
         log(f"\n发布失败：{error}")
         return 1
 
     log("\n已发布到 S3：")
-    for _, key in targets:
+    for _, key in uploads:
         log(f"  {public_url(values, key)}")
     return 0
 

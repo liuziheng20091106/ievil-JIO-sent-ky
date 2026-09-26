@@ -185,6 +185,67 @@ void main() {
     api.close();
   });
 
+  test('history list and detail hit the history endpoints', () async {
+    final api = GameApi(endpoint, token: 'token-abc');
+    body = {
+      'matches': [
+        {
+          'id': 'game-1',
+          'ended_at': '2026-09-26T02:00:00+00:00',
+          'day': 3,
+          'winner': 'witch',
+          'reason': '米莉亚与亚里沙均出局',
+          'source': 'ended',
+          'host_name': '主持人(阿雪)',
+          'player_count': 2,
+          'players': [
+            {
+              'participant_id': 'p1',
+              'name': 'kiwi',
+              'kind': 'player',
+              'seat_id': '1',
+              'role_ids': ['marg', 'sherry'],
+              'active': true,
+              'blocked': false,
+            },
+          ],
+        },
+      ],
+      'has_more': true,
+    };
+    final page = await api.history(before: '2026-09-26T03:00:00+00:00', limit: 5);
+    expect(calls.last, 'GET /api/history?limit=5&before=2026-09-26T03%3A00%3A00%2B00%3A00');
+    expect(page.hasMore, isTrue);
+    expect(page.matches.single.winner, 'witch');
+    expect(page.matches.single.players.single.roleIds, ['marg', 'sherry']);
+
+    body = {
+      'id': 'game-1',
+      'ended_at': '2026-09-26T02:00:00+00:00',
+      'day': 3,
+      'winner': 'witch',
+      'reason': '米莉亚与亚里沙均出局',
+      'source': 'ended',
+      'host_name': '主持人(阿雪)',
+      'players': <dynamic>[],
+      'events': [
+        {
+          'seq': 0,
+          'kind': 'chat',
+          'sender_name': 'kiwi',
+          'avatar_role_id': 'marg',
+          'text': '公屏上说过的话',
+          'created_at': '2026-09-26T01:30:00+00:00',
+        },
+      ],
+    };
+    final detail = await api.match('game-1');
+    expect(calls.last, 'GET /api/history/game-1');
+    expect(detail.match.winner, 'witch');
+    expect(detail.events.single.text, '公屏上说过的话');
+    api.close();
+  });
+
   test('live connection carries the bearer token and forwards events',
       () async {
     final events = <Map<String, dynamic>>[];

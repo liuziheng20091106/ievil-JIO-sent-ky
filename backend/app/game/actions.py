@@ -11,6 +11,7 @@ from .catalog import (
 )
 from .resolution import coco_seat, target_allowed, treasure_protected
 from .state import (
+    ballot_complete,
     can_use_card,
     card_actionable,
     controlled_cards,
@@ -22,12 +23,17 @@ from .state import (
     hanna_witch_window,
     living,
     lost_by_challenge,
-    pending_nominators,
+    nomination_auto_yes,
+    nomination_rounds,
     owner,
+    pending_nominators,
     player_seat,
     present,
     role_card,
     seat,
+    seat_choice,
+    seat_label,
+    seat_name,
     seat_operable,
 )
 
@@ -198,11 +204,28 @@ def action(action_id, label, fields=(), payload=None, group="行动", short_labe
 
 
 def seat_options(game, alive=True):
+    """席位选项：局内用当前展示的角色卡标识（含示人身份），候场退回公开称呼。"""
     return [
-        (s["id"], f"{s['id']}号 · {s['name']}")
+        (s["id"], seat_label(game, s))
         for s in game["seats"]
         if not alive or current(game, s)
     ]
+
+
+def seat_field(name, label, game, alive=True, options=None, kind="select", **extra):
+    """选席位的字段：额外标记 options_kind，客户端据此渲染「头像 + 座位号 + 角色名」。
+
+    额外键对旧客户端无副作用（它们只读 name/label/type/required/options/default），
+    所以这不会要求玩家升级，老端只是少一个头像。
+    """
+    return field(
+        name,
+        label,
+        kind,
+        seat_options(game, alive) if options is None else options,
+        options_kind="seat",
+        **extra,
+    )
 
 
 def role_options():
@@ -255,7 +278,9 @@ def outstanding_seats(game):
     elif phase == "nomination":
         result = pending_nominators(game)
     elif phase == "voting":
-        result = [s["id"] for s in eligible_voters(game) if s["id"] not in game["votes"]]
+        result = [
+            s["id"] for s in eligible_voters(game) if not ballot_complete(game, s["id"])
+        ]
     elif phase == "execution":
         result = [
             owner(game, cid)["id"]
@@ -272,6 +297,32 @@ def outstanding_seats(game):
     return list(dict.fromkeys(result))
 
 
+def discussion_present_seats(game):
+    """自由发言阶段能提交结束请求的席位：当前牌可行动、死透了的不算。"""
+    return [
+        s["id"] for s in game["seats"] if card_actionable(game, current(game, s))
+    ]
+
+
+def discussion_end_required(game):
+    """结束自由发言所需的提交人数。
+
+    满编时仍是六个不同席位；在场可行动席位不足六人（有人出局、傀儡无人代行等）
+    时改为「全员提交即可」，否则进度条永远停在 n/6、阶段只能等主持人推。
+    """
+    present = discussion_present_seats(game)
+    return min(DISCUSSION_END_VOTES, len(present)) if present else DISCUSSION_END_VOTES
+
+
+def discussion_end_reached(game):
+    """在场席位是否已提交够结束请求；只数得上的当前可行动席位才算。"""
+    present = discussion_present_seats(game)
+    if not present:
+        return False
+    submitted = set(game.get("discussion_end_requests", [])) & set(present)
+    return len(submitted) >= discussion_end_required(game)
+
+
 def target_field(game, night=False, exclude=None, avoid_treasure=False):
     return field(
         "target",
@@ -284,6 +335,7 @@ def target_field(game, night=False, exclude=None, avoid_treasure=False):
             and (not night or target_allowed(game, current(game, sid)["id"]))
             and (not avoid_treasure or not treasure_protected(game, current(game, sid)["id"]))
         ],
+        options_kind="seat",
     )
 
 
@@ -427,6 +479,7 @@ def pending_action(game, item):
                 "未公开时的接收席位",
                 "multiselect",
                 seat_options(game, False),
+                options_kind="seat",
                 required=False,
             ),
             field("allow", "准许发布（不勾选为拒绝）", "checkbox", required=False, default=True),
@@ -527,7 +580,7 @@ def host_actions(game):
         action(
             "host.water",
             "私下交付唯一13水",
-            [field("seat_id", "持有者", "select", seat_options(game, False))],
+            [seat_field("seat_id", "持有者", game, alive=False)],
             group="私密管理",
         )
     )
@@ -576,6 +629,7 @@ def host_actions(game):
                                 for sid, label in seat_options(game, False)
                                 if sid in outstanding
                             ],
+                            options_kind="seat",
                             required=False,
                         ),
                         field("all", "警告当前全部卡住的席位", "checkbox", required=False),
@@ -590,11 +644,10 @@ def host_actions(game):
                     "host.speech",
                     "安排顺序发言",
                     [
-                        field(
+                        seat_field(
                             "start",
                             "从谁开始（通常为死者）",
-                            "select",
-                            seat_options(game),
+                            game,
                             default=speech_start(game),
                         ),
                         field(
@@ -686,11 +739,12 @@ def host_actions(game):
                         field("text", "正文", "textarea", required=False),
                         field("image", "附图", "drawing", required=False),
                         field("public", "全员公开", "checkbox", required=False),
-                        field(
+                        seat_field(
                             "recipients",
                             "私密接收席位",
-                            "multiselect",
-                            seat_options(game, False),
+                            game,
+                            alive=False,
+                            kind="multiselect",
                             required=False,
                         ),
                     ],
@@ -700,7 +754,7 @@ def host_actions(game):
                     "host.madness",
                     "发起疯狂行为裁定",
                     [
-                        field("seat_id", "席位", "select", seat_options(game, False)),
+                        seat_field("seat_id", "席位", game, alive=False),
                         field("reason", "需裁定的行为", "textarea"),
                     ],
                     group="裁决",
@@ -811,13 +865,90 @@ def puppet_action_panels(game, controller):
             # 加了前缀会让两个客户端都判定协议不符并整体禁用傀儡面板。
             item["label"] = f"*{item['label']}"
             item["as_seat"] = target["id"]
+            # 说明保留原行动自己的内容：投票这类行动的说明里有门槛与决斗要求，
+            # 整条替换会把规则信息一起丢掉。
+            original = item.get("description", "")
             item["description"] = (
-                f"傀儡视角 · {target['id']}号 · {target['name']}；"
+                f"傀儡视角 · {target['id']}号 · {seat_name(game, target)}；"
                 "由你代为执行，仍按该席位的角色与状态结算。"
+                + (f"\n{original}" if original else "")
             )
             actions.append(item)
-        panels.append({"seat_id": target["id"], "name": target["name"], "actions": actions})
+        panels.append(
+            {
+                "seat_id": target["id"],
+                "name": seat_name(game, target),
+                "actions": actions,
+            }
+        )
     return panels
+
+
+VOTE_CHOICES = (("yes", "同意"), ("no", "不同意"), ("abstain", "弃票"))
+
+
+def vote_action(game, sid, rounds, rows):
+    """一次性投票：每个候选一行，玩家一次决定完同意/不同意/弃票。
+
+    字段名就是角色牌 id，所以提交上来的 payload 是 ``{角色牌: 选择}``；每行额外带
+    ``seat_id``（客户端据此画出该席的头像与角色名）、可选的 ``note`` 标签，以及
+    ``duel``（模拟器据此保证决斗日至少同意一张）。这些额外键对旧客户端无副作用。
+    """
+    voters = len(eligible_voters(game))
+    duel = duel_cards(game)
+    card = current(game, sid)
+    bound_sherry = bool(
+        game["spiritual"]["sherry_bound"] and card and card["id"] == "sherry"
+    )
+    fields = []
+    for item in rows:
+        card_id = item["card_id"]
+        row = seat(game, item["seat_id"])
+        label = seat_label(game, row)
+        note = ""
+        extra = {"seat_id": item["seat_id"]}
+        if nomination_auto_yes(game, sid, card_id):
+            options, extra["default"], note = [("yes", "同意")], "yes", "提名自动同意"
+        elif bound_sherry and card_id == "hanna":
+            options, note = [("no", "不同意"), ("abstain", "弃票")], "绑定汉娜：不能同意"
+        else:
+            options = VOTE_CHOICES
+        if card_id in duel:
+            extra["duel"] = True
+            note = f"{note} · 蕾雅决斗" if note else "蕾雅决斗"
+        if note:
+            extra["note"] = note
+        fields.append(field(card_id, label, "select", options, **extra))
+    names = "、".join(seat_label(game, seat(game, item["seat_id"])) for item in rounds)
+    text = (
+        f"本轮共{len(rounds)}名候选：{names}。"
+        f"同意票需严格超过有投票权存活玩家的一半（当前{voters}人，"
+        f"至少{voters // 2 + 1}票）才会通过处决；弃票与不同意都不会通过。"
+        "一次性提交全部候选的选票，提交后本轮不能再改。"
+    )
+    if len(duel) == 2:
+        text += (
+            f"其中{owner(game, duel[0])['id']}号与{owner(game, duel[1])['id']}号是蕾雅决斗的候选，"
+            f"门槛降为半数（至少{(voters + 1) // 2}票）。"
+            + ("今天你必须至少同意其中一张。" if duel_vote_required(game, sid) else "")
+        )
+    if bound_sherry:
+        text += "你是绑定中的雪莉：不能同意处决汉娜。"
+    if len(rows) != len(rounds):
+        # 投票中途新增提名：已经投过的票不再重复，只补新候选。
+        text += f"表单里只列你还没表态的{len(rows)}名候选，已投的票不能改。"
+    lead = seat_label(game, seat(game, rounds[0]["seat_id"]))
+    label = (
+        f"对{lead}投票" if len(rounds) == 1 else f"对{lead}等{len(rounds)}名候选投票"
+    )
+    return action(
+        "vote.cast",
+        label,
+        fields,
+        group="投票",
+        blocking=True,
+        description=text,
+    )
 
 
 def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
@@ -1077,7 +1208,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         result.append(
             action(
                 "discussion.request_end",
-                f"请求结束自由发言（已有{submitted}/{DISCUSSION_END_VOTES}人提交）",
+                f"请求结束自由发言（已有{submitted}/{discussion_end_required(game)}人提交）",
                 group="流程",
             )
         )
@@ -1091,7 +1222,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             action(
                 "vote.nominate",
                 "提名候选",
-                [field("target", "目标", "select", nomination_options)],
+                [field("target", "目标", "select", nomination_options, options_kind="seat")],
                 group="投票",
                 blocking=True,
                 description=NOMINATE_DESCRIPTION,
@@ -1109,50 +1240,22 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             action(
                 "vote.nominate",
                 "提名候选（可提前）",
-                [field("target", "目标", "select", nomination_options)],
+                [field("target", "目标", "select", nomination_options, options_kind="seat")],
                 group="投票",
                 description=NOMINATE_DESCRIPTION,
             )
         )
         result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票"))
-    if phase == "voting" and active_seat in eligible_voters(game) and sid not in game["votes"]:
-        votes = game["public"]["votes"]
-        candidate = votes.get("candidate")
-        name = seat(game, candidate)["name"] if candidate else ""
-        voters = len(eligible_voters(game))
-        duel_seats = {owner(game, cid)["id"] for cid in duel_cards(game)}
-        duel_round = bool(candidate) and candidate in duel_seats
-        forced_choice = duel_vote_required(game, sid)
-        requirement = (
-            "这是蕾雅决斗的候选：同意票达到有投票权存活玩家的一半即可处决"
-            f"（至少{(voters + 1) // 2}票）；今天所有人必须至少同意两张决斗牌之一。"
-            if duel_round
-            else "同意票需严格超过有投票权存活玩家的一半，"
-            f"即至少{voters // 2 + 1}票，候选才会进入处决前响应。"
-        )
-        choices = (
-            [("yes", "同意")]
-            if forced_choice
-            else [("yes", "同意"), ("no", "不同意"), ("abstain", "弃票")]
-        )
-        result.append(
-            action(
-                "vote.cast",
-                f"对{candidate}号 · {name}投票" if candidate else "提交本候选选票",
-                [field("choice", "选票", "select", choices)],
-                group="投票",
-                blocking=True,
-                description=(
-                    f"本轮候选：{candidate}号 · {name}"
-                    f"（第{votes.get('round', 1)}/{votes.get('total', 1)}轮）。"
-                    + requirement
-                    + ("今天你还没同意任何一张决斗牌，本轮只能投同意。" if forced_choice else "")
-                    + "弃票与不同意都不会通过。"
-                    if candidate
-                    else "同意票需严格超过有投票权存活玩家的一半，候选才会进入处决前响应。"
-                ),
-            )
-        )
+    if phase == "voting" and active_seat in eligible_voters(game):
+        # 一次性投票：只要还有候选没表态就给一张完整表单，列表里一定有本轮所有候选
+        # （提名自动同意的行锁成「同意」）；已经交过卷、又因为投票中新增提名被叫回来
+        # 的席位只补新候选，不能改已经投过的票。没有待表态的候选就不给动作。
+        rounds = nomination_rounds(game)[len(game["vote_rounds"]) :]
+        unfilled = [item for item in rounds if seat_choice(game, sid, item["card_id"]) is None]
+        if unfilled:
+            submitted = bool((game.get("ballots") or {}).get(sid))
+            rows = unfilled if submitted else list(rounds)
+            result.append(vote_action(game, sid, rounds, rows))
     if (
         phase == "execution"
         and card
@@ -1239,7 +1342,15 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             result.append(
                 action("evidence.submit", "提交夜间遗留证物", fields, {"card_id": cid}, "证物")
             )
-    result.append(
-        action("player.surrender", "私信主持人申请本阵营交牌", group="私密行动", danger=True)
-    )
+    if card:
+        # 整席出局后不再有交牌请求：已经不在场的人不能再替阵营表态。
+        # 回溯或复活让当前牌重新登场时，这里会自动恢复。
+        result.append(
+            action(
+                "player.surrender",
+                "私信主持人申请本阵营交牌",
+                group="私密行动",
+                danger=True,
+            )
+        )
     return result

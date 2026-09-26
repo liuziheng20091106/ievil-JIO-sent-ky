@@ -9,17 +9,20 @@ from .actions import (
     can_day_ability,
     challengeable,
     day_fake_allowed,
+    discussion_end_reached,
     outstanding_seats,
 )
 from .catalog import (
+    ABILITY_INTRO,
+    ABILITY_NAMES,
     AUTO_ADVANCE_DELAY,
     AUTO_PHASES,
     DAY_ABILITIES,
     DISCUSSION_END_DELAY,
-    DISCUSSION_END_VOTES,
     NIGHT_ABILITIES,
     PHASES,
     POISON_EFFECT_ABILITIES,
+    PUBLIC_TARGET_ABILITIES,
     ROLES,
 )
 from .resolution import (
@@ -54,6 +57,7 @@ from .state import (
     current,
     deal_cards,
     debunked_abilities,
+    display_player_name,
     duel_cards,
     duel_vote_required,
     eligible_voters,
@@ -65,6 +69,8 @@ from .state import (
     living,
     log_event,
     lost_by_challenge,
+    nomination_auto_yes,
+    nomination_rounds,
     pending_nominators,
     notify,
     owner,
@@ -76,6 +82,7 @@ from .state import (
     role_card,
     save_snapshot,
     seat,
+    seat_choice,
     seat_operable,
     uid,
     witch_faction,
@@ -318,40 +325,10 @@ def speech_plan(game, dead_first):
     return ascending if rank(ascending) <= rank(descending) else descending
 
 
-def nomination_rounds(game):
-    """同一张牌被多人提名只投一轮，先提名者排在前面。
-
-    蕾雅决斗当天的两张牌直接排在最前面，不需要任何人提名。
-    """
-    rounds, seen = [], set()
-    for cid in duel_cards(game):
-        seen.add(cid)
-        rounds.append({"seat_id": owner(game, cid)["id"], "card_id": cid, "by": None})
-    for item in game["nominations"]:
-        if item["card_id"] in seen:
-            continue
-        seen.add(item["card_id"])
-        rounds.append(item)
-    return rounds
-
-
-def nomination_votes(game, nominee):
-    """提名过本候选的玩家直接投同意票，省掉一次重复点击。"""
-    voters = {s["id"] for s in eligible_voters(game)}
-    bound = game["spiritual"]["sherry_bound"] and nominee["card_id"] == "hanna"
-    return {
-        item["by"]: "yes"
-        for item in game["nominations"]
-        if item["card_id"] == nominee["card_id"]
-        and item["by"] in voters
-        and not (bound and current(game, item["by"])["id"] == "sherry")
-    }
-
-
 def open_vote(game, events):
     rounds = nomination_rounds(game)
     if duel_cards(game):
-        # 投票一开始就把当天的决斗固定下来：轮次表排定后不再随出局变化。
+        # 投票一开始就把当天的决斗固定下来：候选表排定后不再随出局变化。
         game["duel"]["locked"] = True
     index = len(game["vote_rounds"])
     if index >= len(rounds):
@@ -371,48 +348,34 @@ def open_vote(game, events):
         )
         return
     game["phase"] = "voting"
-    nominee = rounds[index]
-    game["votes"] = nomination_votes(game, nominee)
-    for sid in game["votes"]:
-        notify(
-            game,
-            events,
-            f"{nominee['seat_id']}号就是你先前提名的候选，已按提名自动投票。",
-            [sid],
-            "自动投票",
-        )
     game["public"]["votes"] = {
-        "candidate": nominee["seat_id"],
-        "round": index + 1,
+        "candidates": [
+            {"seat_id": item["seat_id"], "card_id": item["card_id"]} for item in rounds
+        ],
         "total": len(rounds),
         "results": deepcopy(game["vote_rounds"]),
     }
-    notify(
-        game,
-        events,
-        f"开始对{nominee['seat_id']}号候选投票；"
-        + (
-            "这是蕾雅决斗的候选，达到有投票权存活玩家的一半即可处决。"
-            if nominee["card_id"] in duel_cards(game)
-            else "严格超过有投票权存活玩家的一半方可处决。"
-        ),
-        alert=True,
-    )
+    if index == 0:
+        duel = duel_cards(game)
+        notify(
+            game,
+            events,
+            f"开始投票：本轮候选{len(rounds)}名（"
+            + "、".join(f"{item['seat_id']}号" for item in rounds)
+            + "）；同意票需严格超过有投票权存活玩家的一半方可处决"
+            + ("，其中蕾雅决斗的两张牌达到半数即可处决。" if duel else "。"),
+            alert=True,
+        )
 
 
 def close_vote(game, events):
     voters = eligible_voters(game)
-    require(all(s["id"] in game["votes"] for s in voters), "仍有玩家未投票，可先警告")
-    nominee = nomination_rounds(game)[len(game["vote_rounds"])]
-    yes = sum(
-        game["votes"].get(s["id"]) == "yes"
-        and not (
-            game["spiritual"]["sherry_bound"]
-            and current(game, s)["id"] == "sherry"
-            and nominee["card_id"] == "hanna"
-        )
-        for s in voters
-    )
+    rounds = nomination_rounds(game)
+    index = len(game["vote_rounds"])
+    nominee = rounds[index]
+    choices = {s["id"]: seat_choice(game, s["id"], nominee["card_id"]) for s in voters}
+    require(all(choices.values()), "仍有玩家未投票，可先警告")
+    yes = sum(choice == "yes" for choice in choices.values())
     n = len(voters)
     # 蕾雅决斗当天的两张牌门槛降为「恰好达到半数即可通过」（偶数人取一半、奇数人仍需过半），
     # 其他候选仍严格过半；通知里的门槛必须与记录用同一个值。
@@ -507,6 +470,7 @@ def advance(game, events):
         game["queued_reveals"] = []
         game["nominations"] = []
         game["nomination_done"] = []
+        game["ballots"] = {}
         game["vote_rounds"] = []
         game["execution"] = []
         for declaration in game["declarations"]:
@@ -527,7 +491,10 @@ def advance(game, events):
         require(not pending_nominators(game), "仍有玩家未提名或放弃，可警告后等待30秒")
         open_vote(game, events)
     elif phase == "voting":
-        close_vote(game, events)
+        # 选票一次性提交全部候选，推进也一次结算全部候选：逐轮 close_vote 直到离开
+        # 投票阶段，结果同一条命令里一起公布；某一轮缺票时照旧拒绝推进。
+        while game["phase"] == "voting":
+            close_vote(game, events)
     elif phase == "execution":
         awaiting = {
             owner(game, cid)["id"]
@@ -798,6 +765,48 @@ def sync_declarations(game):
         for declaration in game["declarations"]
         if declaration["day"] == game["day"]
     ]
+
+
+def skill_broadcast_payload(game, declaration):
+    """白天技能声明的结构化播报：技能名、介绍、使用者与目标。
+
+    载荷里带的是完整真相（包括伪装声明与私密目标），下发时由
+    :func:`backend.app.storage.project_message_payload` 按收件人裁剪：
+    目标是公开信息（打断、决斗、全场洗脑）或收件人就是声明者/主持人时才给目标；
+    ``fake`` 与牌 id 只给主持人——伪装声明在其他人眼里必须与真声明完全一致。
+    """
+    ability = declaration["ability"]
+    sid = declaration["seat_id"]
+    role_id = DAY_ABILITIES[ability][0]
+    target = declaration["data"].get("target")
+    seat = next((s for s in game["seats"] if s["id"] == sid), None)
+    target_seat = (
+        next((s for s in game["seats"] if s["id"] == str(target)), None) if target else None
+    )
+    return {
+        "type": "skill",
+        "ability": ability,
+        "ability_name": ABILITY_NAMES.get(ability, DAY_ABILITIES[ability][1]),
+        "role_id": role_id,
+        "role_name": ROLES.get(role_id, {}).get("name", role_id),
+        "intro": ABILITY_INTRO.get(ability, ""),
+        "seat_id": sid,
+        "actor_participant_id": (seat or {}).get("occupant_id"),
+        "actor_name": display_player_name((seat or {}).get("name", "")),
+        "challengeable": challengeable(game, declaration),
+        "target_public": ability in PUBLIC_TARGET_ABILITIES,
+        "target": (
+            {
+                "seat_id": target_seat["id"],
+                "name": display_player_name(target_seat["name"]),
+            }
+            if target_seat
+            else None
+        ),
+        # 以下两项只对主持人下发。
+        "fake": bool(declaration.get("fake")),
+        "card_id": declaration["card_id"],
+    }
 
 
 def host_command(game, events, action, data):
@@ -1249,7 +1258,15 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         suffix = (
             "该技能不可质疑。" if ability in {"photo", "love", "gaze"} else "其他玩家可质疑。"
         )
-        notify(game, events, f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，{suffix}", alert=True)
+        # 播报带上结构化载荷：技能名、介绍与目标由 storage.message_view 按收件人裁剪，
+        # 文本保留给不支持载荷的旧客户端与历史搜索。
+        notify(
+            game,
+            events,
+            f"{sid}号声明发动「{DAY_ABILITIES[ability][1]}」，{suffix}",
+            alert=True,
+            payload=skill_broadcast_payload(game, declaration),
+        )
     elif action == "day.challenge":
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])
         require(d["status"] == "open", "该技能声明已结束")
@@ -1371,35 +1388,51 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             {"seat_id": n["seat_id"], "by": n["by"]} for n in game["nominations"]
         ]
         if game["phase"] == "voting":
-            # 投票中新增的提名会多出一轮，立即刷新总轮数，避免显示停在旧值。
-            game["public"]["votes"]["total"] = len(nomination_rounds(game))
+            # 投票中新增的提名多出一个候选：立刻刷新候选表，让还没提交的人
+            # 连同新候选一起补齐选票，已提交的部分不受影响。
+            rounds = nomination_rounds(game)
+            game["public"]["votes"]["candidates"] = [
+                {"seat_id": item["seat_id"], "card_id": item["card_id"]} for item in rounds
+            ]
+            game["public"]["votes"]["total"] = len(rounds)
         notify(game, events, f"{sid}号提名{data['target']}号。")
         game.setdefault("nomination_done", []).append(sid)
     elif action == "vote.pass":
         # 放弃提名不再发系统消息：提名阶段的进度在顶部显示，提交完自动推进。
         game.setdefault("nomination_done", []).append(sid)
     elif action == "vote.cast":
-        target = nomination_rounds(game)[len(game["vote_rounds"])]["card_id"]
+        require(game["phase"] == "voting", "当前不在投票阶段")
         require(
-            not (
-                data["choice"] == "yes"
-                and card["id"] == "sherry"
-                and game["spiritual"]["sherry_bound"]
-                and target == "hanna"
-            ),
-            "雪莉不能同意处决绑定的汉娜",
+            any(s["id"] == sid for s in eligible_voters(game)),
+            "你没有投票权，不能投票",
         )
-        cast = data["choice"]
+        rounds = {item["card_id"]: item for item in nomination_rounds(game)}
+        cast = {}
+        for card_id, choice in data.items():
+            require(card_id in rounds, "候选已变化，请刷新后重新投票")
+            require(choice in {"yes", "no", "abstain"}, "选票无效")
+            if nomination_auto_yes(game, sid, card_id):
+                require(choice == "yes", "你提名过该候选，只能投同意")
+            if (
+                choice == "yes"
+                and card_id == "hanna"
+                and game["spiritual"]["sherry_bound"]
+                and card["id"] == "sherry"
+            ):
+                require(False, "雪莉不能同意处决绑定的汉娜")
+            cast[card_id] = choice
+        require(bool(cast), "没有需要提交的选票")
+        # 决斗当天每个人必须至少同意两张决斗牌之一：一次表单没有先后顺序，
+        # 因此把要求放在提交时校验；雪莉对汉娜的限制优先豁免（duel_vote_required）。
         duel = duel_cards(game)
-        if duel and target in duel:
-            # 决斗当天每个人必须至少同意两张决斗牌之一：第一张没同意的人，
-            # 在第二张上必须投同意。雪莉对汉娜的限制优先豁免。
-            required = duel_vote_required(game, sid)
-            if cast == "yes":
-                game["duel_approvals"][sid] = True
-            elif required:
-                require(False, "今天必须至少同意蕾雅或决斗对象之一")
-        game["votes"][sid] = cast
+        if len(duel) == 2 and duel_vote_required(game, sid):
+            require(
+                any(cast.get(cid) == "yes" for cid in duel),
+                "今天必须至少同意蕾雅或决斗对象之一",
+            )
+        game.setdefault("ballots", {}).setdefault(sid, {}).update(cast)
+        if any(cast.get(cid) == "yes" for cid in duel):
+            game["duel_approvals"][sid] = True
     elif action == "execution.shoot":
         card["uses"]["bullets"] -= 1
         threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
@@ -1551,7 +1584,7 @@ def command_log_text(game, actor, action, data, *, by_host=False):
         raw = game["seats"][int(seat_id) - 1]["name"]
         # 默认称呼就是「N号玩家」时不再重复拼接，只有改过名的才带名字。
         if raw and raw != f"{seat_id}号玩家":
-            name = raw
+            name = display_player_name(raw)
     prefix = f"{who}玩家【{name}】" if name else who
 
     if action == "night.submit":
@@ -1639,12 +1672,12 @@ def apply_command(game, actor, action, payload, *, by_host=False):
 
 
 def discussion_end_ready(game):
-    """自由发言：六个不同席位提交结束请求后即可自动推进。"""
+    """自由发言：在场不足六人时全员提交结束请求后即可自动推进。"""
     return (
         game["status"] == "playing"
         and game["phase"] == "discussion"
         and not game["pending"]
-        and len(game.get("discussion_end_requests", [])) >= DISCUSSION_END_VOTES
+        and discussion_end_reached(game)
     )
 
 
@@ -1720,7 +1753,12 @@ def timeout_seat(game, events, sid):
     elif phase == "nomination" and sid in pending_nominators(game):
         game.setdefault("nomination_done", []).append(sid)
     elif phase == "voting":
-        game["votes"][sid] = "abstain"
+        # 超时＝视为放弃：把还没选的候选全部记成弃票。决斗日「至少同意一张」的
+        # 要求在提交时校验，超时不受它拦住（与强制推进的既有语义一致）。
+        ballot = game.setdefault("ballots", {}).setdefault(sid, {})
+        for item in nomination_rounds(game):
+            if seat_choice(game, sid, item["card_id"]) is None:
+                ballot[item["card_id"]] = "abstain"
     elif phase == "execution":
         if sid not in game["execution_ready"]:
             game["execution_ready"].append(sid)

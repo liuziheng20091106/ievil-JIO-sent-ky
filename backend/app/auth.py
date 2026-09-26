@@ -8,7 +8,7 @@ import secrets
 from fastapi import HTTPException
 
 from . import auth_storage, storage
-from .game.state import host_capable, host_display_name
+from .game.state import display_player_name, host_capable, host_display_name
 
 COOKIE = "seven_double_session"
 
@@ -47,7 +47,7 @@ def account_actor(account):
         "kind": "account",
         "game_id": None,
         "seat_id": None,
-        "name": account["nickname"],
+        "name": display_player_name(account["nickname"]),
         "qq_id": account["qq_id"],
         "avatar_url": account["avatar_url"],
         "access_ids": [account["id"]],
@@ -82,7 +82,7 @@ def host_actor(account, db, game_id=None, *, entered=True):
         "seat_id": None,
         "name": host_display_name(account["nickname"]),
         # 等级与展示名之外，客户端只再需要 QQ 昵称本身（授权页与通告文案）。
-        "nickname": account["nickname"],
+        "nickname": display_player_name(account["nickname"]),
         "qq_id": account["qq_id"],
         "avatar_url": account["avatar_url"],
         "host_level": host_level(account),
@@ -129,7 +129,11 @@ def actor_for_token(db, hashed, game_id=None):
     ):
         return None if game_id else account_actor(account)
     return {
-        **{key: participant[key] for key in ("id", "account_id", "kind", "game_id", "seat_id", "name")},
+        **{
+            key: participant[key]
+            for key in ("id", "account_id", "kind", "game_id", "seat_id")
+        },
+        "name": display_player_name(participant["name"]),
         "qq_id": account["qq_id"],
         "avatar_url": account["avatar_url"],
         "access_ids": json.loads(participant["access_ids"]),

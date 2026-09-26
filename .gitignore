@@ -5,6 +5,8 @@ __pycache__/
 node_modules/
 frontend/dist/
 data/
+# 对局库的手工备份（含账号、消息等真实用户数据），一律不入库。
+backup-*.sqlite3
 *.tsbuildinfo
 gateway/.env
 gateway/napcat/
@@ -16,3 +18,5 @@ client/test/failures/
 start.cmd.local.cmd
 run-supervisor.cmd.local.cmd
 package-release.env
+# 本地发布产物（打包好待上传/待分发的安装包与压缩包），和构建产物一样不入库。
+downloads/

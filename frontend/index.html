@@ -164,6 +164,12 @@
         color: var(--muted);
         font-size: 14px;
       }
+      .download-hint {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.7;
+        margin: 0 0 12px;
+      }
       details.rule {
         border-top: 1px solid var(--border);
         padding: 4px 0;
@@ -247,6 +253,10 @@
 
       <section aria-label="下载游戏">
         <h2>下载游戏</h2>
+        <p class="download-hint">
+          Windows 建议直接下载<strong>安装程序</strong>：双击运行后填入服务器地址，就会自动下载并安装最新版本，
+          装好后客户端自己就能静默更新，卸载也在同一个程序里。解压即用的便携版与安卓版如下。
+        </p>
         <p class="download-empty" id="downloads-empty">下载链接准备中，敬请期待。</p>
         <ul class="downloads" id="downloads" hidden></ul>
       </section>
@@ -329,6 +339,9 @@
               var link = el("a", null, item.name || "下载");
               link.href = item.url;
               link.rel = "noopener";
+              // 每一项的说明（后端 downloads.json 里的 note）挂在提示里，
+              // 不占按钮布局；没有就不加。
+              if (item.note) link.title = item.note;
               list.appendChild(el("li")).appendChild(link);
             });
           })

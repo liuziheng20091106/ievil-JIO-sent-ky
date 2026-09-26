@@ -13,6 +13,9 @@
 - 主持人分级与授权：管理员由 `GAME_ADMIN_QQ` 指定（5 级/系统管理员），4 级可授权 1-3 级、5 级可授权 1-5 级主持；1 级只主持 1 局，那一局结束授权即失效。授权与 QQ 账号绑定，没有共享密码；登录令牌每次请求都重新核对等级。
 - 公告（原生客户端）：5 级主持用 markdown 发布全服公告，大厅显示列表与未读数；已读按公告内容 sha256 记在本机，公告改动会重新算未读。公告存在独立库 `data/announcements.sqlite3`，跨局保留。
 - 成就（原生客户端）：主持人在大厅自定义成就（名称、内容、稀有度 1-10）并授权给玩家；玩家挑一个佩戴，对局内发言时昵称右边显示该成就，点头像可看总成就数与最稀有的 5 个。成就存在独立库 `data/achievements.sqlite3`，跨局保留；3 级起才能管理，稀有度上限随等级。
+- 历史对局（原生客户端）：一局结束（或没结束就被清空）后自动留档到独立库 `data/history.sqlite3`，跨局保留；大厅「历史对局」可看胜负、主持人、七个席位的两张角色牌与公开时间线。只归档公开记录——私信与只发给个人的情报不入库。
+- 技能播报（原生客户端）：白天技能声明渲染成「[角色头像] N号 昵称 · 使用技能 X」，点击可查看技能说明；目标与伪装标记由服务端按可见范围裁剪（私密目标只有声明者与主持人看得到，伪装标记只有主持人看得到）。
+- 对局内悬浮对话框（原生客户端）：结束信息、私聊申请的同意/拒绝、当日目击名单由服务端下发到悬浮卡上；同意/拒绝复用统一的行动表单，仍然只有一次确认并过服务端的行动白名单校验。
 - 多端：游戏对局走 Flutter 原生 Android / Windows 客户端；网页首页只提供公告、游戏规则介绍与游戏下载链接。
 
 ## 环境要求
@@ -99,14 +102,17 @@ run-gateway.cmd
 
 ## 数据与备份
 
-`data/` 目录（可用 `GAME_DATA_DIR` 覆盖）下有两个 SQLite 文件，备份边界不同：
+`data/` 目录（可用 `GAME_DATA_DIR` 覆盖）下有几个 SQLite 文件，备份边界不同：
 
 | 文件 | 内容 | 清空对局时 |
 | --- | --- | --- |
 | `seven-double.sqlite3` | 对局状态、参与身份、频道、消息、证物图片 | 全部删除 |
 | `auth.sqlite3` | QQ 账号、登录挑战、登录令牌（只存 SHA-256 后的令牌） | 保留 |
+| `announcements.sqlite3` | 全服公告（markdown 正文） | 保留 |
+| `achievements.sqlite3` | 成就定义、授权与佩戴 | 保留 |
+| `history.sqlite3` | 历史对局的公开记录（胜负、七个席位的角色牌、公屏与全场公告时间线） | 保留 |
 
-“一键初始化”和“开启下一局”只清空对局库：QQ 账号、玩家登录令牌和主持人登录都不会失效。踢人或本局拉黑只让对应参与身份失效，不影响账号在其他对局登录。
+“一键初始化”和“开启下一局”只清空对局库：QQ 账号、玩家登录令牌和主持人登录都不会失效；公告、成就与历史对局也一并保留。踢人或本局拉黑只让对应参与身份失效，不影响账号在其他对局登录。
 
 ## Flutter 原生客户端
 
@@ -119,7 +125,9 @@ flutter build apk --debug
 flutter build windows --debug
 ```
 
-客户端启动后先填写服务根地址：局域网可用 HTTP，公网地址必须 HTTPS。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。Windows 主持人端同时只允许一个实例：重复启动会把已有窗口唤到前台并直接退出，不会开出第二个窗口。
+客户端启动后先填写服务根地址（默认已填好 `https://super.tkcloud.online:447`，可以自行修改）：局域网可用 HTTP，公网地址必须 HTTPS。首次连接某个服务地址时会展示该服务端下发的用户协议（Markdown），由用户选择「同意并继续」或「取消连接」；同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过会重新询问。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。Windows 主持人端同时只允许一个实例：重复启动会把已有窗口唤到前台并直接退出，不会开出第二个窗口。
+
+所有请求都带 `seven-double-flutter/<版本> (<平台>)` 形式的 UA，后端据此下发更新信息、并只对「过旧客户端加入对局」设限（详见下文「客户端更新」）。
 
 ### 应用图标
 
@@ -163,9 +171,76 @@ Windows 与安卓发行产物打包上传到 S3 兼容存储（Cloudflare R2）�
 package-release.cmd
 ```
 
-脚本把 `client/build/windows/x64/runner/Release` 打成 `魔法裁判Windows.zip`，与 `client/build/app/outputs/flutter-apk/app-release.apk` 一起上传到 `<S3_PREFIX>/` 子目录，再回读远端对象核对大小，最后把两条对外链接写进 `data/downloads.json`（网页首页的下载栏目）。可加 `--dry-run` 只打包并打印计划（不联网、不改配置）、`--skip-zip` 复用已有压缩包、`--no-downloads` 不写下载链接、`--env <路径>` 换配置文件。
+脚本把 `client/build/windows/x64/runner/Release` 打成 `魔法裁判Windows.zip`，与 `client/build/app/outputs/flutter-apk/app-release.apk`、以及**独立发布产物** `Updater.exe`（Windows 安装程序）一起上传到 `<S3_PREFIX>/` 子目录，再回读远端对象核对大小，最后写两处后端下发的配置：
+
+- `data/downloads.json`：网页首页「下载游戏」的三条链接——**Windows 安装程序**（`Updater.exe`，双击运行、填服务器地址即自动安装最新版，装好后自带静默更新与卸载）、Windows 便携版（zip）、安卓版；
+- `data/updates.json`：客户端应用内更新的「平台 + 版本区间」清单，刷新两个平台兜底区间的 latest/url/size/sha256 与 Windows 的 `updater_url`（手工写的更新日志 `notes`、`minimum`、`guide_url` 与更窄的区间条目都保留）。
+
+可加 `--dry-run` 只打包并打印计划（不联网、不改配置）、`--skip-zip` 复用已有压缩包、`--no-downloads` / `--no-updates` 分别跳过两处配置刷新、`--no-updater` 不上传安装程序、`--env <路径>` 换配置文件。
 
 上传用 AWS Signature V4，只用 Python 标准库（`hmac`/`hashlib`/`urllib`），不新增依赖；同名的进程环境变量优先于 `package-release.env`。密钥需要该桶的写权限，`S3_PUBLIC_BASE` 对应的域名需要能匿名读取（R2 自定义域或公开桶）；配置缺项或仍是 `*` 占位符时脚本直接报错退出，不会上传半截。
+
+想单独查看当前的更新清单（排查「为什么没提示更新」）：
+
+```cmd
+.venv\Scripts\python.exe tools\update_manifest.py --show
+```
+
+发行签名：
+
+- 安卓：正式密钥在 `client/android/keystore/magicjudge-release.jks`，口令在 `client/android/key.properties`（两者都已被 `client/android/.gitignore` 忽略，不入库）。`flutter build apk --release` 会自动用它签名；文件缺失时退回 debug 签名并打印警告，只能用于本地调试。**第一次换成正式签名后，存量 debug 签名的安装无法原地覆盖，需要用户卸载后重装一次。**
+- Windows：`tools/sign-windows.ps1` 生成自签名代码签名证书、导出公钥并给 `seven_double_client.exe` 与 `Updater.exe` 签名；Updater 在「准备更新环境」时把这张证书装进 `LocalMachine\Root` 与 `LocalMachine\TrustedPublisher`，这样后续静默更新不会被系统质疑来源。**顺序有要求**（证书要先写进头文件再编译，编出来的 Updater 才是内嵌证书的版本）：
+
+  ```cmd
+  pwsh -File tools\sign-windows.ps1                    :: 生成/复用证书 + 写 self_signed_cert.local.h
+  cd client && flutter build windows --release
+  cd .. && pwsh -File tools\sign-windows.ps1 -Trust    :: 签名；-Trust 顺便装进信任库（需管理员）
+  ```
+
+  私钥导出在仓库外的 `%LOCALAPPDATA%\MagicJudge\dev-certs\`，绝不入库；`self_signed_cert.local.h` 也被 gitignore，入库的 `self_signed_cert.h` 永远是空证书占位（干净克隆直接能编译，但那种构建的 Updater 会在 `--prepare` 时提示「证书为空」并跳过证书安装）。收尾用 `pwsh -File tools\sign-windows.ps1 -RestorePlaceholder`（只还原头文件）或 `-Uninstall`（连证书与私钥一起清掉）。
+
+## 客户端更新
+
+应用内更新的信息全部由后端下发，客户端只按 UA 里的版本号取用。部署者维护三样东西（都在 `data/` 下，改完即生效、无需重启）：
+
+| 路径 | 作用 |
+| --- | --- |
+| `data/updates.json` | 按「平台 + 版本区间」下发不同的更新信息（见下） |
+| `data/agreement.md` | 用户协议正文（Markdown）；不存在时客户端跳过协议门 |
+| `data/releases/` | 更新包本体，由 `GET /releases/{文件名}` 同源下发（用对象存储时不需要） |
+
+`data/updates.json` 的格式（区间取**第一条匹配**，所以窄区间写在前面、兜底区间写在最后）：
+
+```json
+{
+  "updates": [
+    {
+      "platform": "windows",
+      "min_version": "1.0.0",
+      "max_version": "1.2.0",
+      "latest": "1.1.0",
+      "minimum": "1.1.0",
+      "title": "必须更新",
+      "notes": "## 更新日志\n\n- 应用内静默更新",
+      "url": "https://s3.tkcloud.online/releases/魔法裁判Windows.zip",
+      "updater_url": "https://s3.tkcloud.online/releases/Updater.exe",
+      "size": 12345678,
+      "sha256": "…",
+      "guide_url": "https://example.com/help"
+    },
+    {"platform": "android", "latest": "1.1.0", "notes": "…", "url": "https://…/app-release.apk"}
+  ]
+}
+```
+
+- 匹配规则：`min_version <= 客户端版本 < max_version`（缺省边界表示不限），`platform` 可以是 `windows` / `android` / `any`；没有匹配时退回环境变量 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`。
+- 客户端低于该区间的 `minimum` 时判为强制更新：`POST /api/games/{id}/participations`（以玩家身份入局）与接受邀请会被拒（426），**其它功能一律不受限**。UA 缺失或不认识（浏览器、模拟器、检查脚本）时不做任何拦截。
+- `notes` 是 Markdown，客户端在更新弹窗里渲染；`guide_url` 非空时多一个「打开网页」按钮；`url` 留空时只引导网页。
+- `size` / `sha256` / `updater_url` 由 `package-release.cmd`（`tools/package-release.py` + `tools/update_manifest.py`）自动刷新（只更新该平台「没有区间边界」的那条兜底区间，手工写的 `title` / `notes` / `minimum` / `guide_url` 与更窄的区间条目都保留）。
+
+Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，由它「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限静默替换程序 → 自动重启客户端，全程无需 UAC。`Updater.exe` 是**独立发布产物**（网页首页的「Windows 安装程序」，也是首次安装入口）：无参数启动时是安装器（检测已有安装 → 输入后端地址 → 下载安装 → 写注册表与卸载入口），`--uninstall` 是卸载引导；所有功能都有对应命令行参数，参数足够时零交互，且它不删除自己。
+
+安卓客户端的更新流程：下载 APK 到应用缓存目录（同版本只下一次）→ 经 FileProvider 交给系统安装器 → 安装完成或失败后清理残留安装包。
 
 ## 反向代理
 

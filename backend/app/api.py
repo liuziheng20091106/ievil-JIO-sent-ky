@@ -2,6 +2,7 @@
 
 import copy
 import json
+import logging
 import os
 import secrets
 from typing import Literal
@@ -13,7 +14,9 @@ from . import (
     announcement_storage,
     auth,
     auth_storage,
+    client_release,
     evidence,
+    history_storage,
     realtime,
     schemas,
     storage,
@@ -21,10 +24,21 @@ from . import (
 )
 from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
 from .game.catalog import night_half
-from .game.state import controlled_cards, host_capable, host_label, log_event, owner
+from .game.state import (
+    actor_eliminated,
+    controlled_cards,
+    display_player_name,
+    host_capable,
+    host_label,
+    log_event,
+    owner,
+    participant_eliminated,
+)
 from .storage import SPECTATOR_CHANNEL
 
 router = APIRouter(prefix="/api")
+
+logger = logging.getLogger(__name__)
 
 
 def require_game(db, game_id, mutable=False):
@@ -61,7 +75,7 @@ def impersonated_actor(db, game, seat_id):
         "kind": "player",
         "game_id": game["id"],
         "seat_id": seat["id"],
-        "name": row["name"],
+        "name": display_player_name(row["name"]),
         "access_ids": json.loads(row["access_ids"]),
     }
 
@@ -157,13 +171,19 @@ def poll_login(challenge_id, client_kind, host=False):
 
 
 @router.get("/health")
-async def health():
-    # 客户端版本标签：低于 latest 提示可更新，低于 minimum 必须更新；未配置则不下发。
-    return {
-        "ok": True,
-        "client_latest": os.environ.get("GAME_CLIENT_LATEST") or None,
-        "client_minimum": os.environ.get("GAME_CLIENT_MINIMUM") or None,
-    }
+async def health(request: Request):
+    # 客户端版本标签：按 UA 里的版本与平台匹配 data/updates.json 的区间（没有匹配
+    # 时退回 GAME_CLIENT_LATEST / GAME_CLIENT_MINIMUM）；确认有更新时另给 update 详情。
+    return {"ok": True, **client_release.health_payload(request.headers.get("user-agent"))}
+
+
+@router.get("/agreement")
+async def agreement():
+    """用户协议正文（Markdown）：客户端首次连接服务器时展示，由用户决定是否继续。
+
+    不需要登录：协议门出现在登录之前。
+    """
+    return client_release.load_agreement()
 
 
 @router.get("/catalog")
@@ -309,7 +329,7 @@ async def lobby(request: Request):
             {
                 "id": row["id"],
                 "game_id": row["game_id"],
-                "from_name": row["inviter_name"],
+                "from_name": display_player_name(row["inviter_name"]),
                 "created_at": row["created_at"],
                 "game": lobby_game_view(invited_game),
             }
@@ -368,12 +388,28 @@ async def online_players(
                 {
                     "id": account["id"],
                     "name": account["nickname"],
+                    # 在线名单只多给头像地址：客户端在大厅与邀请页按账号展示 QQ
+                    # 头像。头像链接形如 qlogo 的 nk=<QQ号>，所以这等于把 QQ 号随
+                    # 图片地址一起给出去；换来的只是头像，仍不额外给 qq_id 字段。
+                    "avatar_url": account["avatar_url"],
                     "available": available.get(account["id"], True) if game_id else True,
                     "invited": account["id"] in invited,
                 }
             )
         accounts.sort(key=lambda item: item["name"])
-        return {"accounts": accounts, "host_online": "host" in keys}
+        # 排序按完整昵称做，展示名最后才截断：8 字以内不可能截出重名，但同前缀的名字
+        # 不该因为截断而换位。
+        for item in accounts:
+            item["name"] = display_player_name(item["name"])
+        return {
+            "accounts": accounts,
+            "host_online": "host" in keys,
+            # 「有没有更新」由 UA 里的版本与后端配置算出；为真时客户端才去重新请求
+            # /api/health 取版本字段与更新详情，大厅轮询不必每次都拉完整更新信息。
+            "update_available": client_release.update_available(
+                request.headers.get("user-agent")
+            ),
+        }
 
 
 @router.post("/reset")
@@ -382,7 +418,10 @@ async def reset(request: Request):
         with storage.transaction() as db:
             auth.require_actor(db, request, host=True)
             cleared = storage.current_game_id(db)
+            # 清空对局库之前先记下有哪些局：历史库独立于对局库，留档在事务之后补写。
+            archived = [row["id"] for row in db.execute("SELECT id FROM games")]
             storage.purge(db)
+        archive_history(archived)
         # 对局被清空等于这一局结束：1 级主持的授权在这里也一并作废。
         auth_storage.consume_single_use_for_game(cleared)
         clear_connections()
@@ -399,6 +438,8 @@ async def create(body: schemas.Create, request: Request):
             if active:
                 raise HTTPException(409, "请先结束当前对局，再创建下一局")
             replaced = storage.current_game_id(db)
+            # 上一局（结束过的，或没结束就被换成新局的）在清空前先记下来，稍后补进历史。
+            archived = [row["id"] for row in db.execute("SELECT id FROM games")]
             storage.purge(db)
             game = create_game(body.codex)
             # 记下建立这一局的主持人身份：对局内显示「主持人(昵称)」，
@@ -421,6 +462,7 @@ async def create(body: schemas.Create, request: Request):
         # 记下这一局由谁建立：1 级主持在它结束时授权作废。
         auth_storage.mark_hosted_game(actor.get("account_id"), game["id"])
         auth_storage.consume_single_use_for_game(replaced)
+        archive_history(archived)
         clear_connections(game["id"])
         realtime.publish(game["id"], [row])
         return current_view(game["id"], auth.token_hash(request))
@@ -487,7 +529,7 @@ def join_game(db, game, account, kind, hashed):
     actor = auth.actor_for_token(db, hashed, game_id)
     label = (
         str(actor["seat_id"]) + "号玩家" if actor["kind"] == "player" else "观战者"
-    ) + "【" + actor["name"] + "】"
+    ) + "【" + display_player_name(actor["name"]) + "】"
     row = storage.add_message(db, game_id, text=label + "已加入对局")
     return actor, row
 
@@ -495,6 +537,9 @@ def join_game(db, game, account, kind, hashed):
 @router.post("/games/{game_id}/participations")
 async def participate(game_id: str, body: schemas.Participation, request: Request):
     account = auth.require_account(request)
+    if body.kind == "player":
+        # 版本过旧的客户端只拒绝「加入对局」：观战入席与其它功能一律不受限。
+        client_release.require_joinable_client(request)
     async with realtime.lock:
         with storage.transaction() as db:
             game = require_game(db, game_id, mutable=True)
@@ -522,7 +567,9 @@ async def leave_game(game_id: str, request: Request):
             game = require_game(db, game_id)
             auth.revoke_participant(db, actor["id"])
             row = storage.add_message(
-                db, game["id"], text="观战者【" + actor["name"] + "】已离开对局"
+                db,
+                game["id"],
+                text="观战者【" + display_player_name(actor["name"]) + "】已离开对局",
             )
         realtime.publish(game_id, [row])
         refresh_connections()
@@ -587,6 +634,8 @@ async def create_invite(game_id: str, body: schemas.Invite, request: Request):
 @router.post("/invites/{invite_id}/accept")
 async def accept_invite(invite_id: str, request: Request):
     account = auth.require_account(request)
+    # 接受邀请同样是以玩家身份入局，版本过旧时和主动参局一样被拒。
+    client_release.require_joinable_client(request)
     async with realtime.lock:
         with storage.transaction() as db:
             row = db.execute("SELECT * FROM invites WHERE id=?", (invite_id,)).fetchone()
@@ -660,7 +709,9 @@ async def host_enter(game_id: str, request: Request):
             if account_id and account_id not in entries:
                 # 记下「这个账号已经确认进入本局」：主持级数据从这里开始放行。
                 game["host_entries"] = [*entries, account_id]
-                entrant = (actor.get("nickname") or "").strip() or account_id
+                entrant = display_player_name(
+                    (actor.get("nickname") or "").strip() or account_id
+                )
                 log_event(
                     game,
                     "host",
@@ -713,7 +764,10 @@ def room_command(db, game, actor, action_id, payload):
             seat["occupant_id"] = None
             if game["status"] == "lobby":
                 seat["ready"] = False
-        text = "【" + target["name"] + "】已被移出" + ("并在本局拉黑" if body.block else "")
+        text = (
+            "【" + display_player_name(target["name"]) + "】已被移出"
+            + ("并在本局拉黑" if body.block else "")
+        )
     elif action_id == "room.replace":
         body = schemas.Replace.model_validate(payload)
         seat = seat_for(game, body.seat_id)
@@ -743,7 +797,12 @@ def room_command(db, game, actor, action_id, payload):
             seat["ready"] = False
         if not body.keep_actions:
             clear_seat_actions(game, seat["id"])
-        text = seat["id"] + "号席位已由【" + substitute["name"] + "】接管"
+        text = (
+            seat["id"]
+            + "号席位已由【"
+            + display_player_name(substitute["name"])
+            + "】接管"
+        )
     elif action_id == "room.mute":
         body = schemas.Mute.model_validate(payload)
         target = db.execute(
@@ -753,7 +812,8 @@ def room_command(db, game, actor, action_id, payload):
         if not target:
             raise HTTPException(422, "请选择本局有效参与者")
         db.execute("UPDATE participants SET muted=? WHERE id=?", (int(body.muted), body.participant_id))
-        text = "【" + target["name"] + "】已被禁言" if body.muted else "【" + target["name"] + "】已解除禁言"
+        shown = display_player_name(target["name"])
+        text = f"【{shown}】已被禁言" if body.muted else f"【{shown}】已解除禁言"
     else:
         raise HTTPException(422, "未知房间管理操作")
     game["version"] += 1
@@ -767,7 +827,7 @@ def channel_names(db, member_ids, host_name="主持人"):
         for row in db.execute(
             f"SELECT id,name FROM participants WHERE id IN ({placeholders})", member_ids
         ):
-            names[row["id"]] = row["name"]
+            names[row["id"]] = display_player_name(row["name"])
     return names
 
 
@@ -847,6 +907,13 @@ def channel_command(db, game, actor, action_id, payload):
             raise HTTPException(422, "邀请成员必须是本局有效玩家或主持人")
         if actor["kind"] != "host" and night_half(game) and invited != ["host"]:
             raise HTTPException(403, "夜间只能与主持人建立私聊")
+        # 整席出局后只能与主持人私信：回溯或复活让当前牌回来后这条限制自动解除。
+        if actor["kind"] != "host" and actor_eliminated(game, actor) and invited != ["host"]:
+            raise HTTPException(403, "已整席出局：只能与主持人私信")
+        if actor["kind"] != "host" and any(
+            member != "host" and participant_eliminated(game, member) for member in invited
+        ):
+            raise HTTPException(403, "对方已整席出局：除了主持人，不能再与其私信")
         members = [actor["id"], *invited]
         accepted = [actor["id"]] + (["host"] if "host" in invited else [])
         immediate = actor["kind"] == "host" or set(accepted) == set(members)
@@ -898,6 +965,8 @@ def channel_command(db, game, actor, action_id, payload):
         if action_id == "channel.accept":
             if row["status"] != "pending" or actor["id"] not in invited or actor["id"] in accepted:
                 raise HTTPException(409, "该邀请不再等待你的同意")
+            if actor_eliminated(game, actor) and "host" not in members:
+                raise HTTPException(403, "已整席出局：只能与主持人私信")
             ensure_channel_available(db, game, [actor["id"]])
             accepted.append(actor["id"])
             active = set(accepted) == set(members)
@@ -971,6 +1040,23 @@ def require_puppet_action(db, game, controller, seat_id, action_id, payload):
         raise HTTPException(422, "操作包含未允许的字段")
 
 
+def archive_history(game_ids):
+    """把指定对局补进历史库（幂等）。
+
+    历史库是独立文件，两个 SQLite 文件之间没有跨库事务，所以留档一律发生在本局的
+    事务提交**之后**，并且只记日志、不往上抛：留档失败只丢这一条历史，绝不把一个
+    已经成功的游戏命令变成失败。清空对局前的补录（reset/create）会把它补上。
+    """
+    ids = [item for item in game_ids if item]
+    if not ids:
+        return
+    try:
+        with storage.connect() as source:
+            history_storage.record_known(source, ids)
+    except Exception:
+        logger.exception("历史对局留档失败；对局本身不受影响")
+
+
 @router.post("/games/{game_id}/commands")
 async def command(game_id: str, body: schemas.Command, request: Request):
     async with realtime.lock:
@@ -1019,6 +1105,9 @@ async def command(game_id: str, body: schemas.Command, request: Request):
                 # 进入夜间：关闭全部私聊频道，夜间只允许与主持人建立私聊。
                 rows.extend(close_night_channels(db, game))
             storage.save_game(db, game)
+        if game["status"] == "ended":
+            # 这一局刚结束：立刻写进独立的历史库（对局库之后被清空也不影响留档）。
+            archive_history([game_id])
         # 先算出要返回的视图，再作废 1 级授权：否则这条已经成功的命令会因为
         # 令牌当场失效而回一个 401。
         result = current_view(game_id, auth.token_hash(request))
@@ -1038,7 +1127,7 @@ async def seat_view(game_id: str, seat_id: str, request: Request):
             actor = impersonated_actor(db, game, seat_id)
             return {
                 "seat_id": actor["seat_id"],
-                "name": actor["name"],
+                "name": display_player_name(actor["name"]),
                 "view": views.view(db, game, actor, realtime.online(game_id)),
             }
 

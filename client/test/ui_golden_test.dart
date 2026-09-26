@@ -929,6 +929,76 @@ void main() {
     expect(store.draftFor(action)['text'], '[/微笑]', reason: '草稿要跟着更新');
   });
 
+  testWidgets('投票表单按角色卡列出全部候选并一次选定', (tester) async {
+    final store = await previewStore(host: false);
+    // 服务端在座位类选项上带 options_kind，选票行带 seat_id：两者都要按角色卡显示。
+    final players = playersFromOptions(
+      [
+        {'value': '2', 'label': '2号 · kiwi'},
+        {'value': '4', 'label': '4号 · 空席'},
+      ],
+      seats: store.view!.seats,
+      byRole: true,
+    );
+    expect(players[0].name, '希罗', reason: '对局内按角色名标识席位');
+    expect(players[0].seatId, '2', reason: '选项的值是席位号也要能关联到席位');
+
+    final action = ActionDescriptor.fromJson(actionJson(
+      'vote.cast',
+      '投票',
+      '对1号 · 艾玛等2名候选投票',
+      fields: [
+        {
+          'name': 'emma',
+          'label': '1号 · 艾玛（你提名过，自动同意）',
+          'type': 'select',
+          'required': true,
+          'seat_id': '1',
+          'note': '提名自动同意',
+          'default': 'yes',
+          'options': [
+            {'value': 'yes', 'label': '同意'},
+          ],
+        },
+        {
+          'name': 'sherry',
+          'label': '3号 · 雪莉',
+          'type': 'select',
+          'required': true,
+          'seat_id': '3',
+          'note': '蕾雅决斗',
+          'options': [
+            {'value': 'yes', 'label': '同意'},
+            {'value': 'no', 'label': '不同意'},
+            {'value': 'abstain', 'label': '弃票'},
+          ],
+        },
+      ],
+    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(body: ActionFormSheet(store: store, action: action)),
+      ),
+    );
+    await tester.pump();
+
+    // 一行一个候选：座位号 + 角色名，不出现玩家昵称。
+    expect(find.text('1号 · 艾玛'), findsOneWidget);
+    expect(find.text('3号 · 雪莉'), findsOneWidget);
+    expect(find.textContaining('阿雪'), findsNothing);
+    expect(find.textContaining('小满'), findsNothing);
+    expect(find.text('提名自动同意'), findsOneWidget);
+    expect(find.text('蕾雅决斗'), findsOneWidget);
+    // 提名自动同意的行按默认值选中，且只有一个选项（锁定）。
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+
+    await tester.tap(find.text('不同意'));
+    await tester.pump();
+    expect(find.byIcon(Icons.check_circle), findsNWidgets(2));
+    expect(store.draftFor(action)['sherry'], 'no', reason: '选票要写进草稿');
+  });
+
   testWidgets('屏幕够宽时同屏显示多个界面，窄屏仍是一次一页', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       // 电脑宽屏：状态、对局、管理三栏同屏，悬浮底栏不再出现。

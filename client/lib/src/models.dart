@@ -103,6 +103,31 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// 服务端下发的用户协议：正文是 Markdown，[hash] 用来记住「这一版已经同意过」。
+/// 服务端没配置协议时正文为空，客户端据此跳过协议门。
+class Agreement {
+  const Agreement({this.text = '', this.hash = '', this.updatedAt});
+
+  factory Agreement.fromJson(Object? value) {
+    final raw = jsonObject(value, 'agreement');
+    return Agreement(
+      text: raw['text']?.toString() ?? '',
+      hash: raw['hash']?.toString() ?? '',
+      updatedAt: raw['updated_at']?.toString(),
+    );
+  }
+
+  final String text;
+  final String hash;
+  final String? updatedAt;
+
+  bool get isEmpty => text.trim().isEmpty;
+
+  /// 协议内容改过（哈希变了）时要求重新同意。
+  bool acceptedBy(String? acceptedHash) =>
+      !isEmpty && hash.isNotEmpty && acceptedHash == hash;
+}
+
 class Actor {
   Actor.fromJson(Object? value) : raw = jsonObject(value, 'actor') {
     id = jsonString(raw['id'] ?? raw['account_id'], 'actor.id');
@@ -155,13 +180,17 @@ class LobbyGame {
       jsonBool(raw['can_join_spectator'], 'game.can_join_spectator');
 }
 
-/// 在线账号：只用于展示与邀请，不含任何 QQ 号或令牌。
+/// 在线账号：只用于展示与邀请，不含令牌；头像地址是账号的 QQ 头像链接
+/// （qlogo 的 `nk=` 参数里带 QQ 号），界面只拿它显示图片。
 class OnlineAccount {
   OnlineAccount.fromJson(Object? value) : raw = jsonObject(value, 'online.account');
 
   final Map<String, dynamic> raw;
   String get id => jsonString(raw['id'], 'online.account.id');
   String get name => jsonString(raw['name'], 'online.account.name');
+
+  /// 账号头像地址；为空时界面退回中性占位。
+  String get avatarUrl => raw['avatar_url']?.toString() ?? '';
   bool get available =>
       jsonBool(raw['available'], 'online.account.available', fallback: true);
   bool get invited => jsonBool(raw['invited'], 'online.account.invited');
@@ -344,6 +373,9 @@ class GameMessage {
     senderName = raw['sender_name']?.toString();
     avatarRoleId = raw['avatar_role_id']?.toString();
     createdAt = raw['created_at']?.toString() ?? '';
+    payload = raw['payload'] == null
+        ? null
+        : jsonObject(raw['payload'], 'message.payload');
   }
 
   final Map<String, dynamic> raw;
@@ -355,6 +387,10 @@ class GameMessage {
   late final String? senderName;
   late final String? avatarRoleId;
   late final String createdAt;
+
+  /// 结构化播报载荷（例如技能声明的技能名、介绍与目标）。
+  /// 服务端已按收件人的可见范围裁剪过：私密目标与伪装标记不会出现在这里。
+  late final Map<String, dynamic>? payload;
 }
 
 /// 角色目录条目：服务端的公开信息，用于角色详情与魔典说明。
@@ -703,6 +739,13 @@ class GameView {
           .map((item) => item.toString())
           .toList(growable: false);
 
+  /// 结束自由发言所需提交人数；服务端下发，缺省按满编六人。
+  int get discussionEndRequired {
+    final value = public['discussion_end_required'];
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 6;
+  }
+
   /// 系统自动推进的截止时间（Unix 秒）；为空表示没有倒计时。
   double? get autoAdvanceAt {
     final value = public['auto_advance_at'];
@@ -710,7 +753,144 @@ class GameView {
     return double.tryParse('$value');
   }
 
+  /// 对局内悬浮对话框：由服务端决定「什么时候弹什么」，缺省为空（旧服务端不认这个字段）。
+  List<DialogItem> get dialogs => raw['dialogs'] == null
+      ? const []
+      : jsonArray(raw['dialogs'], 'state.dialogs')
+          .map(DialogItem.fromJson)
+          .toList(growable: false);
+
   Iterable<ActionDescriptor> get channelActions =>
       channels.expand((item) => item.actions);
   Iterable<ActionDescriptor> get allActions => [...actions, ...channelActions];
+}
+
+/// 一条悬浮对话框内容：结束信息、私聊申请或当日目击名单。
+///
+/// [actions] 是服务端给出的标准行动描述（同意/拒绝），提交时直接复用统一的行动表单，
+/// 因此仍然只有一次确认、仍然过服务端的行动白名单校验。
+class DialogItem {
+  DialogItem.fromJson(Object? value) : raw = jsonObject(value, 'dialog') {
+    id = jsonString(raw['id'], 'dialog.id');
+    kind = jsonString(raw['kind'], 'dialog.kind');
+    title = jsonString(raw['title'], 'dialog.title');
+    text = raw['text']?.toString() ?? '';
+    dismissible = raw['dismissible'] == null
+        ? true
+        : jsonBool(raw['dismissible'], 'dialog.dismissible');
+    matchId = raw['match_id']?.toString();
+    actions = raw['actions'] == null
+        ? const []
+        : jsonArray(raw['actions'], 'dialog.actions')
+            .map(ActionDescriptor.fromJson)
+            .toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String kind;
+  late final String title;
+  late final String text;
+  late final bool dismissible;
+
+  /// 结束信息携带的对局 id：用于跳转历史详情。
+  late final String? matchId;
+  late final List<ActionDescriptor> actions;
+}
+
+/// 历史对局列表里的一条：胜负、裁定说明与参与席位。
+class MatchSummary {
+  MatchSummary.fromJson(Object? value) : raw = jsonObject(value, 'match') {
+    id = jsonString(raw['id'], 'match.id');
+    endedAt = raw['ended_at']?.toString() ?? '';
+    day = jsonInt(raw['day'], 'match.day');
+    winner = raw['winner']?.toString() ?? '';
+    reason = raw['reason']?.toString() ?? '';
+    source = raw['source']?.toString() ?? '';
+    hostName = raw['host_name']?.toString() ?? '';
+    players = raw['players'] == null
+        ? const []
+        : jsonArray(raw['players'], 'match.players')
+            .map(MatchPlayer.fromJson)
+            .toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String endedAt;
+  late final int day;
+  late final String winner;
+  late final String reason;
+
+  /// `ended`（正常宣判）或 `aborted`（对局没结束就被清空）。
+  late final String source;
+  late final String hostName;
+  late final List<MatchPlayer> players;
+}
+
+/// 历史对局里的一个参与身份：座位、昵称与最终的两张角色牌。
+class MatchPlayer {
+  MatchPlayer.fromJson(Object? value) : raw = jsonObject(value, 'match.player') {
+    participantId = raw['participant_id']?.toString() ?? '';
+    name = raw['name']?.toString() ?? '';
+    kind = raw['kind']?.toString() ?? 'player';
+    seatId = raw['seat_id']?.toString();
+    roleIds = raw['role_ids'] == null
+        ? const []
+        : jsonArray(raw['role_ids'], 'match.player.role_ids')
+            .map((item) => item.toString())
+            .toList(growable: false);
+    active = raw['active'] == null
+        ? true
+        : jsonBool(raw['active'], 'match.player.active');
+    blocked = jsonBool(raw['blocked'], 'match.player.blocked');
+  }
+
+  final Map<String, dynamic> raw;
+  late final String participantId;
+  late final String name;
+  late final String kind;
+  late final String? seatId;
+  late final List<String> roleIds;
+
+  /// 被移出本局（active=false）或已被拉黑的参与身份：详情页里置灰显示。
+  late final bool active;
+  late final bool blocked;
+}
+
+/// 历史对局时间线上的一条公开消息。
+class MatchEvent {
+  MatchEvent.fromJson(Object? value) : raw = jsonObject(value, 'match.event') {
+    seq = jsonInt(raw['seq'], 'match.event.seq');
+    kind = raw['kind']?.toString() ?? 'notice';
+    senderName = raw['sender_name']?.toString() ?? '';
+    avatarRoleId = raw['avatar_role_id']?.toString();
+    text = raw['text']?.toString() ?? '';
+    createdAt = raw['created_at']?.toString() ?? '';
+  }
+
+  final Map<String, dynamic> raw;
+  late final int seq;
+  late final String kind;
+  late final String senderName;
+  late final String? avatarRoleId;
+  late final String text;
+  late final String createdAt;
+}
+
+/// 单局历史详情：结算 + 参与身份 + 公开时间线。
+class MatchDetail {
+  MatchDetail.fromJson(Object? value)
+      : match = MatchSummary.fromJson(value),
+        raw = jsonObject(value, 'match.detail') {
+    events = raw['events'] == null
+        ? const []
+        : jsonArray(raw['events'], 'match.detail.events')
+            .map(MatchEvent.fromJson)
+            .toList(growable: false);
+  }
+
+  final Map<String, dynamic> raw;
+  final MatchSummary match;
+  late final List<MatchEvent> events;
 }

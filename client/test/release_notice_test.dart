@@ -17,7 +17,7 @@ import 'package:seven_double_client/src/models.dart';
 import 'package:seven_double_client/src/release.dart';
 import 'package:seven_double_client/src/store.dart';
 
-const updateNoticeText = '有新版本可用，建议向主持人获取最新安装包。';
+const updateNoticeText = '有新版本可用，可直接在应用内更新。';
 const batteryNoticeText = '为避免后台断连，建议允许应用忽略电池优化。';
 
 Map<String, dynamic> viewJson() => {

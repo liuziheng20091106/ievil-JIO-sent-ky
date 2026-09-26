@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from . import storage
+from .game.state import display_player_name
 
 TITLE_LIMIT = 60
 BODY_LIMIT = 4000
@@ -73,7 +74,7 @@ def view(row):
         "id": row["id"],
         "title": row["title"],
         "body": row["body"],
-        "author_name": row["author_name"],
+        "author_name": display_player_name(row["author_name"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "hash": content_hash(row["id"], row["title"], row["body"], row["updated_at"]),

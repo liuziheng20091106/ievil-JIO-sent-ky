@@ -14,10 +14,11 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from backend.app import storage
+from backend.app.game.catalog import ROLES
 from backend.app.main import app
 from backend.app.simulator.client import ProtocolClient
 from backend.app.simulator.harness import Harness
-from backend.app.simulator.policy import option_values
+from backend.app.simulator.policy import field_spec, option_values
 from backend.app.simulator.transport import TestClientTransport, gateway_authenticator
 
 # 一局完整对局要走完魔女化、夜间、顺序发言、提名、投票与处决，
@@ -130,7 +131,7 @@ class SimulatorCase(unittest.TestCase):
             self.assertTrue(actor.client.view["self"]["night_actions"])
 
     def test_night_targets_respect_offered_options(self):
-        """夜间目标只能取自服务端给出的候选，且包含 ability 关键字。"""
+        """夜间目标只能取自服务端给出的候选，且按角色卡标识席位。"""
         with self.client() as client:
             harness = Harness(client, seed=13)
             harness.join()
@@ -139,6 +140,7 @@ class SimulatorCase(unittest.TestCase):
             checked = 0
             for actor in harness.roster.seats:
                 actor.client.refresh()
+                seats = {seat["id"]: seat for seat in actor.client.view["seats"]}
                 for descriptor in actor.client.available("night.submit"):
                     ability = descriptor["payload"]["ability"]
                     self.assertIn("ability", descriptor["payload"])
@@ -146,6 +148,18 @@ class SimulatorCase(unittest.TestCase):
                         continue
                     targets = option_values(descriptor, "target")
                     self.assertTrue(targets, f"{ability} 没有任何可选目标")
+                    # 对局内的选择界面不显示玩家昵称：标签是「N号 · 当前展示角色名」。
+                    target_field = field_spec(descriptor, "target")
+                    self.assertEqual(target_field.get("options_kind"), "seat")
+                    for option in target_field["options"]:
+                        seat = seats.get(option["value"])
+                        role_id = seat and seat.get("avatar_role_id")
+                        if role_id:
+                            self.assertIn(
+                                ROLES[role_id]["name"],
+                                option["label"],
+                                f"{ability} 的目标标签不是角色卡：{option['label']}",
+                            )
                     decision = actor.policy.decide(actor.client)
                     if decision and decision.action == "night.submit":
                         if decision.payload.get("ability") != ability:

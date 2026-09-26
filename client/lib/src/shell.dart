@@ -10,6 +10,7 @@ import 'app_icons.dart';
 import 'design.dart';
 import 'emoji.dart';
 import 'emoji_picker.dart';
+import 'game_dialog.dart';
 import 'message_time.dart';
 import 'models.dart';
 import 'participant_menu.dart';
@@ -146,6 +147,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     final ended = view.status == 'ended';
     // 服务端下发的「请求操作」催办：自己的行动正卡住流程时才有。
     final prompt = view.actionPrompt;
+    // 服务端下发的悬浮对话框：结束信息 / 私聊申请 / 当日目击名单，第一条优先。
+    final dialogs = store.activeDialogs;
     final labels = host ? const ['对局', '状态', '管理'] : const ['对局', '状态', '我的'];
     final icons = host
         ? const [
@@ -366,6 +369,16 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                     // 键盘聚焦时不弹阶段动画：它盖满整屏，会挡住正在输入的内容。
                     if (!focusTyping && store.pendingPhaseKey != null)
                       PhaseOverlay(store: store),
+                    // 悬浮对话框：重要内容与及时交互（同意/拒绝私信、目击名单、对局结束）。
+                    // 键盘弹出时让位，否则会盖在正在输入的内容上。
+                    if (!focusTyping && dialogs.isNotEmpty)
+                      GameDialogOverlay(
+                        store: store,
+                        item: dialogs.first,
+                        pending: dialogs.length - 1,
+                        bottomInset:
+                            twoPane ? AppSpacing.lg : AppSpacing.bottomBar,
+                      ),
                   ],
                 ),
               ),
@@ -1316,7 +1329,7 @@ class _PuppetNoticeCard extends StatelessWidget {
       );
 }
 
-/// 自由发言结束请求的公开进度；集满六个不同席位后系统 10 秒自动进入提名。
+/// 自由发言结束请求的公开进度；在场不足六人时全员提交后系统 10 秒自动进入提名。
 class _DiscussionProgressCard extends StatelessWidget {
   const _DiscussionProgressCard({required this.view});
   final GameView view;
@@ -1333,8 +1346,8 @@ class _DiscussionProgressCard extends StatelessWidget {
                SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Text(
-                  '已有 ${view.discussionEndRequests.length}/6 名玩家请求结束自由发言'
-                  '${view.autoAdvanceAt == null ? '；集满六人后 10 秒自动进入提名' : '，将在 ${_deadlineText(view.autoAdvanceAt)} 自动进入提名'}',
+                  '已有 ${view.discussionEndRequests.length}/${view.discussionEndRequired} 名玩家请求结束自由发言'
+                  '${view.autoAdvanceAt == null ? '；集满后 10 秒自动进入提名' : '，将在 ${_deadlineText(view.autoAdvanceAt)} 自动进入提名'}',
                   style: TextStyle(fontSize: 13, color: context.palette.text),
                 ),
               ),
@@ -1673,6 +1686,11 @@ class MessageBubble extends StatelessWidget {
     if (system) {
       // 私密信息（只发给本人）用金色卡片顶出来；全场公告用红边；其余保持灰色居中条。
       if (message.kind == 'information') return _privateInfoCard(context);
+      // 技能播报带结构化载荷：渲染成 [头像] N号 昵称 · 使用技能 X 的卡片，可点开技能详细。
+      // 载荷由服务端按可见范围裁剪，客户端不再判断谁能看到目标。
+      if (message.payload?['type'] == 'skill') {
+        return SkillCastCard(message: message, store: store);
+      }
       final alert = message.kind == 'alert';
       return Padding(
         padding:  EdgeInsets.symmetric(vertical: 3),
@@ -2266,7 +2284,11 @@ class _BoardPageState extends State<BoardPage> {
                     ),
                   for (final account in _others())
                     ListTile(
-                      leading:  RoleAvatar(roleId: null, size: 40),
+                      leading: RoleAvatar(
+                        roleId: null,
+                        size: 40,
+                        imageUrl: account.avatarUrl,
+                      ),
                       title: Text(account.name),
                       trailing: _inviteTrailing(context, account),
                     ),

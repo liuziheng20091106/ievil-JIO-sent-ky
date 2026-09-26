@@ -1,0 +1,30 @@
+// tools/sign-windows.ps1 生成的真实证书头文件长这样。
+//
+// 注意文件名：脚本写的是 self_signed_cert.local.h（不入库，已 gitignore），
+// 入库的 self_signed_cert.h 永远保持「空占位」。system.cpp 里的包含顺序是
+//   #if __has_include("self_signed_cert.local.h")  →  真实证书
+//   #elif __has_include("self_signed_cert.h")      →  空占位
+//
+// 脚本会往 self_signed_cert.local.h 写三样东西：
+//   kSelfSignedCertBytes  —— 证书 DER 编码的字节数组（只含公钥证书，不含私钥）
+//   kSelfSignedCertLength —— DER 字节数
+//   kSelfSignedCertSha256 —— DER 的 SHA-256（小写十六进制，64 字符）
+//
+// Updater 的 --prepare 用 SHA-256 指纹在 LocalMachine\Root 与
+// LocalMachine\TrustedPublisher 里比对，缺失时用 CertAddEncodedCertificateToStore 安装。
+// 私钥（.pfx）由脚本放在仓库外（默认 %LOCALAPPDATA%\MagicJudge\dev-certs\），不要入库。
+
+#pragma once
+
+namespace upd {
+
+inline constexpr unsigned char kSelfSignedCertBytes[] = {
+    0x30, 0x82, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, /* ... 省略 ... */
+};
+
+inline constexpr unsigned int kSelfSignedCertLength = 768;
+
+inline constexpr char kSelfSignedCertSha256[] =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+}  // namespace upd

@@ -973,3 +973,143 @@ class _MarkLegendRow extends StatelessWidget {
         ),
       );
 }
+
+/// 技能播报卡片点开的「技能详细」：技能名、服务端下发的技能介绍，
+/// 以及与该角色详情同源的公开技能说明。
+///
+/// 介绍与目标都来自服务端裁剪后的消息载荷：看不到的目标根本不会出现在载荷里，
+/// 客户端只负责把拿到的部分展示出来，不做任何可见性判断。
+Future<void> showSkillDetail(
+  BuildContext context,
+  GameStore store,
+  Map<String, dynamic> payload,
+) =>
+    showPredictiveSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (context) => _SkillDetailSheet(store: store, payload: payload),
+    );
+
+class _SkillDetailSheet extends StatelessWidget {
+  const _SkillDetailSheet({required this.store, required this.payload});
+
+  final GameStore store;
+  final Map<String, dynamic> payload;
+
+  @override
+  Widget build(BuildContext context) {
+    final roleId = payload['role_id']?.toString();
+    final role = store.roleInfo(roleId);
+    final visual = roleVisual(roleId);
+    final skill = payload['ability_name']?.toString() ?? '';
+    final intro = payload['intro']?.toString() ?? '';
+    final seatId = payload['seat_id']?.toString() ?? '';
+    final actorName = payload['actor_name']?.toString() ?? '';
+    final target = payload['target'];
+    final targetSeat = target is Map ? target['seat_id']?.toString() : null;
+    final targetName = target is Map ? target['name']?.toString() ?? '' : '';
+    final challengeable = payload['challengeable'] != false;
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.xl,
+          0,
+          AppSpacing.xl,
+          AppSpacing.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                RoleAvatar(roleId: roleId, size: 52),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '技能详情',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: context.palette.accent,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        skill,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: context.palette.text,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '关闭',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: [
+                if (visual != null)
+                  Tag(
+                    visual.name,
+                    color: context.palette.textSecondary,
+                    background: context.palette.surfaceMuted,
+                  ),
+                Tag(
+                  challengeable ? '可质疑' : '不可质疑',
+                  color: challengeable
+                      ? context.palette.warning
+                      : context.palette.textSecondary,
+                  background: challengeable
+                      ? context.palette.warningSoft
+                      : context.palette.surfaceMuted,
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            if (intro.isNotEmpty) _SkillBlock(title: '技能说明', body: intro),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              '使用者：${seatId.isEmpty ? '—' : '$seatId号'}'
+              '${actorName.isEmpty ? '' : ' $actorName'}'
+              '${targetSeat == null ? '' : ' · 目标：$targetSeat号${targetName.isEmpty ? '' : ' $targetName'}'}',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: context.palette.textSecondary,
+              ),
+            ),
+            if (role != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              _SkillBlock(title: '好人方技能', body: role.normal),
+              if (role.witch.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                _SkillBlock(title: '魔女化后', body: role.witch, danger: true),
+              ],
+            ],
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              '技能说明是公开规则；声明本身不代表身份——伪装声明的播报与真声明完全一致。'
+              '剩余次数、下层牌与私密目标不会在这里显示。',
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

@@ -20,6 +20,27 @@ def uid():
     return uuid4().hex
 
 
+# 昵称在界面上的展示上限：存储里保留完整昵称，发往客户端的展示名一律不超过 8 个字。
+PLAYER_NAME_LIMIT = 8
+HOST_LABEL_PREFIX = "主持人("
+
+
+def display_player_name(name, limit=PLAYER_NAME_LIMIT):
+    """玩家/账号昵称的展示名：超过 8 个字截断并加省略号。
+
+    昵称本身在存储里保持完整（账号昵称、参与身份快照、消息留档都不改写），只有
+    发往界面的字符串走这里。主持人展示名是「主持人(昵称)」这种组合标签，截断时
+    只动括号里的昵称，不能把「主持人(」也截掉。
+    """
+    text = (name or "").strip()
+    if text.startswith(HOST_LABEL_PREFIX) and text.endswith(")"):
+        inner = text[len(HOST_LABEL_PREFIX) : -1]
+        return f"{HOST_LABEL_PREFIX}{display_player_name(inner, limit)})"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
 def host_display_name(nickname):
     """对局内主持人的展示名：主持人(QQ 昵称)；昵称缺失时退回「主持人」。
 
@@ -27,7 +48,7 @@ def host_display_name(nickname):
     一律带上昵称。
     """
     text = (nickname or "").strip()
-    return f"主持人({text})" if text else "主持人"
+    return f"主持人({display_player_name(text)})" if text else "主持人"
 
 
 def host_label(game):
@@ -66,6 +87,24 @@ def seat(game, seat_id):
 
 def owner(game, card_id):
     return next(s for s in game["seats"] if card_id in s["cards"])
+
+
+def seat_name(game, s):
+    """席位在界面上的标识名：局内是当前展示的角色名，候场是玩家公开称呼。
+
+    局内一律用 ``avatar_role_id``（穗乃香示人之后就是示人身份），与客户端头像上的
+    角色保持一致；发牌/调序阶段不公开角色名称，因此那里仍然是玩家的公开称呼。
+    """
+    role_id = s.get("avatar_role_id")
+    if game.get("status") != "lobby" and role_id in ROLES:
+        return ROLES[role_id]["name"]
+    # 候场时这里就是玩家的公开称呼：选择界面上的展示同样受 8 字上限约束。
+    return display_player_name(s["name"])
+
+
+def seat_label(game, s):
+    """席位选项的显示文本：「座位号 · 角色名/公开称呼」。"""
+    return f"{s['id']}号 · {seat_name(game, s)}"
 
 
 def current(game, s):
@@ -196,7 +235,7 @@ def audience(game, seats):
     return [s["occupant_id"] for s in game["seats"] if s["id"] in seats and s["occupant_id"]]
 
 
-def notify(game, events, text, seats=None, title="游戏信息", image_id=None, alert=False):
+def notify(game, events, text, seats=None, title="游戏信息", image_id=None, alert=False, payload=None):
     recipients = None if seats is None else audience(game, seats)
     event = {
         "kind": "information" if recipients is not None else ("alert" if alert else "notice"),
@@ -206,6 +245,9 @@ def notify(game, events, text, seats=None, title="游戏信息", image_id=None, 
     }
     if image_id:
         event["image_id"] = image_id
+    if payload is not None:
+        # 结构化载荷里带的是「谁能看到多少」的完整真相，投影在 storage.message_view 里做。
+        event["payload"] = payload
     events.append(event)
     if recipients is not None or image_id:
         game["information"].append({"id": uid(), **deepcopy(event)})
@@ -361,24 +403,82 @@ def duel_vote_exempt(game, card, duel):
 
 
 def duel_vote_required(game, seat_id):
-    """本轮是否强制该席位投同意。
+    """该席位是否还欠决斗的一张同意票。
 
-    决斗当天的两张牌都排在投票轮次最前面：第一张投完之后，
-    还没同意过任何一张的人，在第二张上必须投同意。雪莉对汉娜的
-    限制优先豁免，所以那种情况不会强制。
+    决斗当天所有人必须至少同意两张决斗牌之一：投出任意一张决斗同意票后
+    ``duel_approvals`` 置位，这条要求就消失。雪莉对汉娜的限制优先豁免，
+    所以那种情况不会强制。
     """
     if game["phase"] != "voting":
         return False
     duel = duel_cards(game)
     if len(duel) < 2 or game["duel_approvals"].get(seat_id):
         return False
-    candidate = (game.get("public", {}).get("votes") or {}).get("candidate")
-    if candidate is None or candidate != owner(game, duel[-1])["id"]:
-        return False
     card = current(game, seat_id)
     if card is None:
         return False
     return not duel_vote_exempt(game, card, duel)
+
+
+def nomination_rounds(game):
+    """今天要投的候选，先提名者排在前面。
+
+    同一张牌被多人提名只投一轮；蕾雅决斗当天的两张牌直接排在最前面，
+    不需要任何人提名。
+    """
+    rounds, seen = [], set()
+    for cid in duel_cards(game):
+        seen.add(cid)
+        rounds.append({"seat_id": owner(game, cid)["id"], "card_id": cid, "by": None})
+    for item in game["nominations"]:
+        if item["card_id"] in seen:
+            continue
+        seen.add(item["card_id"])
+        rounds.append(item)
+    return rounds
+
+
+def nomination_auto_yes(game, seat_id, card_id):
+    """该席位是否因提名过这张牌而自动投同意票。
+
+    「提名过该候选自动同意」优先于玩家的选择；但绑定中的雪莉不能同意处决汉娜，
+    那条限制又优先于自动同意，因此她这一次提名不产生同意票。
+    """
+    if not any(n["by"] == seat_id and n["card_id"] == card_id for n in game["nominations"]):
+        return False
+    if card_id == "hanna" and game["spiritual"]["sherry_bound"]:
+        card = current(game, seat_id)
+        if card is not None and card["id"] == "sherry":
+            return False
+    return True
+
+
+def seat_choice(game, seat_id, card_id):
+    """该席位对某个候选的选择；还没投且没有自动同意票时返回 None。
+
+    自动同意票不写进 ``game["ballots"]``：它是提名推导出来的结论，玩家自己没有
+    提交过，因此这里按规则实时算。
+    """
+    if nomination_auto_yes(game, seat_id, card_id):
+        return "yes"
+    return ((game.get("ballots") or {}).get(seat_id) or {}).get(card_id)
+
+
+def ballot_selection(game, seat_id):
+    """该席位对今天全部候选的选择（省略尚未选择的候选），用于投影与日志。"""
+    return {
+        item["card_id"]: choice
+        for item in nomination_rounds(game)
+        if (choice := seat_choice(game, seat_id, item["card_id"]))
+    }
+
+
+def ballot_complete(game, seat_id):
+    """该席位是否已经对今天全部候选做出选择；今天没有候选时视为完成。"""
+    return all(
+        seat_choice(game, seat_id, item["card_id"]) is not None
+        for item in nomination_rounds(game)
+    )
 
 
 def poison_sources(game, card):
@@ -452,6 +552,33 @@ def card_actionable(game, card):
     if can_use_card(game, card):
         return True
     return can_use_card(game, card, True) and puppet_master(game, card) is not None
+
+
+def seat_eliminated(game, seat_or_id):
+    """该席位现在是否已整席出局：对局进行中且两张牌都不在场。
+
+    候场与调序阶段还没发牌，每个席位都没有当前牌，那不是出局；对局结束后
+    限制也不再适用。出局不是永久标签：希罗回溯、梅露露复活与主持人回溯都会
+    让角色牌重新登场，所以一律按当前牌现场判断，不做单独记账。
+    """
+    if game["status"] != "playing":
+        return False
+    return current(game, seat_or_id) is None
+
+
+def participant_eliminated(game, participant_id):
+    """该参与者现在是否已整席出局；找不到席位（已替补离场等）按不在局处理。"""
+    if not participant_id or participant_id == "host":
+        return False
+    found = next((s for s in game["seats"] if s["occupant_id"] == participant_id), None)
+    return found is not None and seat_eliminated(game, found)
+
+
+def actor_eliminated(game, actor):
+    """当前操作者是否已整席出局；主持人、观战者与未入座身份恒为 False。"""
+    if actor.get("kind") != "player":
+        return False
+    return participant_eliminated(game, actor.get("id"))
 
 
 def seat_operable(game, seat_id):
@@ -533,9 +660,9 @@ def deal_cards(game):
 
 
 def upgrade_game(game):
-    """就地补齐第五版规则字段；保留旧局的全部历史数据。"""
-    changed = game.get("rules_revision") != 5
-    game["rules_revision"] = 5
+    """就地补齐第六版规则字段；保留旧局的全部历史数据。"""
+    changed = game.get("rules_revision") != 6
+    game["rules_revision"] = 6
 
     def add(mapping, key, value):
         nonlocal changed
@@ -673,6 +800,20 @@ def upgrade_game(game):
         if states.pop("protected", None):
             states.setdefault("protected_day", game.get("day", 1))
             changed = True
+    # 第六版：投票改为一次性提交全部候选，计票表 votes 换成 ballots。
+    # 正停在投票阶段的旧局要把已经投出的当前轮选票搬过去，否则当事人得重投一轮。
+    legacy_votes = game.pop("votes", None)
+    add(game, "ballots", {})
+    if game.get("phase") == "voting" and legacy_votes:
+        rounds = nomination_rounds(game)
+        index = len(game.get("vote_rounds", []))
+        if index < len(rounds):
+            card_id = rounds[index]["card_id"]
+            for seat_id, choice in legacy_votes.items():
+                if choice:
+                    game["ballots"].setdefault(seat_id, {}).setdefault(card_id, choice)
+    if legacy_votes is not None:
+        changed = True
     return changed
 
 
@@ -688,7 +829,7 @@ def create_game(codex):
     SystemRandom().shuffle(shuffled_codex)
     return {
         "id": uid(),
-        "rules_revision": 5,
+        "rules_revision": 6,
         # 建立这一局的主持人身份快照：对局内显示「主持人(昵称)」，
         # 也让非本局主持人进入管理界面时能被认出来（见 api.host_enter）。
         "host": None,
@@ -751,7 +892,9 @@ def create_game(codex):
         "speech_queued": {},
         "queued_notices": [],
         "queued_reveals": [],
-        "votes": {},
+        # 今天的选票：{席位: {角色牌: 同意/不同意/弃票}}。提名自动同意票不写进来，
+        # 由 state.seat_choice 按规则实时推导；计票表（旧字段 votes）已删除。
+        "ballots": {},
         "vote_rounds": [],
         "execution": [],
         "execution_ready": [],

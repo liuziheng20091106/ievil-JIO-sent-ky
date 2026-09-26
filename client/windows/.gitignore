@@ -1,5 +1,15 @@
 flutter/ephemeral/
 
+# Updater：本机签名产物与中间文件不入库（私钥绝不入库）。
+# 真实证书头文件由 tools/sign-windows.ps1 生成到 self_signed_cert.local.h，
+# 入库的 self_signed_cert.h 永远是「空证书占位」。
+updater/self_signed_cert.local.h
+updater/*.pfx
+updater/*.cer
+updater/.certs/
+updater/*.obj
+updater/*.pdb
+
 # Visual Studio user-specific files.
 *.suo
 *.user

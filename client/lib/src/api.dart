@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'client_version.dart';
 import 'models.dart';
 
 class GameApi {
   GameApi(this.endpoint, {this.token}) {
     _client.connectionTimeout = const Duration(seconds: 25);
-    _client.userAgent = 'seven-double-flutter/1';
+    // 版本号写在 UA 里：后端据此下发更新信息、并只对「过旧客户端加入对局」设限。
+    _client.userAgent = clientUserAgent();
   }
 
   final ServerEndpoint endpoint;
@@ -24,6 +26,71 @@ class GameApi {
 
   Future<Map<String, dynamic>> health() async =>
       jsonObject(await _request('GET', '/api/health'));
+
+  /// 用户协议（Markdown）：客户端首次连接服务器时展示；服务端未配置时正文为空。
+  Future<Agreement> agreement() async =>
+      Agreement.fromJson(await _request('GET', '/api/agreement'));
+
+  /// 更新包地址：`/releases/x.zip` 这类相对地址按当前服务根地址解析，
+  /// 绝对地址只接受 HTTP(S)（协议之外的 scheme 一律拒绝）。
+  Uri resolveDownloadUrl(String url) {
+    final value = url.trim();
+    if (value.isEmpty) throw const ApiException('服务端没有下发更新包地址');
+    final parsed = Uri.tryParse(value);
+    if (parsed == null) throw ApiException('更新包地址不合法：$value');
+    if (!parsed.hasScheme) return endpoint.httpUri.resolve(value);
+    if (parsed.scheme != 'http' && parsed.scheme != 'https') {
+      throw ApiException('更新包地址必须是 HTTP(S)：$value');
+    }
+    if (parsed.host.isEmpty) throw ApiException('更新包地址不合法：$value');
+    return parsed;
+  }
+
+  /// 把更新包流式下载到 [file]（调用方自己负责先写临时文件再改名）。
+  /// [onProgress] 收到已下载字节与总字节（服务端没给 Content-Length 时 total 为 -1）；
+  /// [isCancelled] 返回真时中断下载并抛 [ApiException]（HTTP 连接随之关闭）。
+  Future<int> downloadTo(
+    String url,
+    File file, {
+    void Function(int received, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final uri = resolveDownloadUrl(url);
+    try {
+      final request =
+          await _client.getUrl(uri).timeout(const Duration(seconds: 25));
+      // 与其它请求一致：不跟随重定向，避免把下载引到协议外的地址。
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.acceptHeader, '*/*');
+      final response = await request.close().timeout(const Duration(seconds: 25));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw ApiException('下载失败 (${response.statusCode})',
+            statusCode: response.statusCode);
+      }
+      final total = response.contentLength;
+      final sink = file.openWrite();
+      var received = 0;
+      try {
+        await for (final chunk in response) {
+          if (isCancelled?.call() ?? false) {
+            throw const ApiException('已取消下载');
+          }
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, total);
+        }
+      } finally {
+        await sink.close();
+      }
+      return received;
+    } on TimeoutException {
+      throw const ApiException('下载超时');
+    } on SocketException catch (error) {
+      throw ApiException('无法连接服务器：${error.message}');
+    } on HandshakeException {
+      throw const ApiException('TLS 证书验证失败');
+    }
+  }
 
   Future<Map<String, dynamic>> me() async =>
       jsonObject(await _request('GET', '/api/me'));
@@ -366,6 +433,29 @@ class GameApi {
         'participants',
       ).map(GameEquipped.fromJson).toList(growable: false);
 
+  /// 历史对局列表：最近结束的在前；[before] 传上一页最后一条的 ended_at。
+  Future<({List<MatchSummary> matches, bool hasMore})> history({
+    String? before,
+    int limit = 20,
+  }) async {
+    final body = jsonObject(await _request(
+      'GET',
+      '/api/history',
+      query: {'limit': '$limit', 'before': before},
+    ));
+    return (
+      matches: jsonArray(body['matches'], 'history.matches')
+          .map(MatchSummary.fromJson)
+          .toList(growable: false),
+      hasMore: jsonBool(body['has_more'], 'history.has_more'),
+    );
+  }
+
+  /// 单局历史详情：结算、七个席位的两张角色牌与公开时间线。
+  Future<MatchDetail> match(String matchId) async => MatchDetail.fromJson(
+        await _request('GET', '/api/history/${Uri.encodeComponent(matchId)}'),
+      );
+
   Future<Object?> _request(
     String method,
     String path, {
@@ -486,7 +576,11 @@ class LiveConnection {
         onStatus(attempt == 0 ? '连接中' : '重连中');
         final socket = await WebSocket.connect(
           endpoint.liveUri.toString(),
-          headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+          headers: {
+            HttpHeaders.authorizationHeader: 'Bearer $token',
+            // 实时长连接同样带版本 UA；入局门槛只依赖 REST，这里失败也不影响使用。
+            HttpHeaders.userAgentHeader: clientUserAgent(),
+          },
         ).timeout(const Duration(seconds: 25));
         if (_stopped) {
           await socket.close();

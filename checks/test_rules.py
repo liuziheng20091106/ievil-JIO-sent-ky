@@ -5,7 +5,13 @@ import unittest
 from backend.app.game import DEFAULT_CODEX, GameError, apply_command, create_game, game_view
 from backend.app.game.actions import actions_for
 from backend.app.game.engine import sync_declarations
-from backend.app.game.state import DEAL_EXCLUDED_PAIRS, check_winner, deal_cards, upgrade_game
+from backend.app.game.state import (
+    DEAL_EXCLUDED_PAIRS,
+    check_winner,
+    deal_cards,
+    seat_choice,
+    upgrade_game,
+)
 from backend.app.views import action_prompt
 
 
@@ -63,6 +69,9 @@ class SetupRules(unittest.TestCase):
         game.pop("marg_love")
         game.pop("duel")
         game.pop("duel_approvals")
+        game.pop("ballots")
+        # 第六版以前的计票表：一次性投票改成 ballots 后这个字段整体作废。
+        game["votes"] = {"1": "yes", "2": "no"}
         game["water"] = {"holder": "1", "used": False}
         game["pending"].append({"id": "stale", "kind": "lower_entry", "card_id": "honoka"})
         game["information"].append({"id": "kept"})
@@ -71,11 +80,14 @@ class SetupRules(unittest.TestCase):
         game["spiritual"]["annan_penalty"]["annan"] = {"day": 3, "declaration_id": "old"}
         annan_seat = next(s["id"] for s in game["seats"] if "annan" in s["cards"])
         self.assertTrue(upgrade_game(game))
-        self.assertEqual(game["rules_revision"], 5)
+        self.assertEqual(game["rules_revision"], 6)
         self.assertEqual(game["night"]["reactions"], [])
         self.assertIsNone(game["marg_love"])
         self.assertIsNone(game["duel"])
         self.assertEqual(game["duel_approvals"], {})
+        # 第六版：旧的轮次计票表换成整票 ballots；这一局不在投票阶段，不迁移内容。
+        self.assertEqual(game["ballots"], {})
+        self.assertNotIn("votes", game)
         self.assertEqual(game["information"], [{"id": "kept"}])
         # 旧局的单瓶13水迁为一个未使用的持有席位；旧待办直接作废。
         self.assertEqual(game["water"], {"holders": ["1"]})
@@ -87,6 +99,19 @@ class SetupRules(unittest.TestCase):
             {"day": 3, "declaration_id": "old"},
         )
         self.assertFalse(upgrade_game(game))
+
+    def test_upgrade_game_moves_a_mid_vote_save_into_the_ballot(self):
+        """正停在投票阶段的旧存档：已经投出的当前轮选票要搬进 ballots，不逼玩家重投。"""
+        game = staged_game(day=2, half="day", phase="voting")
+        candidate = game["seats"][3]["cards"][0]
+        game["nominations"] = [{"seat_id": "4", "card_id": candidate, "by": None}]
+        game["votes"] = {"2": "no", "3": "yes"}
+        del game["ballots"]
+        self.assertTrue(upgrade_game(game))
+        self.assertEqual(game["ballots"], {"2": {candidate: "no"}, "3": {candidate: "yes"}})
+        self.assertNotIn("votes", game)
+        self.assertEqual(seat_choice(game, "2", candidate), "no")
+        self.assertEqual(seat_choice(game, "4", candidate), None)
 
     def test_upgrade_game_moves_a_removed_balloon_phase_to_nomination(self):
         """热气球整段移除后，停在旧阶段的存档不能因为查不到阶段名或技能名而崩溃。"""
@@ -554,7 +579,10 @@ class PhaseBannerRules(unittest.TestCase):
         self.assertEqual(self.prompt(game, "3")["title"], "请提交提名或放弃")
 
         game = staged_game(day=2, half="day", phase="voting")
-        game["votes"] = {"1": "yes", "2": "no"}
+        # 一次性投票：候选是4号席的当前牌，1号提名过它（自动同意），2号已投不同意。
+        candidate = game["seats"][3]["cards"][0]
+        game["nominations"] = [{"seat_id": "4", "card_id": candidate, "by": "1"}]
+        game["ballots"] = {"2": {candidate: "no"}}
         self.assertEqual(
             self.prompt(game, "1")["title"], "正在等待3号、4号、5号、6号、7号玩家投票"
         )

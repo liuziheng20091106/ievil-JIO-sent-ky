@@ -9,6 +9,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from . import achievement_storage, auth, auth_storage, schemas, storage
+from .game.state import display_player_name
 
 router = APIRouter(prefix="/api/achievements")
 
@@ -114,6 +115,9 @@ async def players(request: Request):
     # 两趟稳定排序：先按昵称，再按最近参赛时间倒序——从未参赛的排在最后。
     listed.sort(key=lambda item: item["name"])
     listed.sort(key=lambda item: item["last_played_at"] or "", reverse=True)
+    # 展示名在排序之后才截断：昵称完整时排序稳定，不会被 8 字上限影响次序。
+    for item in listed:
+        item["name"] = display_player_name(item["name"])
     return {"players": listed, "max_rarity": achievement_storage.MAX_RARITY}
 
 
@@ -166,7 +170,7 @@ async def account_summary(account_id: str, request: Request):
     grants = achievement_storage.grants_for(account_id)
     return {
         "account_id": account_id,
-        "name": account_name(account_id),
+        "name": display_player_name(account_name(account_id)),
         "total": len(grants),
         "equipped": achievement_storage.equipped(account_id),
         "top": grants[:5],

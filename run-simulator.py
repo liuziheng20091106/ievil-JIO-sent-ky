@@ -80,6 +80,9 @@ def run_one(args, seed, directory, root):
         host = ProtocolClient(transport, "主持人", origin=args.url)
         host.login_host(authenticate, args.host_qq, "测试主持人", group_id=args.group_id)
         host.create_game(DEFAULT_CODEX_ROLES)
+        # 与进程内跑批和真实客户端一致：主持人要先确认进入本局管理界面，
+        # 服务端才下发主持级数据与操作（否则开放参局这一步拿不到任何行动）。
+        host.enter_host_admin()
         host.refresh()
         seats = []
         for index in range(7):

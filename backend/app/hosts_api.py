@@ -8,6 +8,7 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from . import auth, auth_storage, schemas, storage
+from .game.state import display_player_name
 
 router = APIRouter(prefix="/api/hosts")
 
@@ -26,7 +27,7 @@ def account_view(row, level, *, builtin=False, authorization=None):
     authorization = authorization or {}
     return {
         "account_id": row["id"],
-        "name": row["nickname"],
+        "name": display_player_name(row["nickname"]),
         "qq_id": row["qq_id"],
         "avatar_url": row["avatar_url"],
         "level": int(level),

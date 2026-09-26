@@ -56,6 +56,9 @@ class GameStore extends ChangeNotifier {
   /// 已读公告的内容哈希（sha256）：跨重启保留，公告改了内容就重新算未读。
   static const _announcementReadKey = 'announcement_read_hashes';
 
+  /// 已同意的用户协议：键按服务地址隔离，值是协议内容的 sha256。
+  static const _agreementKeyPrefix = 'agreement_accepted:';
+
   final SharedPreferences preferences;
   final FlutterSecureStorage secureStorage;
 
@@ -105,6 +108,17 @@ class GameStore extends ChangeNotifier {
         for (final item in announcements)
           if (!readAnnouncementHashes.contains(item.hash)) item,
       ];
+
+  /// 服务端下发的用户协议：连接某个服务地址后拉一次，正文为空表示服务端没配协议。
+  /// 同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过就要重新同意。
+  Agreement agreement = const Agreement();
+  bool agreementLoading = false;
+
+  /// 服务端在 `/api/online` 里回报的「有更新」：为真时 [updateFlag] 自增一次，
+  /// 由 main.dart 转成「重新请求 /api/health 取版本字段」。
+  bool updateAvailable = false;
+  int updateFlag = 0;
+
   List<GameMessage> messages = [];
   Map<String, dynamic>? challengeInfo;
   String? pendingPhaseKey;
@@ -113,6 +127,22 @@ class GameStore extends ChangeNotifier {
   /// 私密信息不随筛选范围丢弃，登录/刷新时的历史也不重复提醒。
   GameMessage? pendingPrivateInfo;
   int? _privateInfoCursor;
+
+  /// 本进程里被「稍后」掉的悬浮对话框 id：服务端仍会下发这条，客户端不再自动弹。
+  /// 只放在内存：换局清空，重开应用会重新提醒一次未处理的内容。
+  final Set<String> _dismissedDialogs = <String>{};
+
+  /// 当前该弹的悬浮对话框（服务端下发、去掉本机已忽略的），第一条优先。
+  List<DialogItem> get activeDialogs => [
+        for (final item in view?.dialogs ?? const <DialogItem>[])
+          if (!_dismissedDialogs.contains(item.id)) item,
+      ];
+
+  /// 「稍后」：本条对话框不再自动弹，内容本身仍留在状态页与频道列表里。
+  void dismissDialog(String id) {
+    if (!_dismissedDialogs.add(id)) return;
+    notifyListeners();
+  }
 
   /// 本局各参与身份佩戴的成就，以及参与者 id 到账号 id 的映射。
   /// 服务端单独下发（成就是独立于对局规则的库），取不到就当没有徽章。
@@ -237,8 +267,11 @@ class GameStore extends ChangeNotifier {
     if (savedEndpoint != null) {
       try {
         _useEndpoint(ServerEndpoint.parse(savedEndpoint));
+        // 恢复期间就顺带把协议拉回来：登录前才会用到，这里不阻塞下面恢复会话。
+        unawaited(loadAgreement());
       } on FormatException {
         await preferences.remove(_endpointKey);
+        agreementLoading = false;
       }
     }
     final cachedActor = preferences.getString(_actorKey);
@@ -332,6 +365,8 @@ class GameStore extends ChangeNotifier {
     await preferences.setString(_endpointKey, parsed.toString());
     error = null;
     notifyListeners();
+    // 换服务器要重新过协议门：先把新地址的协议拉回来（拉到之前门显示加载中）。
+    unawaited(loadAgreement());
     final token = await secureStorage.read(key: _tokenKey);
     if (token == null) return;
     api!.token = token;
@@ -344,9 +379,68 @@ class GameStore extends ChangeNotifier {
     }
   }
 
+  /// 「取消连接」：清掉已保存的服务地址并回到地址输入页；不写任何同意记录。
+  Future<void> clearEndpoint() async {
+    await live?.stop();
+    api?.close();
+    await preferences.remove(_endpointKey);
+    endpoint = null;
+    api = null;
+    agreement = const Agreement();
+    agreementLoading = false;
+    error = null;
+    notifyListeners();
+  }
+
   void _useEndpoint(ServerEndpoint value) {
     endpoint = value;
     api = GameApi(value);
+    // 协议还没拉回来之前先让协议门显示加载中，避免先闪一下登录页。
+    agreement = const Agreement();
+    agreementLoading = true;
+  }
+
+  /// 拉取服务端用户协议。取不到时按「没有协议」放行：不能因为服务端没配好就进不去。
+  Future<void> loadAgreement() async {
+    final client = api;
+    if (client == null) {
+      agreementLoading = false;
+      notifyListeners();
+      return;
+    }
+    agreementLoading = true;
+    notifyListeners();
+    try {
+      agreement = await client.agreement();
+    } on ApiException {
+      agreement = const Agreement();
+    } on FormatException {
+      agreement = const Agreement();
+    }
+    agreementLoading = false;
+    notifyListeners();
+  }
+
+  /// 协议门是否需要拦下用户：只有「登录前 + 服务端配了协议 + 这一版还没同意」才拦。
+  /// 已经登录的用户不再被协议打断（对局中尤其不能）。
+  bool get agreementPending =>
+      actor == null &&
+      (agreementLoading ||
+          (!agreement.isEmpty && !agreement.acceptedBy(_acceptedAgreementHash)));
+
+  /// 已经同意过的协议哈希（按服务地址隔离）。
+  String? get _acceptedAgreementHash {
+    final current = endpoint;
+    if (current == null) return null;
+    return preferences.getString('$_agreementKeyPrefix$current');
+  }
+
+  /// 「同意并继续」：记住这个服务地址下已经同意的协议版本。
+  Future<void> acceptAgreement() async {
+    final current = endpoint;
+    if (current == null || agreement.isEmpty) return;
+    await preferences.setString('$_agreementKeyPrefix$current', agreement.hash);
+    notifyListeners();
   }
 
   Future<void> startPlayerLogin() => _startLogin(host: false);
@@ -618,6 +712,7 @@ class GameStore extends ChangeNotifier {
   }
 
   /// 在线名单是辅助信息：取不到时保留上一次结果，不打断对局界面。
+  /// 顺带收下服务端回报的「有更新」：为真时由 main.dart 去重新请求 /api/health。
   Future<void> loadOnline({String? gameId}) async {
     if (api == null || actor == null) return;
     try {
@@ -625,12 +720,22 @@ class GameStore extends ChangeNotifier {
       online = jsonArray(result['accounts'] ?? const <dynamic>[], 'online.accounts')
           .map(OnlineAccount.fromJson)
           .toList(growable: false);
+      _noteUpdateFlag(
+          jsonBool(result['update_available'], 'online.update_available'));
     } on ApiException {
       // 忽略：下个轮询周期会重试。
     } on FormatException {
       online = const <OnlineAccount>[];
     }
     notifyListeners();
+  }
+
+  /// 「有更新」只在 false→true 的跳变时自增一次：大厅每 5 秒轮询一次，
+  /// 每轮都自增会让上层反复请求 health。
+  void _noteUpdateFlag(bool value) {
+    if (value == updateAvailable) return;
+    updateAvailable = value;
+    if (value) updateFlag++;
   }
 
   Future<void> inviteAccount(String accountId) async {
@@ -978,6 +1083,10 @@ class GameStore extends ChangeNotifier {
   void applyView(GameView next) => _applyView(next);
 
   void _applyView(GameView next) {
+    // 换局（或本进程第一次看到这一局）：上一局「稍后」掉的对话框不该压住新局的内容。
+    if (view != null && view!.id != next.id) {
+      _dismissedDialogs.clear();
+    }
     // 「确认进入管理界面」一律以服务端为准：本局这个账号只要确认过一次
     // （换令牌、重新登录、重开应用都算），服务端就不再要求确认，客户端直接展开
     // 管理页；只有服务端明确要求时才显示确认页，本地不记这件事。

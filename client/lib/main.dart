@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'src/agreement_gate.dart';
 import 'src/app_icons.dart';
 import 'src/achievement_pages.dart';
 import 'src/announcement_pages.dart';
+import 'src/client_version.dart';
 import 'src/design.dart';
+import 'src/history_pages.dart';
 import 'src/host_pages.dart';
 import 'src/models.dart';
 import 'src/picks.dart';
@@ -15,6 +18,8 @@ import 'src/release.dart';
 import 'src/role_visuals.dart';
 import 'src/shell.dart';
 import 'src/store.dart';
+import 'src/update_dialog.dart';
+import 'src/update_installer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,13 +28,24 @@ Future<void> main() async {
   final store = await GameStore.create();
   // 「知道了 / 忽略」的记忆写在偏好里，重启后不重复弹同一条提示。
   final release = ReleaseMonitor(preferences: store.preferences);
+  // 上一次应用内更新留下的安装包在这里清理（安卓：安装完成或失败后的残留）。
+  unawaited(UpdateInstaller.create()
+      .then((installer) => installer.cleanupStale(kClientVersion))
+      .catchError((Object _) {}));
   // 版本标签与保活白名单是只读探测，失败不阻塞启动；每个服务地址只查一次。
   Object? checked;
+  var seenUpdateFlag = store.updateFlag;
   store.addListener(() {
     final endpoint = store.endpoint;
     if (endpoint != null && !identical(endpoint, checked)) {
       checked = endpoint;
       release.check(endpoint);
+    }
+    // /api/online 回报「有更新」时再请求一次 /api/health 取版本字段与更新详情；
+    // 同一服务地址与同一标签 10 分钟内只查一次（见 ReleaseMonitor.checkFromOnline）。
+    if (store.updateFlag != seenUpdateFlag) {
+      seenUpdateFlag = store.updateFlag;
+      if (endpoint != null) release.checkFromOnline(endpoint);
     }
   });
   runApp(SevenDoubleApp(store: store, release: release));
@@ -85,18 +101,38 @@ class AppGate extends StatelessWidget {
             MaterialBanner(
               backgroundColor: context.palette.danger,
               content: Text(
-                '当前版本过旧，必须更新后才能继续使用，请向主持人获取最新安装包。',
+                '当前版本过旧，更新之前无法加入对局；其它功能仍可正常使用。',
                 style: TextStyle(color: context.palette.onAccent),
               ),
-              actions: const [SizedBox.shrink()],
+              actions: [
+                TextButton(
+                  onPressed: () => showUpdateDialog(
+                    context,
+                    store: store,
+                    release: release,
+                  ),
+                  child: Text(
+                    '立即更新',
+                    style: TextStyle(color: context.palette.onAccent),
+                  ),
+                ),
+              ],
             )
           else if (release.updateNoticeVisible)
             MaterialBanner(
-              content: const Text('有新版本可用，建议向主持人获取最新安装包。'),
+              content: const Text('有新版本可用，可直接在应用内更新。'),
               actions: [
                 TextButton(
+                  onPressed: () => showUpdateDialog(
+                    context,
+                    store: store,
+                    release: release,
+                  ),
+                  child: const Text('立即更新'),
+                ),
+                TextButton(
                   // 横幅是页面自己渲染的，不在 ScaffoldMessenger 的队列里，
-                  // 必须真的把「已关闭」记下来才会消失。
+                  // 必须真的把「已关闭」记下来才会消失；大厅里的更新入口不受影响。
                   onPressed: release.dismissUpdateNotice,
                   child: const Text('知道了'),
                 ),
@@ -150,11 +186,15 @@ class AppGate extends StatelessWidget {
     if (store.endpoint == null) {
       return EndpointPage(store: store);
     }
+    // 首次连接服务器：协议还没同意之前先过协议门（同意并继续 / 取消连接）。
+    if (store.agreementPending) {
+      return AgreementGate(store: store);
+    }
     if (store.actor == null) {
       return LoginPage(store: store);
     }
     if (store.gameId == null) {
-      return LobbyPage(store: store);
+      return LobbyPage(store: store, release: release);
     }
     if (store.view == null) {
       return Scaffold(
@@ -198,7 +238,10 @@ class EndpointPage extends StatefulWidget {
 }
 
 class _EndpointPageState extends State<EndpointPage> {
-  final controller = TextEditingController();
+  /// 默认预填官方服务地址；玩家可以随意改成别的地址（既不阻止修改，也不自动连接）。
+  late final controller = TextEditingController(
+    text: widget.store.endpoint?.toString() ?? kDefaultServerEndpoint,
+  );
   String? error;
 
   @override
@@ -239,7 +282,7 @@ class _EndpointPageState extends State<EndpointPage> {
                     const SizedBox(height: AppSpacing.xxl),
                     const SectionTitle(
                       '连接服务器',
-                      subtitle: '局域网可用 HTTP；公网地址必须使用 HTTPS。',
+                      subtitle: '已默认填好官方地址；局域网可用 HTTP，公网地址必须使用 HTTPS，地址可以自行修改。',
                     ),
                     TextField(
                       controller: controller,
@@ -247,7 +290,7 @@ class _EndpointPageState extends State<EndpointPage> {
                       autocorrect: false,
                       decoration: InputDecoration(
                         labelText: '服务根地址',
-                        hintText: 'https://game.example.com',
+                        hintText: kDefaultServerEndpoint,
                         errorText: error,
                         prefixIcon: const Icon(Icons.dns_outlined, size: 20),
                       ),
@@ -580,8 +623,12 @@ class _LoginPageState extends State<LoginPage>
 
 /// 大厅：等待开放、加入或观战；主持人可先确认魔典再建局。
 class LobbyPage extends StatefulWidget {
-  const LobbyPage({super.key, required this.store});
+  const LobbyPage({super.key, required this.store, this.release});
+
   final GameStore store;
+
+  /// 发布监控：有更新时在大厅里挂常驻入口（测试与预览可以不传）。
+  final ReleaseMonitor? release;
 
   @override
   State<LobbyPage> createState() => _LobbyPageState();
@@ -591,6 +638,9 @@ class _LobbyPageState extends State<LobbyPage> {
   List<String>? codex;
   Timer? _ticker;
   bool _ticking = false;
+
+  /// 强制更新时只自动弹一次更新弹窗（弹窗可以关掉，大厅里的入口一直在）。
+  bool _mandatoryPrompted = false;
 
   @override
   void initState() {
@@ -652,8 +702,30 @@ class _LobbyPageState extends State<LobbyPage> {
 
   @override
   Widget build(BuildContext context) {
+    final release = widget.release;
+    // 有更新时大厅里要挂常驻入口；发布监控变化（例如 online 回报有更新、
+    // 或用户点了「知道了」）都要跟着刷新，因此这里额外监听它。
+    if (release == null) return _build(context);
+    return AnimatedBuilder(
+      animation: release,
+      builder: (context, _) => _build(context),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     final store = widget.store;
     final game = store.lobbyGame;
+    // 强制更新：一进大厅就自动弹一次（只在大厅弹，对局中不打扰）。
+    // 放在 build 里是因为版本信息可能在进入大厅之后才从 /api/health 回来。
+    final release = widget.release;
+    if (release != null && release.updateRequired && !_mandatoryPrompted) {
+      _mandatoryPrompted = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          showUpdateDialog(context, store: store, release: release);
+        }
+      });
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('大厅'),
@@ -678,10 +750,12 @@ class _LobbyPageState extends State<LobbyPage> {
             Row(
               children: [
                 // 大厅里不摆主持人的月代雪立绘：主持人先顶一张随机角色头像，
-                // 对局中才固定月代雪（见 RoleAvatar.host）。其他身份在大厅仍是
-                // 中性占位，避免用某张角色立绘暗示尚未公开的身份。
+                // 对局中才固定月代雪（见 RoleAvatar.host）。头像优先用账号的 QQ
+                // 头像（服务端随 actor 下发，账号库里就有），取不到时退回中性占位，
+                // 不借角色立绘暗示尚未公开的身份。
                 RoleAvatar(
                   roleId: store.actor!.isHost ? lobbyAvatarRoleId : null,
+                  imageUrl: store.actor!.avatarUrl,
                   size: 48,
                 ),
                 const SizedBox(width: AppSpacing.md),
@@ -878,6 +952,11 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
                 ),
               ),
+            // 更新入口：只要服务端说有新版本就一直在，弹窗关掉也不会消失。
+            if (widget.release != null &&
+                (widget.release!.updateAvailable ||
+                    widget.release!.updateRequired))
+              UpdateEntryCard(store: store, release: widget.release!),
             // 公告：大厅轮询顺带更新（见 store.refreshLobby），点开看 markdown 正文。
             AnnouncementSection(store: store),
             // 成就：玩家看自己获得的成就并佩戴；3 级及以上主持才能管理定义与授权。
@@ -912,6 +991,18 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
                 ),
               ),
+            // 历史对局：已结束（或被清空）的对局留档在独立库里，跨局保留；任何登录身份可看。
+            _LobbyEntry(
+              icon: Icons.history_outlined,
+              color: context.palette.textSecondary,
+              title: '历史对局',
+              subtitle: '查看已结束对局的胜负、身份与公开时间线',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => MatchHistoryPage(store: store),
+                ),
+              ),
+            ),
             // 公告管理：只有 5 级（系统管理员）能发布。
             if (store.actor!.isAdmin)
               _LobbyEntry(
@@ -943,7 +1034,11 @@ class _LobbyPageState extends State<LobbyPage> {
                       ),
                     for (final account in _others(store))
                       ListTile(
-                        leading: const RoleAvatar(roleId: null, size: 40),
+                        leading: RoleAvatar(
+                          roleId: null,
+                          size: 40,
+                          imageUrl: account.avatarUrl,
+                        ),
                         title: Text(account.name),
                         trailing:  Tag('在线', icon: Icons.wifi_tethering),
                       ),

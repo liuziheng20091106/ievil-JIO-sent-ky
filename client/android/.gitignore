@@ -6,6 +6,8 @@ gradle-wrapper.jar
 /local.properties
 GeneratedPluginRegistrant.java
 .cxx/
+# Gradle/AGP 的根构建目录（flutter build apk 会生成）。
+/build/
 
 # Remember to never publicly share your keystore.
 # See https://flutter.dev/to/reference-keystore

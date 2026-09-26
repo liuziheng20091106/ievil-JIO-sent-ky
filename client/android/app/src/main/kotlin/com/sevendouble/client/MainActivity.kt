@@ -9,9 +9,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
@@ -54,6 +56,80 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // 应用内更新：打开引导网页 + 把下载好的 APK 交给系统安装器。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "client_update")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "openUrl" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        result.success(openUrl(url))
+                    }
+                    "canInstallPackages" -> result.success(canInstallPackages())
+                    "requestInstallPermission" -> {
+                        requestInstallPermission()
+                        result.success(true)
+                    }
+                    "installApk" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        result.success(installApk(path))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /// 用系统默认浏览器打开网页；没有可用浏览器时返回 false（界面退回复制链接）。
+    private fun openUrl(url: String): Boolean {
+        if (url.isEmpty()) return false
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            true
+        } catch (failure: Exception) {
+            false
+        }
+    }
+
+    /// Android 8.0 起安装未知来源应用是「按应用授权」，而不是全局开关。
+    private fun canInstallPackages(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+
+    private fun requestInstallPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                )
+            )
+        } catch (failure: Exception) {
+            // 少数 ROM 没有这个入口：下次点「更新」会直接尝试拉起安装器。
+        }
+    }
+
+    /// 拉起系统安装器。返回 "launched" / "permission-required" / "failed"。
+    /// 安装包在应用缓存目录里，必须经 FileProvider 转成 content:// 并授权读取，
+    /// 否则安装器（另一个进程）读不到文件。
+    private fun installApk(path: String): String {
+        val file = File(path)
+        if (!file.exists()) return "failed"
+        if (!canInstallPackages()) return "permission-required"
+        return try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            "launched"
+        } catch (failure: Exception) {
+            "failed"
+        }
     }
 
     /// 对局邀请的系统通知：应用切到后台时界面横幅看不到，靠通知栏补一次提醒。

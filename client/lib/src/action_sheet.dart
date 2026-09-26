@@ -198,9 +198,14 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     super.dispose();
   }
 
-  /// 玩家类字段：用自绘选择器（头像 + 名字 + 角色）。
+  /// 玩家类字段：用自绘选择器（头像 + 座位号 + 角色名）。
+  ///
+  /// 服务端在「选席位」的字段上带 options_kind=seat（对局内目标、候选、警告席位等），
+  /// 这类字段一律按角色卡显示；participant_id 用于房间管理与私信，那里仍显示昵称。
   bool _isPlayerField(ActionField field) =>
-      field.name == 'participant_id' || field.name == 'participant_ids';
+      field.name == 'participant_id' ||
+      field.name == 'participant_ids' ||
+      field.raw['options_kind'] == 'seat';
 
   bool _isCodexField(ActionField field) =>
       field.name == 'roles' && field.options.length > 11;
@@ -397,6 +402,10 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     }
     if (_isCodexField(field)) {
       return _codexField(field);
+    }
+    if (field.type == 'select' && field.raw['seat_id'] != null) {
+      // 一次性投票的一行：候选是席位，服务端在字段上带了 seat_id。
+      return _ballotField(field);
     }
     if (field.type == 'select') {
       return _selectField(field);
@@ -623,6 +632,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     final players = playersFromOptions(
       field.options,
       seats: widget.store.view?.seats,
+      byRole: field.raw['options_kind'] == 'seat',
     );
     final picked =
         players.where((player) => selected.contains(player.id)).toList();
@@ -791,6 +801,131 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 席位在牌桌上的那一行：头像 + 「座位号 · 角色名」，用来渲染选票与目标行。
+  Map<String, dynamic>? _seatRow(String? seatId) {
+    if (seatId == null) return null;
+    final seats = widget.store.view?.seats ?? const <Map<String, dynamic>>[];
+    for (final seat in seats) {
+      if (seat['id']?.toString() == seatId) return seat;
+    }
+    return null;
+  }
+
+  /// 一次性投票的一行：头像 + 「座位号 · 角色名」+ 同意 / 不同意 / 弃票。
+  ///
+  /// 服务端在每行上带 seat_id（候选所在席位）与可选的 note（「提名自动同意」
+  /// 「绑定汉娜：不能同意」「蕾雅决斗」）。只有一个选项的行是锁定的：看得见，
+  /// 不用点（提名自动同意票由服务端结算）。
+  Widget _ballotField(ActionField field) {
+    final seatId = field.raw['seat_id']?.toString();
+    final seat = _seatRow(seatId);
+    final roleId = seat?['avatar_role_id']?.toString();
+    final role = roleVisual(roleId);
+    final name = role?.name ??
+        seat?['name']?.toString() ??
+        (seatId == null ? field.label : '$seatId号');
+    final selected = values[field.name]?.toString();
+    final note = field.raw['note']?.toString();
+    final locked = field.options.length <= 1;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              RoleAvatar(roleId: roleId, size: 36, dead: seat?['alive'] == false),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  seatId == null ? name : '$seatId号 · $name',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: context.palette.text,
+                  ),
+                ),
+              ),
+              if (note != null && note.isNotEmpty)
+                Tag(
+                  note,
+                  color: context.palette.textSecondary,
+                  background: context.palette.surfaceMuted,
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: [
+              for (final option in field.options)
+                _choiceChip(
+                  label: option['label'].toString(),
+                  selected: selected == option['value'].toString(),
+                  locked: locked,
+                  onTap: () {
+                    if (locked) return;
+                    setState(() {
+                      values[field.name] = option['value'].toString();
+                      _saveDraft();
+                    });
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _choiceChip({
+    required String label,
+    required bool selected,
+    required bool locked,
+    required VoidCallback onTap,
+  }) {
+    final accent = context.palette.accent;
+    return Material(
+      color: selected ? context.palette.accentSoft : context.palette.surfaceMuted,
+      borderRadius: BorderRadius.circular(AppRadius.field),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.field),
+        onTap: locked ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.field),
+            border: Border.all(
+              color: selected ? accent : context.palette.border,
+              width: selected ? 1.6 : 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (selected) ...[
+                Icon(Icons.check_circle, size: 16, color: accent),
+                const SizedBox(width: AppSpacing.xs),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected ? accent : context.palette.text,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

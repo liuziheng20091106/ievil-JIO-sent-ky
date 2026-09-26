@@ -1,6 +1,7 @@
 """SQLite state and immutable, audience-scoped message history."""
 
 import json
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -8,10 +9,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .game.catalog import night_half
-from .game.state import host_capable
+from .game.state import display_player_name, host_capable, participant_eliminated
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("GAME_DATA_DIR", PROJECT_ROOT / "data")).resolve()
+
+logger = logging.getLogger(__name__)
 
 
 def dumps(value):
@@ -45,7 +48,7 @@ def initialize():
             game_id TEXT NOT NULL REFERENCES games(id), kind TEXT NOT NULL,
             sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, avatar_role_id TEXT,
             channel_id TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
-            audience TEXT, image_id TEXT
+            audience TEXT, image_id TEXT, payload TEXT
         );
         CREATE INDEX IF NOT EXISTS message_game_id ON messages(game_id, id);
         CREATE TABLE IF NOT EXISTS evidence (
@@ -87,6 +90,10 @@ def initialize():
                     ),
                 )
         db.execute("DROP TABLE IF EXISTS sessions")
+        message_columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
+        if message_columns and "payload" not in message_columns:
+            # 结构化播报（技能名/目标/介绍）存在这一列里：旧库补列，读取时按可见范围裁剪。
+            db.execute("ALTER TABLE messages ADD COLUMN payload TEXT")
         # 原游戏没有成就设计：清掉历史对局里残留的占位字段，免得状态查看器继续显示它。
         for row in db.execute("SELECT id,state FROM games").fetchall():
             state = json.loads(row["state"])
@@ -173,6 +180,14 @@ def save_game(db, game):
 
 def purge(db):
     """Clear game data without touching global accounts or login tokens."""
+    # 对局行、参与身份与消息删掉就再也还原不出来：删之前先交给独立的历史库留档。
+    # 历史是另一个 SQLite 文件，写失败只记日志，不能因此挡住「一键初始化 / 开启下一局」。
+    from .history_storage import archive_pending
+
+    try:
+        archive_pending(db)
+    except Exception:
+        logger.exception("清空对局库前留档失败；继续清空")
     for table in ("messages", "evidence", "channels", "participants", "invites", "games"):
         db.execute(f"DELETE FROM {table}")
 
@@ -208,11 +223,12 @@ def add_message(
     text="",
     audience=None,
     image_id=None,
+    payload=None,
 ):
     created_at = now_text()
     cursor = db.execute(
         """INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,
-           channel_id,text,created_at,audience,image_id) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+           channel_id,text,created_at,audience,image_id,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
         (
             game_id,
             kind,
@@ -224,6 +240,7 @@ def add_message(
             created_at,
             None if audience is None else dumps(audience),
             image_id,
+            None if payload is None else dumps(payload),
         ),
     )
     return dict(db.execute("SELECT * FROM messages WHERE id=?", (cursor.lastrowid,)).fetchone())
@@ -241,6 +258,7 @@ def add_events(db, game_id, events):
                 text=event.get("text", ""),
                 audience=audience,
                 image_id=event.get("image_id"),
+                payload=event.get("payload"),
                 channel_id=event.get("channel_id", "public" if audience is None else "information"),
                 sender_id=event.get("sender_id", "host"),
                 sender_name=event.get("sender_name", "主持人"),
@@ -285,6 +303,57 @@ def message_view(row, actor):
     }
     if row["image_id"]:
         result["image_id"] = row["image_id"]
+    # 昵称展示统一走展示名：消息留档里存的是完整昵称，只有下发时按 8 字截断。
+    result["sender_name"] = display_player_name(result["sender_name"])
+    # 结构化播报按收件人裁剪：同一行消息，不同的人拿到的细节不同。
+    if "payload" in row.keys() and row["payload"]:
+        projected = project_message_payload(row["payload"], actor)
+        if projected:
+            result["payload"] = projected
+    return result
+
+
+def project_message_payload(raw, actor):
+    """把消息里的结构化载荷裁剪成该身份可见的细节。
+
+    目前只有技能播报用了这类载荷。技能名与介绍是公开规则，任何能看到这条消息的人
+    都能拿到；目标是否下发由技能决定（``PUBLIC_TARGET_ABILITIES``），私密目标只有
+    声明者本人（按 ``access_ids``，与其它「挂在自己名下的私密情报」同一判据）与
+    主持人能看到；``fake``（伪装声明）与牌 id 只给主持人——伪装声明在其他人眼里
+    必须与真声明完全一致，判据只能在服务端。
+    """
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") != "skill":
+        return payload if host_capable(actor) else None
+    host = host_capable(actor)
+    access = set(actor.get("access_ids") or [])
+    result = {
+        key: payload[key]
+        for key in (
+            "type",
+            "ability",
+            "ability_name",
+            "role_id",
+            "role_name",
+            "intro",
+            "seat_id",
+            "actor_participant_id",
+            "actor_name",
+            "challengeable",
+            "target_public",
+        )
+        if key in payload
+    }
+    if result.get("target_public") or host or payload.get("actor_participant_id") in access:
+        result["target"] = payload.get("target")
+    if host:
+        result["fake"] = bool(payload.get("fake"))
+        result["card_id"] = payload.get("card_id")
     return result
 
 
@@ -331,11 +400,16 @@ def channel_send_reason(db, game, actor, channel_id):
         and channel_id == SPECTATOR_CHANNEL
     ):
         return "观战频道仅观战者可见"
-    if not host_capable(actor) and night_half(game) and channel_id not in {"public", "information"}:
-        # 夜间只允许与主持人私聊：不含主持人的频道（旧数据或异常路径遗留）一律不能再发言。
+    if (
+        not host_capable(actor)
+        and channel_id not in {"public", "information"}
+        and (night_half(game) or participant_eliminated(game, actor.get("id")))
+    ):
+        # 夜间与整席出局都只允许与主持人私聊：不含主持人的频道（旧数据或异常路径
+        # 遗留）一律不能再发言。出局按当前牌现场求值，回溯或复活后自动解除。
         row = db.execute("SELECT participant_ids FROM channels WHERE id=?", (channel_id,)).fetchone()
         if row and "host" not in json.loads(row["participant_ids"]):
-            return "夜间只能与主持人私聊"
+            return "夜间只能与主持人私聊" if night_half(game) else "出局后只能与主持人私信"
     active = active_private_channel(db, game, actor["id"])
     if not host_capable(actor) and active and channel_id != active["id"]:
         return "私信期间只能在当前私信频道发言"

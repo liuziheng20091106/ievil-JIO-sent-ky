@@ -321,13 +321,24 @@ class HeuristicPolicy:
         view = client.view
         if view["phase"] != "voting":
             return None
-        cast = client.action("vote.cast")
-        if cast is None:
+        ballot = client.action("vote.cast")
+        if ballot is None:
             return None
-        # 只投服务端给出的选项：蕾雅决斗当天没同意过任何一张决斗牌的席位，
-        # 选项里只剩「同意」，随机投「不同意」会被判为非法提交。
-        options = option_values(cast, "choice") or ["yes", "no", "abstain"]
-        return Decision("vote.cast", {"choice": self.random.choice(options)}, "投票")
+        # 一次性选票：每个候选一行，只投服务端给出的选项。提名自动同意行只有
+        # 「同意」；决斗日带有 duel 标记的行至少要有一张同意，否则整份选票会被拒。
+        payload = {}
+        duel_rows = []
+        for item in ballot["fields"]:
+            options = [option["value"] for option in item.get("options", [])]
+            if not options:
+                return None
+            default = item.get("default")
+            payload[item["name"]] = default if default in options else self.random.choice(options)
+            if item.get("duel"):
+                duel_rows.append(item["name"])
+        if duel_rows and not any(payload.get(name) == "yes" for name in duel_rows):
+            payload[duel_rows[0]] = "yes"
+        return Decision("vote.cast", payload, f"投票（{len(payload)} 名候选）")
 
     # ------------------------------------------------------------------ 处决
 

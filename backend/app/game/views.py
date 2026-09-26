@@ -2,14 +2,22 @@
 
 from copy import deepcopy
 
-from .actions import actions_for, outstanding_seats, puppet_action_panels
+from .actions import (
+    actions_for,
+    discussion_end_required,
+    outstanding_seats,
+    puppet_action_panels,
+)
 from .catalog import PHASES, ROLES
 from .resolution import coco_seat
 from .state import (
     annan_penalty_day,
+    ballot_complete,
+    ballot_selection,
     card_actionable,
     controlled_cards,
     current,
+    display_player_name,
     duel_cards,
     eligible_voters,
     fallen_upper_role,
@@ -84,8 +92,8 @@ def host_tasks(game):
             warn_task("nomination", sid, f"{sid}号尚未提名或放弃（可与其他人同时提交）")
     elif phase == "voting":
         for s in eligible_voters(game):
-            if s["id"] not in game["votes"]:
-                warn_task("voting", s["id"], f"{s['id']}号尚未投票")
+            if not ballot_complete(game, s["id"]):
+                warn_task("voting", s["id"], f"{s['id']}号尚未投完票")
     elif phase == "execution":
         for cid in game["execution"]:
             if (
@@ -333,7 +341,7 @@ def game_view(game, actor):
             fallen = None
         entry = {
             "id": s["id"],
-            "name": s["name"],
+            "name": display_player_name(s["name"]),
             "avatar_role_id": None
             if lobby
             else pub["avatar_role_id"]
@@ -372,7 +380,9 @@ def game_view(game, actor):
     if not host:
         public.pop("witch_destiny", None)
     # 自由发言结束请求是公开进度：两端都要显示「已有几人提交」与 10 秒倒计时。
+    # 分母随之下发：在场不足六人时是「全员」，由服务端算好，客户端不写死 6。
     public["discussion_end_requests"] = list(game.get("discussion_end_requests", []))
+    public["discussion_end_required"] = discussion_end_required(game)
     # 当日目击名单：白天到投票结束前，死者和主持人常驻可见；进入处决或隔天自动消失。
     witness = game.get("witness")
     if (
@@ -400,10 +410,11 @@ def game_view(game, actor):
             "label": f"同时提名（还有 {len(pending)} 人未提交）",
         }
     elif phase == "voting":
+        candidates = (game.get("public", {}).get("votes") or {}).get("candidates") or []
         public["current_actor"] = {
             "phase": "voting",
-            "seat_id": game["public"]["votes"].get("candidate"),
-            "label": "投票中",
+            "seat_id": None,
+            "label": f"投票中（{len(candidates)} 名候选）",
         }
     elif phase == "execution":
         public["current_actor"] = {
@@ -475,7 +486,8 @@ def game_view(game, actor):
         ]
         if own_id in game["water"]["holders"]:
             view["self"]["water"] = True
-        view["self"]["vote"] = game["votes"].get(own_id)
+        # 投票改为一次性提交全部候选：本人已提交/自动同意的选择按角色牌列出。
+        view["self"]["votes"] = ballot_selection(game, own_id)
         view["self"]["warning_deadline"] = game["warnings"].get(own_id)
         if game["status"] == "lobby" and game["phase"] == "ordering" and "honoka" in own["cards"]:
             # 穗乃香规则：开局前获知其他人的上层角色（仅文字角色名，不带头像）。
@@ -486,7 +498,11 @@ def game_view(game, actor):
                 top = current(game, s)
                 if s["id"] != own_id and s["occupant_id"] and s["ready"] and top:
                     known.append(
-                        {"seat_id": s["id"], "name": s["name"], "role_id": top["role_id"]}
+                        {
+                            "seat_id": s["id"],
+                            "name": display_player_name(s["name"]),
+                            "role_id": top["role_id"],
+                        }
                     )
             view["self"]["honoka_upper"] = known
     if host:
@@ -501,7 +517,7 @@ def game_view(game, actor):
                 for s in game["snapshots"]
             ],
             "water": deepcopy(game["water"]),
-            "votes": deepcopy(game["votes"]),
+            "votes": deepcopy(game.get("ballots", {})),
             "deaths": deepcopy(game["deaths"]),
             "spiritual": deepcopy(game["spiritual"]),
             "winner_candidate": deepcopy(game["winner_candidate"]),

@@ -16,7 +16,18 @@ flutter build windows --debug
 
 安卓后台保活：应用启动后拉起前台服务（`KeepAliveService`，常驻低优先级通知 + PARTIAL 唤醒锁）维持 WebSocket 心跳；首次连接服务器后若未加入「忽略电池优化」白名单，大厅顶部横幅可一键跳转授权，也可以点「忽略」不再提示（记在 `shared_preferences`）。
 
-版本检查：连接服务器后读取 `/api/health` 下发的 `client_latest` / `client_minimum` 标签；低于 latest 横幅提示可更新，低于 minimum 横幅要求必须更新。可更新横幅可点「知道了」关闭，同样按被关掉的标签记住，服务端下发更新的版本才会重新提示。两条提示与保活提示都只在大厅出现，对局中不显示。比较用的内置版本号在 `lib/src/release.dart` 的 `ReleaseMonitor.currentVersion`，发版时与 `pubspec.yaml` 版本名同步手改，安卓 versionCode/versionName 不动。
+版本检查与应用内更新：所有请求都带 `seven-double-flutter/<版本> (<平台>)` 的 UA（`lib/src/client_version.dart`，发版时与 `pubspec.yaml` 的版本名同步手改）。连接服务器后读 `/api/health` 下发的 `client_latest` / `client_minimum` 与 `update` 详情；大厅每 5 秒轮询 `/api/online`，它回一句「有没有更新」，说有更新时客户端再请求一次 `/api/health` 取版本字段与更新日志（同一服务地址、同一 latest 标签 10 分钟内只查一次）。低于 latest 提示可更新、低于 minimum 强制更新（强制更新时不提供「稍后」，且服务端会拒绝以玩家身份入局，其它功能不受限）。
+
+更新弹窗渲染服务端下发的 Markdown 更新日志，`guide_url` 非空时多一个「打开网页」按钮（打不开就把链接复制到剪切板）。「更新」按钮在更新完成或用户主动关掉弹窗前始终可见——大厅里另有一个常驻的「立即更新」入口，关掉横幅或弹窗都不会让它消失。横幅可以点「知道了」关掉，记的是被关掉的 latest 标签，服务端下发更新的版本才会重新提示。
+
+- **Android**：下载 APK 到应用缓存目录（同一版本只下一次）→ 经 FileProvider 交给系统安装器（`REQUEST_INSTALL_PACKAGES` 权限；未授权时引导到「安装未知应用」页）→ 安装完成或失败后清理残留安装包。
+- **Windows**：下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\` → 由它准备更新环境（首次用一次管理员权限把自签名证书装进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 计划任务以最高权限静默替换程序 → 自动重启客户端。之后每次更新都不再需要 UAC。
+
+首次连接某个服务地址时会展示服务端下发的用户协议（`/api/agreement`，Markdown），用户可选「同意并继续」或「取消连接」；同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过会重新询问，服务端没配协议则直接进入登录页。
+
+服务地址默认预填 `https://super.tkcloud.online:447`，可以随意修改（不自动连接）。
+
+安装包用正式密钥签名：安卓见 `client/android/key.properties`（不入库），Windows 见 `tools/sign-windows.ps1`。
 
 Windows 构建需要 Visual Studio 的 C++ 桌面工作负载，以及 `flutter_secure_storage` 依赖的 ATL 组件（`Microsoft.VisualStudio.Component.VC.ATL`）。
 
@@ -53,7 +64,8 @@ Windows 主持人端禁止重复实例：同一登录会话里重复启动不会
 ```
 lib/main.dart              应用入口、服务地址页、登录页、大厅
 lib/src/api.dart           HttpClient / WebSocket 传输层与断线退避
-lib/src/models.dart        协议 DTO、服务地址校验、ui_version 检查
+lib/src/client_version.dart 内置版本号、UA 与默认服务地址
+lib/src/models.dart        协议 DTO、服务地址校验、ui_version 检查、用户协议
 lib/src/store.dart         账号、参与身份、视图、频道消息、草稿与角标
 lib/src/shell.dart         玩家/主持人壳、宽屏多栏与悬浮底栏、双头像、阶段动画
 lib/src/action_sheet.dart  行动表单、二次确认、手绘输入
@@ -61,6 +73,11 @@ lib/src/achievements.dart  稀有度色板、成就徽章与头像成就摘要
 lib/src/achievement_pages.dart 玩家的「我的成就」与主持人的「成就管理」
 lib/src/host_pages.dart    主持等级说明与「主持授权」页
 lib/src/announcement_pages.dart 大厅公告、公告页（markdown）与公告管理
+lib/src/agreement_gate.dart 首次连接的用户协议门（Markdown）
+lib/src/release.dart       版本标签、更新信息、online→health 复检去重
+lib/src/update_installer.dart 安卓 APK 下载安装与清理、Windows 交给 Updater
+lib/src/update_dialog.dart 更新弹窗（Markdown 日志）与大厅常驻更新入口
+lib/src/platform_channel.dart 打开网页 / 安卓安装未知应用的平台通道
 lib/src/predictive_sheet.dart 模态底部面板的预测性返回（接系统返回手势，见上）
 ```
 

@@ -27,14 +27,22 @@ class PickedPlayer {
 
 /// 从服务端字段选项构造玩家条目；角色取自当前牌桌视图。
 ///
-/// 行动选项的 value 是参与者 id，座位视图用 participant_id 关联；
-/// 玩家视角拿不到别人的牌，因此角色会在界面上显示为「角色未公开」。
+/// 选项的 value 既可能是参与者 id（房间管理、私信），也可能是席位号（对局内选目标），
+/// 两种都按各自的键关联到席位。`byRole` 为真时（服务端在座位类字段上标了
+/// options_kind=seat）用「角色名」当显示名：对局内选择界面一律以角色卡标识席位，
+/// 不显示玩家昵称；候场阶段服务端不下发角色，因此会自然退回公开称呼。
 List<PickedPlayer> playersFromOptions(
   List<Map<String, dynamic>> options, {
   List<Map<String, dynamic>>? seats,
+  bool byRole = false,
 }) {
   final byParticipant = <String, Map<String, dynamic>>{};
+  final bySeat = <String, Map<String, dynamic>>{};
   for (final seat in seats ?? const <Map<String, dynamic>>[]) {
+    final seatId = seat['id']?.toString();
+    if (seatId != null) {
+      bySeat[seatId] = seat;
+    }
     final participantId =
         seat['participant_id']?.toString() ?? seat['occupant_id']?.toString();
     if (participantId == null) continue;
@@ -44,7 +52,8 @@ List<PickedPlayer> playersFromOptions(
     for (final option in options)
       () {
         final id = option['value'].toString();
-        final seat = byParticipant[id];
+        final seat = byParticipant[id] ?? bySeat[id];
+        final seatId = seat?['id']?.toString();
         // 头像与服务端 avatar_role_id 对齐：上层牌出局后 cards.first 是死人，
         // 穗乃香示人时也不等于展示角色；avatar_role_id 未给出时回退到上层牌。
         var roleId = seat?['avatar_role_id']?.toString();
@@ -54,15 +63,25 @@ List<PickedPlayer> playersFromOptions(
             roleId = cards.first['role_id']?.toString();
           }
         }
+        final role = roleVisual(roleId);
         return PickedPlayer(
           id: id,
-          name: option['label'].toString(),
-          seatId: seat?['id']?.toString(),
+          name: byRole && role != null
+              ? role.name
+              : _withoutSeatPrefix(option['label'].toString(), seatId),
+          seatId: seatId,
           roleId: roleId,
           dead: seat?['alive'] == false,
         );
       }(),
   ];
+}
+
+/// 去掉服务端标签里已经带上的「N号 · 」前缀：行里会自己拼座位号，否则会写两遍。
+String _withoutSeatPrefix(String label, String? seatId) {
+  if (seatId == null) return label;
+  final prefix = '$seatId号 · ';
+  return label.startsWith(prefix) ? label.substring(prefix.length) : label;
 }
 
 /// 选玩家：头像 + 名字 + 角色；单选用列表，多选用可勾选列表。
@@ -266,14 +285,20 @@ class _PlayerRow extends StatelessWidget {
                             fontWeight: FontWeight.w600,
                             color: context.palette.text),
                       ),
-                       SizedBox(height: 2),
-                      Text(
-                        role != null
-                            ? '角色：${role.name}'
-                            : (player.subtitle ?? '角色未公开'),
-                        style:  TextStyle(
-                            fontSize: 13, color: context.palette.textTertiary),
-                      ),
+                      // 主标题已经是角色名时（对局内按角色卡标识席位）不再重复写一行
+                      // 「角色：X」，也不显示玩家昵称；其余情况照旧显示角色或「角色未公开」。
+                      if (player.subtitle != null ||
+                          role == null ||
+                          role.name != player.name) ...[
+                         SizedBox(height: 2),
+                        Text(
+                          role != null
+                              ? '角色：${role.name}'
+                              : (player.subtitle ?? '角色未公开'),
+                          style:  TextStyle(
+                              fontSize: 13, color: context.palette.textTertiary),
+                        ),
+                      ],
                     ],
                   ),
                 ),

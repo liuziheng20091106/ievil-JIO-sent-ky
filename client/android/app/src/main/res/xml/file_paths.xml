@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新：只把缓存目录下的 updates/ 暴露给系统安装器（见 MainActivity.installApk）。 -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

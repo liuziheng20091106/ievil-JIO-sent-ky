@@ -6,7 +6,13 @@ from . import storage
 from .game import game_view
 from .game.actions import action, field, outstanding_seats
 from .game.catalog import AUTO_PHASES, night_half
-from .game.state import host_capable, host_label
+from .game.state import (
+    actor_eliminated,
+    display_player_name,
+    host_capable,
+    host_label,
+    seat_eliminated,
+)
 from .game.views import seat_chat
 from .storage import SPECTATOR_CHANNEL
 
@@ -74,7 +80,7 @@ def public_notice(game):
         # 整个夜间只报「还有玩家没做完」：列出席位等于公开谁有夜间技能。
         return "仍有玩家未完成行动"
     if phase == "discussion":
-        # 自由发言由「已有 n/6 人请求结束」的进度条表示，不在这里提示等主持人。
+        # 自由发言由「已有 n/所需人数 人请求结束」的进度条表示，不在这里提示等主持人。
         return None
     if host_blocking(game):
         return "等待主持人进行操作"
@@ -119,6 +125,81 @@ def action_prompt(game, actor, active_private):
     }
 
 
+def result_title(result):
+    """结算标题：终止对局不再显示成一个阵营获胜（与客户端 _resultTitle 同文案）。"""
+    winner = (result or {}).get("winner") or ""
+    if winner == "good":
+        return "本局已结束 · 好人获胜"
+    if winner == "witch":
+        return "本局已结束 · 魔女获胜"
+    if winner == "aborted":
+        return "本局已终止"
+    return "本局已结束"
+
+
+def dialogs(game, actor, domain_view):
+    """对局内悬浮对话框：结束信息 / 私聊申请 / 当日目击名单，列表顺序即优先级。
+
+    什么时候弹什么由服务端决定（客户端只渲染）：结束信息取本局结算，私聊申请取
+    频道投影里「等我回应」的那几条，目击名单取服务端已经按身份裁剪过的 ``witness``。
+    同意/拒绝直接复用频道投影里那份 channel.accept/channel.reject 动作描述，提交时
+    仍走 ``require_listed_action`` 的同一套校验，服务端不放宽任何权限。
+    """
+    items = []
+    result = game.get("result")
+    if result:
+        items.append(
+            {
+                "id": f"result:{game['id']}",
+                "kind": "result",
+                "title": result_title(result),
+                "text": result.get("reason", ""),
+                "dismissible": True,
+                "actions": [],
+                "match_id": game["id"],
+            }
+        )
+    if game["status"] != "ended":
+        for channel in domain_view.get("channels", []):
+            if channel.get("invitation") != "pending":
+                continue
+            creator = next(
+                (
+                    member
+                    for member in channel.get("members", [])
+                    if member.get("id") == channel.get("creator_id")
+                ),
+                None,
+            )
+            who = (creator or {}).get("name") or "其他人"
+            seat = (creator or {}).get("seat_id")
+            items.append(
+                {
+                    "id": f"channel:{channel['id']}",
+                    "kind": "channel_invite",
+                    "title": "私聊申请",
+                    "text": f"{seat}号 {who} 邀请你加入私信；同意后双方才能发言。"
+                    if seat
+                    else f"{who} 邀请你加入私信；同意后双方才能发言。",
+                    "dismissible": True,
+                    "actions": list(channel.get("actions") or []),
+                }
+            )
+    witness = domain_view.get("witness")
+    if witness:
+        items.append(
+            {
+                "id": f"witness:{game['id']}:{witness.get('day')}",
+                "kind": "witness",
+                "title": "当日目击名单",
+                "text": witness.get("text", ""),
+                "dismissible": True,
+                "actions": [],
+            }
+        )
+    return items
+
+
 def participant_rows(db, game_id):
     return list(db.execute("SELECT * FROM participants WHERE game_id=? ORDER BY rowid", (game_id,)))
 
@@ -126,7 +207,7 @@ def participant_rows(db, game_id):
 def participant_summary(row):
     return {
         "id": row["id"],
-        "name": row["name"],
+        "name": display_player_name(row["name"]),
         "kind": row["kind"],
         "seat_id": row["seat_id"],
     }
@@ -238,7 +319,7 @@ def channel_names(db, member_ids, host_name="主持人"):
         for row in db.execute(
             f"SELECT id,name FROM participants WHERE id IN ({placeholders})", member_ids
         ):
-            names[row["id"]] = row["name"]
+            names[row["id"]] = display_player_name(row["name"])
     return names
 
 
@@ -399,26 +480,31 @@ def channel_create_descriptor(db, game, actor, participants):
         return None
     host = host_capable(actor)
     night = night_half(game)
+    # 夜间与「整席出局」都只允许与主持人私聊：两者对玩家是同一个独占限制，
+    # 出局判定按当前牌现场求值，回溯或复活后自动恢复多人私信。
+    exclusive = not host and (night or actor_eliminated(game, actor))
     options = []
     if not host:
         options.append(("host", host_label(game)))
-    if host or not night:
-        options.extend(
+    if host or not exclusive:
+        for row in participants:
             # 观战者已收拢进观战频道：私信邀请名单不再出现他们。
-            (row["id"], row["name"])
-            for row in participants
-            if row["active"]
-            and not row["blocked"]
-            and row["id"] != actor["id"]
-            and row["kind"] != "spectator"
-        )
+            if not row["active"] or row["blocked"] or row["id"] == actor["id"]:
+                continue
+            if row["kind"] == "spectator":
+                continue
+            # 已出局的玩家除了主持人谁都不该再私信，因此也不再出现在邀请名单里。
+            if not host and seat_eliminated(game, row["seat_id"]):
+                continue
+            options.append((row["id"], display_player_name(row["name"])))
     if not options:
         return None
-    # 夜间只允许与主持人私聊：玩家端只剩主持人一个邀请对象，主持人不受限。
-    exclusive = night and not host
-    extra = (
-        {"description": "夜间只能与主持人建立私聊；天黑时全部私信频道已结束。"} if night else {}
-    )
+    if exclusive and not night:
+        extra = {"description": "已整席出局：只能与主持人私信；复活后恢复多人私信。"}
+    elif exclusive:
+        extra = {"description": "夜间只能与主持人建立私聊；天黑时全部私信频道已结束。"}
+    else:
+        extra = {}
     return action(
         "channel.create",
         "创建与主持人的私聊" if exclusive else "创建一对一或多人私信",
@@ -440,7 +526,12 @@ def channel_create_descriptor(db, game, actor, participants):
 
 def runtime_actions(game, participants):
     seats = [
-        {"value": seat["id"], "label": seat["id"] + "号 · " + (seat["name"] or "空席")}
+        {
+            "value": seat["id"],
+            "label": seat["id"]
+            + "号 · "
+            + (display_player_name(seat["name"]) or "空席"),
+        }
         for seat in game["seats"]
         if not seat["occupant_id"]
     ]
@@ -448,7 +539,7 @@ def runtime_actions(game, participants):
     people = [
         {
             "value": row["id"],
-            "label": row["name"]
+            "label": display_player_name(row["name"])
             + ("（观战）" if row["kind"] == "spectator" else "（" + str(row["seat_id"]) + "号）"),
         }
         for row in active
@@ -565,7 +656,10 @@ def view(db, game, actor, online):
     if result.get("result"):
         people = {row["id"]: row for row in participants}
         result["result"]["personal_losses"] = [
-            {"seat_id": people[pid]["seat_id"], "name": people[pid]["name"]}
+            {
+                "seat_id": people[pid]["seat_id"],
+                "name": display_player_name(people[pid]["name"]),
+            }
             for pid in result["result"].get("personal_losses", [])
             if pid in people
         ]
@@ -607,4 +701,6 @@ def view(db, game, actor, online):
         # 未确认进入本局管理界面：连私信入口都不给，主持人这一步只能去确认。
         # 客户端的确认页也不依赖这些行动，所以清空不会挡住进入流程。
         result["actions"] = []
+    # 悬浮对话框：服务端决定「什么时候弹什么」，客户端只负责渲染与交互。
+    result["dialogs"] = dialogs(game, actor, result)
     return result

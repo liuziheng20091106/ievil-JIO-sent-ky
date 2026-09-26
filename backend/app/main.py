@@ -21,6 +21,8 @@ from . import (
     api,
     auth_storage,
     downloads_api,
+    history_api,
+    history_storage,
     hosts_api,
     realtime,
     storage,
@@ -36,6 +38,7 @@ async def lifespan(app):
     auth_storage.initialize()
     achievement_storage.initialize()
     announcement_storage.initialize()
+    history_storage.initialize()
     if not os.environ.get("GAME_ADMIN_QQ", "").strip():
         # 没有内置管理员就没有人能建局：启动时就把这条配置缺失说出来。
         logger.warning("GAME_ADMIN_QQ 未配置：没有账号能登录主持人端，请先配置管理员 QQ 号")
@@ -54,7 +57,9 @@ app.include_router(api.router)
 app.include_router(achievements_api.router)
 app.include_router(announcements_api.router)
 app.include_router(hosts_api.router)
+app.include_router(history_api.router)
 app.include_router(downloads_api.router)
+app.include_router(downloads_api.releases_router)
 
 
 @app.middleware("http")

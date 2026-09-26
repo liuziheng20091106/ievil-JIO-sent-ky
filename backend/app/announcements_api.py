@@ -7,6 +7,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from . import announcement_storage, auth, auth_storage, schemas, storage
+from .game.state import display_player_name
 
 router = APIRouter(prefix="/api/announcements")
 
@@ -47,7 +48,7 @@ async def create_announcement(body: schemas.Announcement, request: Request):
     account_id = actor.get("account_id") or ""
     account = auth_storage.account(account_id) if account_id else None
     # 署名用 QQ 昵称；对局里显示的主持人名字仍是「主持人」。
-    author = account["nickname"] if account else actor["name"]
+    author = display_player_name(account["nickname"] if account else actor["name"])
     return announcement_storage.create(body.title, body.body, account_id, author)
 
 

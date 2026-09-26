@@ -120,6 +120,14 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(response.status_code, status, response.text)
         return response
 
+    def edit_state(self, mutate):
+        """测试用的状态手术：直接改写本局持久状态，省去逐阶段推进。"""
+        with storage.transaction() as db:
+            game = storage.load_game(db, self.game_id)
+            mutate(game)
+            game["version"] += 1
+            storage.save_game(db, game)
+
     def open_join(self):
         self.command(self.host, "room.open_join", {"open": True})
 
@@ -659,6 +667,106 @@ class BackendFlow(unittest.TestCase):
         )
         self.assertGreater(len(host_offered["fields"][0]["options"]), 1)
 
+    def test_eliminated_player_loses_surrender_and_player_private_chats(self):
+        """整席出局：不再有「请求交牌」，也只能与主持人私信；复活后自动恢复。
+
+        出局要按当前牌现场判断：希罗回溯、梅露露复活与主持人回溯都会让角色牌
+        重新登场，不能靠一次性的记账把玩家永久锁死。
+        """
+        self.open_join()
+        players = [self.join(str(15101 + index)) for index in range(7)]
+        first, first_actor, _ = players[0]
+        second, second_actor, _ = players[1]
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        self.command(self.host, "host.start")
+        # 拨到白天：夜间本来就已经只允许与主持人私信，验不出出局这条新限制。
+        self.edit_state(lambda game: game.update(half="day", phase="discussion"))
+
+        def actions_of(headers):
+            return [
+                item["id"]
+                for item in self.client.get(self.root + "/state", headers=headers).json()["actions"]
+            ]
+
+        def set_seat_alive(alive):
+            def mutate(game):
+                seat = next(s for s in game["seats"] if s["id"] == first_actor["seat_id"])
+                for card_id in seat["cards"]:
+                    game["cards"][card_id]["alive"] = alive
+
+            self.edit_state(mutate)
+
+        # 出局前：既能请求交牌，也能与其他玩家建立私信。
+        self.assertIn("player.surrender", actions_of(first))
+        created = self.command(
+            first, "channel.create", {"participant_ids": [second_actor["id"]]}
+        ).json()
+        paired = next(item for item in created["channels"] if item["status"] == "pending")
+        self.command(second, "channel.accept", {"channel_id": paired["id"]})
+
+        set_seat_alive(False)
+        # 出局后旧频道立即失效（本人都发不出去），但可以自己结束它腾出私信位。
+        frozen = self.client.post(
+            self.root + "/messages",
+            headers=first,
+            json={"channel_id": paired["id"], "text": "还在"},
+        )
+        self.assertEqual(frozen.status_code, 403, frozen.text)
+        self.assertIn("出局", frozen.text)
+        self.command(first, "channel.end", {"channel_id": paired["id"]})
+
+        view = self.client.get(self.root + "/state", headers=first).json()
+        self.assertNotIn("player.surrender", [item["id"] for item in view["actions"]])
+        create = next(item for item in view["actions"] if item["id"] == "channel.create")
+        self.assertEqual(
+            [option["label"] for option in create["fields"][0]["options"]], [view["host_name"]]
+        )
+        self.assertIn("出局", create["description"])
+        # 出局者不能邀请别人，别人也不能再把出局者拉进私信。
+        self.command(
+            first, "channel.create", {"participant_ids": [second_actor["id"]]}, status=403
+        )
+        self.command(
+            second, "channel.create", {"participant_ids": [first_actor["id"]]}, status=403
+        )
+        offered = next(
+            item
+            for item in self.client.get(self.root + "/state", headers=second).json()["actions"]
+            if item["id"] == "channel.create"
+        )
+        self.assertNotIn(
+            first_actor["name"], [option["label"] for option in offered["fields"][0]["options"]]
+        )
+        # 与主持人私信照常可用。
+        host_chat = self.command(first, "channel.create", {"participant_ids": ["host"]}).json()
+        with_host = next(
+            item
+            for item in host_chat["channels"]
+            if {member["id"] for member in item["members"]} == {first_actor["id"], "host"}
+        )
+        self.assertEqual(with_host["status"], "active")
+        self.client.post(
+            self.root + "/messages",
+            headers=first,
+            json={"channel_id": with_host["id"], "text": "我要交牌"},
+        ).raise_for_status()
+        self.command(first, "channel.end", {"channel_id": with_host["id"]})
+
+        # 复活（回溯同样走这一步）让当前牌重新登场：交牌按钮与多人私信一起恢复。
+        set_seat_alive(True)
+        restored = self.client.get(self.root + "/state", headers=first).json()
+        self.assertIn("player.surrender", [item["id"] for item in restored["actions"]])
+        reborn = next(
+            item for item in restored["actions"] if item["id"] == "channel.create"
+        )
+        self.assertIn(
+            second_actor["name"], [option["label"] for option in reborn["fields"][0]["options"]]
+        )
+        self.command(first, "channel.create", {"participant_ids": [second_actor["id"]]})
+
     def test_puppet_control_only_authorizes_its_owner_and_only_for_that_seat(self):
         self.open_join()
         players = [self.join(str(14001 + index)) for index in range(7)]
@@ -676,7 +784,12 @@ class BackendFlow(unittest.TestCase):
             if seats[player[1]["seat_id"]]["current_card_id"] not in {"sherry", "arisa", "emma"}
         )
         victim, victim_actor, _ = next(
-            player for player in players if player[1]["seat_id"] != controller_actor["seat_id"]
+            # 被控席位的当前牌不能是希罗：击杀希罗会立即触发自动回溯，
+            # 时间线整体恢复，那不是这条用例要验的傀儡死亡流程（取牌随机，会偶发）。
+            player
+            for player in players
+            if player[1]["seat_id"] != controller_actor["seat_id"]
+            and seats[player[1]["seat_id"]]["current_card_id"] != "hiro"
         )
         stranger, _, _ = next(
             player

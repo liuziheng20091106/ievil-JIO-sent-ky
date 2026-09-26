@@ -152,7 +152,10 @@ String _pickLobbyAvatarRoleId() {
   return pool[Random().nextInt(pool.length)];
 }
 
-/// 角色圆形头像；无立绘时用名称首字占位，[host] 为真时固定月代雪。
+/// 圆形头像；无立绘时用名称首字占位，[host] 为真时固定月代雪。
+///
+/// [imageUrl] 是账号头像（QQ 头像，服务端随 actor 下发）；给出时优先于角色立绘，
+/// 用于大厅这类还没发牌、只代表登录账号的地方。
 class RoleAvatar extends StatelessWidget {
   const RoleAvatar({
     super.key,
@@ -161,6 +164,7 @@ class RoleAvatar extends StatelessWidget {
     this.dead = false,
     this.border,
     this.host = false,
+    this.imageUrl,
   });
 
   final String? roleId;
@@ -171,9 +175,13 @@ class RoleAvatar extends StatelessWidget {
   /// 主持人头像：对局中始终显示月代雪，与消息里的 `avatar_role_id == host` 对应。
   final bool host;
 
+  /// 账号（QQ）头像地址；为空时按角色立绘或首字占位显示。
+  final String? imageUrl;
+
   @override
   Widget build(BuildContext context) {
     final role = roleVisual(roleId);
+    final remote = (imageUrl ?? '').trim();
     final asset = host
         ? hostAvatarAsset
         : role != null && role.hasArt
@@ -184,38 +192,43 @@ class RoleAvatar extends StatelessWidget {
         : role == null
             ? '?'
             : String.fromCharCodes(role.name.runes.take(1));
-    final content = asset == null
-        ? Container(
-            width: size,
-            height: size,
-            alignment: Alignment.center,
-            color: context.palette.surfaceStrong,
-            child: Text(
-              fallback,
-              style: TextStyle(
-                fontSize: size * 0.4,
-                fontWeight: FontWeight.w600,
-                color: context.palette.textSecondary,
-              ),
-            ),
-          )
-        : Image.asset(
-            asset,
-            width: size,
-            height: size,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stack) => Container(
-              width: size,
-              height: size,
-              color: context.palette.surfaceStrong,
-              alignment: Alignment.center,
-              child: Text(
-                fallback,
-                style: TextStyle(
-                    fontSize: size * 0.4, color: context.palette.textSecondary),
-              ),
-            ),
-          );
+    final placeholder = Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      color: context.palette.surfaceStrong,
+      child: Text(
+        fallback,
+        style: TextStyle(
+          fontSize: size * 0.4,
+          fontWeight: FontWeight.w600,
+          color: context.palette.textSecondary,
+        ),
+      ),
+    );
+    // 图片没网、被墙或返回错误都退回占位：加载中也先显示占位，避免空圆洞。
+    final Widget content;
+    if (remote.isNotEmpty) {
+      content = Image.network(
+        remote,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : placeholder,
+        errorBuilder: (context, error, stack) => placeholder,
+      );
+    } else if (asset == null) {
+      content = placeholder;
+    } else {
+      content = Image.asset(
+        asset,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stack) => placeholder,
+      );
+    }
     final avatar = ClipOval(
       child: SizedBox(
         width: size,
