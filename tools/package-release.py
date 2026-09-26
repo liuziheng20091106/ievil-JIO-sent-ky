@@ -137,24 +137,53 @@ def human(size: int) -> str:
     return f"{value:.1f} GB"
 
 
+def fingerprint(paths) -> dict:
+    """文件的大小 + mtime，用来判断打包期间发行目录有没有被改动。"""
+    result = {}
+    for path in paths:
+        try:
+            stat = path.stat()
+            result[path] = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            result[path] = None
+    return result
+
+
 def make_zip(zip_path: Path, source_dir: Path) -> None:
-    """把 Windows 发行目录整体打成一个 zip（不夹带目录里已有的 *.zip）。"""
+    """把 Windows 发行目录整体打成一个 zip（不夹带目录里已有的 *.zip）。
+
+    flutter build 还在跑时发行目录会被逐文件重写，打进去的会是新旧混合的半成品；
+    所以打包前后各取一次指纹，只要有一个文件变了就拒绝出包。
+    """
     files = sorted(p for p in source_dir.rglob("*") if p.is_file())
     top_zips = [p for p in files if p.parent == source_dir and p.suffix.lower() == ".zip"]
     for stray in top_zips:
         log(f"  跳过发行目录里已有的压缩包：{stray.name}")
     files = [p for p in files if p.suffix.lower() != ".zip" or p.parent != source_dir]
     if not any(p == WINDOWS_EXE for p in files):
-        raise ReleaseError(f"{WINDOWS_RELEASE} 里没有 seven_double_client.exe")
+        raise ReleaseError(
+            f"{WINDOWS_RELEASE} 里没有 seven_double_client.exe\n"
+            "请先 flutter build windows --release；若构建正在进行，等它结束再发布。"
+        )
 
     tmp = zip_path.with_name(zip_path.name + ".tmp")
     if tmp.exists():
         tmp.unlink()
     total = sum(p.stat().st_size for p in files)
     log(f"打包 {len(files)} 个文件（原始 {human(total)}）→ {zip_path.name}")
+    before = fingerprint(files)
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in files:
             archive.write(path, path.relative_to(source_dir).as_posix())
+    after = fingerprint(files)
+    changed = [p for p in files if before[p] != after[p]]
+    if changed:
+        tmp.unlink(missing_ok=True)
+        preview = "、".join(p.name for p in changed[:3])
+        raise ReleaseError(
+            f"打包过程中发行目录被改动了 {len(changed)} 个文件（{preview}…）\n"
+            "多半是 flutter build 还在跑，等构建结束再重试。"
+        )
     os.replace(tmp, zip_path)
 
 
