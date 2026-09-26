@@ -308,6 +308,9 @@ class GameChannel {
     acceptedIds = _strings(raw['accepted_ids']);
     invitation = raw['invitation']?.toString() ?? 'none';
     canSend = jsonBool(raw['can_send'], 'channel.can_send');
+    blockedTransient = jsonBool(raw['blocked_transient'],
+        'channel.blocked_transient',
+        fallback: false);
     asSeat = raw['as_seat']?.toString();
     reason = raw['reason']?.toString() ?? '';
     actions = raw['actions'] == null
@@ -331,6 +334,10 @@ class GameChannel {
   late final List<String> acceptedIds;
   late final String invitation;
   late final bool canSend;
+
+  /// 频道级失效标记：false 表示「频道本身没坏，只是还没轮到」（顺序发言等待），
+  /// 客户端的「自动切换到可用聊天频道」看到这个标记时跳过切换。
+  late final bool blockedTransient;
   late final String reason;
 
   /// 傀儡视角频道：发送时必须以该席位身份发出（服务端 tags 每个傀儡频道）。
@@ -896,4 +903,26 @@ class MatchDetail {
   final Map<String, dynamic> raw;
   final MatchSummary match;
   late final List<MatchEvent> events;
+}
+
+/// 一条「正在输入」状态：由服务端按频道可见性中继，客户端只渲染不持久。
+class TypingUser {
+  TypingUser.fromJson(Object? value) : raw = jsonObject(value, 'typing.user') {
+    id = jsonString(raw['participant_id'], 'typing.user.participant_id');
+    name = raw['name']?.toString() ?? '';
+    kind = raw['kind']?.toString() ?? 'player';
+    seatId = raw['seat_id']?.toString();
+    avatarRoleId = raw['avatar_role_id']?.toString();
+    active = jsonBool(raw['active'], 'typing.user.active', fallback: true);
+  }
+
+  final Map<String, dynamic> raw;
+  late final String id;
+  late final String name;
+  late final String kind;
+  late final String? seatId;
+  late final String? avatarRoleId;
+  late final bool active;
+
+  bool get isHost => id == 'host';
 }

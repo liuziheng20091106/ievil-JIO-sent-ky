@@ -690,4 +690,20 @@ class LiveConnection {
     // _stopped，孤儿任务会自行退出，close 之后也没有资源可泄漏。
     onStatus('未连接');
   }
+
+  /// 上报「正在输入」状态：瞬态信号，服务端按频道可见性中继后即丢弃。
+  /// socket 不在（未连接/重连间隙）或已停止时静默忽略，失败不影响聊天。
+  void sendTyping(String channelId, {bool active = true}) {
+    final socket = _socket;
+    if (socket == null || _stopped) return;
+    try {
+      socket.add(jsonEncode({
+        'type': 'typing',
+        'channel_id': channelId,
+        'active': active,
+      }));
+    } catch (_) {
+      // socket 已关闭等竞态：直接丢弃，下一次输入会再试。
+    }
+  }
 }

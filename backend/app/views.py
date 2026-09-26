@@ -13,7 +13,7 @@ from .game.state import (
     host_label,
     seat_eliminated,
 )
-from .game.views import seat_chat
+from .game.views import SPEECH_WAIT_REASON, seat_chat
 from .storage import SPECTATOR_CHANNEL
 
 
@@ -259,7 +259,7 @@ def puppet_channel_view(db, game, seat):
     occupant = seat["occupant_id"]
     identity = {"id": occupant, "kind": "player"} if occupant else None
     result = []
-    can_send, chat_reason = seat_chat(game, seat)
+    can_send, chat_reason, chat_transient = seat_chat(game, seat)
     blocked = (
         storage.channel_send_reason(db, game, identity, "public") if identity else "该席位当前无人操作"
     ) or chat_reason
@@ -276,6 +276,7 @@ def puppet_channel_view(db, game, seat):
             "invitation": "none",
             "can_send": not blocked and can_send,
             "reason": blocked,
+            "blocked_transient": blocked == chat_reason and chat_transient,
             "actions": [],
         }
     )
@@ -380,6 +381,10 @@ def channels_for(db, game, actor, domain_view):
             "invitation": "none",
             "can_send": not public_reason and bool(domain_view.get("can_chat", False)),
             "reason": public_reason,
+            # 频道级失效（夜间关闭、出局等）才触发客户端的「自动切换到可用频道」；
+            # 顺序发言的「等待你的发言顺序」是临时等待，标记出来让客户端跳过。
+            "blocked_transient": public_reason == SPEECH_WAIT_REASON
+            and not domain_view.get("can_chat", False),
             "actions": [],
         }
     ]

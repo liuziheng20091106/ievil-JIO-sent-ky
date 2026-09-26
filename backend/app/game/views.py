@@ -292,22 +292,31 @@ def status_cards(game, own):
     return statuses
 
 
+SPEECH_WAIT_REASON = "顺序发言阶段，请等待你的发言顺序"
+
+
 def seat_chat(game, own):
-    """某席位的公开发言权限；傀儡席由其控制者代发。"""
+    """某席位的公开发言权限；傀儡席由其控制者代发。
+
+    第三个返回值 ``transient`` 标记「频道本身没坏，只是还没轮到」的临时等待
+    （顺序发言）：客户端的「自动切换到可用聊天频道」看到这个标记时不切换，
+    否则轮到发言时人已被切进私信频道，发言会误发出去。
+    """
     if game["status"] == "lobby":
-        return True, ""
+        return True, "", False
     if game["status"] != "playing":
-        return False, "当前为只读状态"
+        return False, "当前为只读状态", False
     if game["phase"] == "speech":
         can = game["public"]["speaker"] == own["id"]
-        return can, "" if can else "顺序发言阶段，请等待你的发言顺序"
+        return can, "" if can else SPEECH_WAIT_REASON, not can
     if game["half"] == "day" and current(game, own):
-        return True, ""
+        return True, "", False
     return (
         False,
         "夜间与夜间结果阶段无公开发言；可私信主持人"
         if game["half"] == "night"
         else "当前角色已全部出局，不再参与白天发言；可私信主持人",
+        False,
     )
 
 
@@ -551,6 +560,6 @@ def game_view(game, actor):
         if view["self"].get("puppet_spectator"):
             can_chat, reason = False, "你当前是傀儡，由魔女梅露露代为行动"
         else:
-            can_chat, reason = seat_chat(game, own)
+            can_chat, reason, _transient = seat_chat(game, own)
     view["can_chat"], view["chat_reason"] = can_chat, reason
     return view

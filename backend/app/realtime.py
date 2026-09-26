@@ -10,6 +10,7 @@ from starlette.websockets import WebSocketState
 
 from . import auth, storage, views
 from .game import expire_warnings, run_auto_advance
+from .game.views import seat_chat
 
 logger = logging.getLogger(__name__)
 # ponytail: one room and one worker; use per-room locks if concurrent games are added.
@@ -51,6 +52,9 @@ class Connection:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=256))
     last_pong: float = field(default_factory=time.monotonic)
     last_ping: float = field(default_factory=time.monotonic)
+    # 输入状态（「正在输入」）节流：同一连接 1 秒内只中继一帧，防刷。
+    # 默认 0：连接刚建立的第一帧不能被节流吃掉。
+    last_typing: float = 0.0
 
 
 def online(game_id):
@@ -124,6 +128,82 @@ async def receiver(peer):
         if isinstance(data, dict) and data.get("type") == "pong":
             peer.last_pong = time.monotonic()
             touch(peer.account_id or "host")
+        elif isinstance(data, dict) and data.get("type") == "typing":
+            await handle_typing(peer, data)
+
+
+TYPING_RELAY_SECONDS = 1.0
+
+
+def typing_sender(game, actor):
+    """输入状态的展示信息：与发消息的署名规则一致（席位名与公开头像）。"""
+    seat = next((s for s in game["seats"] if s["id"] == actor["seat_id"]), None)
+    if actor["kind"] == "host":
+        return {"kind": "host", "seat_id": None, "name": actor["name"], "avatar_role_id": "host"}
+    if actor["kind"] == "spectator":
+        return {"kind": "spectator", "seat_id": None, "name": actor["name"], "avatar_role_id": None}
+    return {
+        "kind": "player",
+        "seat_id": actor["seat_id"],
+        "name": seat["name"] if seat else actor["name"],
+        "avatar_role_id": seat["avatar_role_id"] if game["status"] != "lobby" and seat else None,
+    }
+
+
+async def handle_typing(peer, data):
+    """中继「正在输入」：校验发言权与可见性后转发给能看见该频道的连接。
+
+    输入状态是纯内存瞬态：不落库、不进消息历史、不推状态帧。发送权判定与
+    发消息一致（channel_send_reason），可见性判定与聊天消息一致（typing_visible）。
+    """
+    channel_id = data.get("channel_id")
+    if not isinstance(channel_id, str) or not channel_id:
+        return
+    active = data.get("active") is not False
+    stamp = time.monotonic()
+    if active and stamp - peer.last_typing < TYPING_RELAY_SECONDS:
+        return
+    async with lock:
+        with storage.connect() as db:
+            game = storage.load_game(db, peer.game_id)
+            if not game or game["status"] == "ended":
+                return
+            actor = auth.actor_for_token(db, peer.token_hash, peer.game_id)
+            if not actor or actor["game_id"] != peer.game_id:
+                return
+            if not storage.typing_visible(db, peer.game_id, actor, channel_id):
+                return
+            reason = storage.channel_send_reason(db, game, actor, channel_id)
+            if reason:
+                return
+            # 公屏的发言权还有一层 phase 判定（顺序发言等待/夜间关闭），
+            # 由 can_chat/seat_chat 给出：与频道投影里的 can_send 同一来源。
+            if channel_id == "public" and actor.get("kind") == "player":
+                seat = next(
+                    (s for s in game["seats"] if s["id"] == actor["seat_id"]), None
+                )
+                if seat is None or not seat_chat(game, seat)[0]:
+                    return
+            sender = typing_sender(game, actor)
+            for other in list(connections):
+                if other.game_id != peer.game_id or other.participant_id == actor["id"]:
+                    continue
+                theirs = auth.actor_for_token(db, other.token_hash, peer.game_id)
+                if not theirs or not storage.typing_visible(
+                    db, peer.game_id, theirs, channel_id
+                ):
+                    continue
+                enqueue(
+                    other,
+                    {
+                        "type": "typing",
+                        "channel_id": channel_id,
+                        "participant_id": actor["id"],
+                        "active": active,
+                        **sender,
+                    },
+                )
+        peer.last_typing = stamp
 
 
 async def live(socket):

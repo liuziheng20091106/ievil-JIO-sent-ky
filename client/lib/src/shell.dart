@@ -697,15 +697,22 @@ class _ChatActionPageState extends State<ChatActionPage> {
   void initState() {
     super.initState();
     widget.store.addListener(onStore);
+    message.addListener(reportTyping);
     lastCount = widget.store.messages.length;
   }
 
   @override
   void dispose() {
     widget.store.removeListener(onStore);
+    message.removeListener(reportTyping);
     message.dispose();
     scroll.dispose();
     super.dispose();
+  }
+
+  /// 输入框文本变化（含表情面板插入）即上报输入状态：清空或发送后自动补停止。
+  void reportTyping() {
+    widget.store.reportTyping(hasText: message.text.trim().isNotEmpty);
   }
 
   /// 视口高度变了多少，就把偏移平移多少：输入框与消息的相对位置保持不变。
@@ -952,6 +959,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
     try {
       await widget.store.sendMessage(text);
       message.clear();
+      // 已发出即输入结束：补一帧停止，别让「正在输入」多挂几秒。
+      widget.store.reportTyping(hasText: false);
     } on ApiException catch (failure) {
       if (mounted) setState(() => sendError = failure.message);
     }
@@ -1001,6 +1010,10 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canSend = channel?.canSend == true && !store.writeBusy;
+    // 当前频道里正在输入的其他人；傀儡代发身份不下发输入状态，也就无需展示。
+    final typers = store.activeAsSeat != null
+        ? const <TypingUser>[]
+        : store.typingUsersIn(store.activeChannelId);
     return Material(
       color: context.palette.surface,
       child: SafeArea(
@@ -1010,10 +1023,12 @@ class _Composer extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 发送目标、表情入口与发送按钮同处文本框上方，文本框整行展开不再被挤压。
+            // 发送目标、聊天设置、表情入口与发送按钮同处文本框上方。
             Row(
               children: [
                 Expanded(child: _ChannelButton(store: store, channel: channel)),
+                const SizedBox(width: AppSpacing.sm),
+                _SettingsButton(store: store),
                 const SizedBox(width: AppSpacing.sm),
                 _EmojiButton(
                   enabled: canSend,
@@ -1061,39 +1076,58 @@ class _Composer extends StatelessWidget {
                   ],
                 ),
               ),
-            if (actions.isNotEmpty) ...[
+            if (actions.isNotEmpty || typers.isNotEmpty) ...[
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
                 child: DashedDivider(),
               ),
               SizedBox(
                 height: 42,
-                child: typing
-                    ? Align(
-                        alignment: Alignment.centerLeft,
-                        child: Badge.count(
-                          count: actions.length,
-                          backgroundColor: context.palette.accent,
-                          child: FilledButton.tonalIcon(
-                            onPressed: () =>
-                                openActionPicker(context, store, actions),
-                            icon: const Icon(Icons.bolt_outlined, size: 18),
-                            label: const Text('行动'),
-                          ),
-                        ),
-                      )
-                    : ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: actions.length,
-                        separatorBuilder: (_, __) =>
-                            const SizedBox(width: AppSpacing.sm),
-                        itemBuilder: (context, index) => ActionChipButton(
-                          action: actions[index],
-                          busy: store.writeBusy,
-                          onTap: () =>
-                              showActionForm(context, store, actions[index]),
-                        ),
-                      ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: typing
+                          ? Align(
+                              alignment: Alignment.centerLeft,
+                              child: actions.isEmpty
+                                  ? null
+                                  : Badge.count(
+                                      count: actions.length,
+                                      backgroundColor:
+                                          context.palette.accent,
+                                      child: FilledButton.tonalIcon(
+                                        onPressed: () => openActionPicker(
+                                            context, store, actions),
+                                        icon: const Icon(Icons.bolt_outlined,
+                                            size: 18),
+                                        label: const Text('行动'),
+                                      ),
+                                    ),
+                            )
+                          : actions.isEmpty
+                              ? const SizedBox.shrink()
+                              : ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: actions.length,
+                                  separatorBuilder: (_, __) =>
+                                      const SizedBox(width: AppSpacing.sm),
+                                  itemBuilder: (context, index) =>
+                                      ActionChipButton(
+                                        action: actions[index],
+                                        busy: store.writeBusy,
+                                        onTap: () => showActionForm(
+                                            context, store, actions[index]),
+                                      ),
+                                ),
+                    ),
+                    // 折叠的行动按钮右侧显示「[头像][头像][头像]…正在输入...」；
+                    // 展开态也保留在同一行右端，收起键盘后仍然可见。
+                    if (typers.isNotEmpty) ...[
+                      const SizedBox(width: AppSpacing.sm),
+                      _TypingIndicator(typers: typers),
+                    ],
+                  ],
+                ),
               ),
             ],
             if (emojiOpen)
@@ -1205,6 +1239,206 @@ class _EmojiButton extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// 聊天设置开关：与表情按钮同尺寸同圆角，贴在表情按钮左侧。
+class _SettingsButton extends StatelessWidget {
+  const _SettingsButton({required this.store});
+
+  final GameStore store;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: '聊天设置',
+        child: SizedBox(
+          width: 46,
+          height: 46,
+          child: Material(
+            color: context.palette.surfaceMuted,
+            borderRadius: BorderRadius.circular(AppRadius.field),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.field),
+              onTap: () => showPredictiveSheet(
+                context: context,
+                useSafeArea: true,
+                builder: (sheetContext) => _ChatSettingsSheet(store: store),
+              ),
+              child: Icon(
+                Icons.tune,
+                size: 20,
+                color: context.palette.textSecondary,
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// 聊天设置面板：公开我的输入状态 / 自动切换到可用聊天频道。
+/// 两个开关都是本机全局偏好，改动立即持久化并即时生效。
+class _ChatSettingsSheet extends StatelessWidget {
+  const _ChatSettingsSheet({required this.store});
+
+  final GameStore store;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
+              child: Text(
+                '聊天设置',
+                style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: context.palette.text),
+              ),
+            ),
+            AnimatedBuilder(
+              animation: store,
+              builder: (context, _) => Column(
+                children: [
+                  SwitchListTile(
+                    value: store.typingPublicEnabled,
+                    onChanged: store.setTypingPublicEnabled,
+                    title: const Text('公开我的输入状态'),
+                    subtitle: const Text('关闭后，其他人看不到你正在输入'),
+                  ),
+                  SwitchListTile(
+                    value: store.autoSwitchChannel,
+                    onChanged: store.setAutoSwitchChannel,
+                    title: const Text('自动切换到可用聊天频道'),
+                    subtitle: const Text('当前频道不可发言时自动切到可用频道'),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: AppSpacing.lg),
+          ],
+        ),
+      );
+}
+
+/// 「正在输入」指示器：半重叠头像（最多 3 个，多了显示「…」）+
+/// 「正在输入」+ 动画省略号。放在行动区同一行的右侧。
+class _TypingIndicator extends StatefulWidget {
+  const _TypingIndicator({required this.typers});
+
+  final List<TypingUser> typers;
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator> {
+  static const _avatarSize = 20.0;
+  static const _maxAvatars = 3;
+
+  @override
+  Widget build(BuildContext context) {
+    final typers = widget.typers;
+    final shown = typers.take(_maxAvatars).toList();
+    return Tooltip(
+      message: '正在输入：${typers.map((user) => user.name).join('、')}',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: _avatarSize + (shown.length - 1) * (_avatarSize / 2),
+            height: _avatarSize,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (var index = 0; index < shown.length; index++)
+                  Positioned(
+                    left: index * (_avatarSize / 2),
+                    child: _typingAvatar(context, shown[index]),
+                  ),
+              ],
+            ),
+          ),
+          if (typers.length > _maxAvatars)
+            Padding(
+              padding: const EdgeInsets.only(left: 2),
+              child: Text(
+                '…',
+                style: TextStyle(
+                    fontSize: 12, color: context.palette.textTertiary),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: _TypingDots(
+              prefix: '正在输入',
+              style: TextStyle(
+                  fontSize: 12, color: context.palette.textTertiary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _typingAvatar(BuildContext context, TypingUser user) {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: context.palette.surface, width: 1.5),
+      ),
+      child: RoleAvatar(
+        roleId: user.avatarRoleId,
+        host: user.isHost,
+        size: _avatarSize,
+      ),
+    );
+  }
+}
+
+/// 「正在输入」后的动画省略号：1→3 个点循环滚动；
+/// 系统关闭动画（disableAnimations）时保持静态「...」。
+class _TypingDots extends StatefulWidget {
+  const _TypingDots({required this.prefix, required this.style});
+
+  final String prefix;
+  final TextStyle style;
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots> {
+  Timer? _timer;
+  int _dots = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      if (!mounted) return;
+      setState(() => _dots = _dots % 3 + 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final dots = reduceMotion ? 3 : _dots;
+    return Text(
+      widget.prefix + '.' * dots,
+      style: widget.style,
+    );
+  }
 }
 
 class _SendButton extends StatelessWidget {

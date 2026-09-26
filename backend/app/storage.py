@@ -303,7 +303,7 @@ def message_view(row, actor):
     }
     if row["image_id"]:
         result["image_id"] = row["image_id"]
-    # 昵称展示统一走展示名：消息留档里存的是完整昵称，只有下发时按 8 字截断。
+    # 昵称展示统一走展示名：消息留档里存的是完整昵称，只有下发时按 16 半角宽度截断。
     result["sender_name"] = display_player_name(result["sender_name"])
     # 结构化播报按收件人裁剪：同一行消息，不同的人拿到的细节不同。
     if "payload" in row.keys() and row["payload"]:
@@ -381,6 +381,27 @@ def channel_members(row):
 
 def channel_visible(row, actor):
     return host_capable(actor) or actor["id"] in channel_members(row)
+
+
+def typing_visible(db, game_id, actor, channel_id):
+    """输入状态（「正在输入」）对某个身份是否可见。
+
+    与聊天消息同一套边界：公屏全体可见（观战者除外——他们只看观战频道）、
+    观战频道只给观战者与已确认主持人、私信只给成员与已确认主持人、
+    system 频道不存在输入状态。已结束的私信不再广播输入状态。
+    """
+    if channel_id == "public":
+        return actor.get("kind") != "spectator"
+    if channel_id == SPECTATOR_CHANNEL:
+        return actor.get("kind") == "spectator" or host_capable(actor)
+    if channel_id == "system":
+        return False
+    row = db.execute(
+        "SELECT * FROM channels WHERE id=? AND game_id=?", (channel_id, game_id)
+    ).fetchone()
+    if not row or row["status"] != "active":
+        return False
+    return channel_visible(row, actor)
 
 
 SPECTATOR_CHANNEL = "spectator"

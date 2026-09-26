@@ -46,7 +46,10 @@ Future<void> migrateLegacyWindowsData({
 }
 
 class GameStore extends ChangeNotifier {
-  GameStore._(this.preferences, this.secureStorage);
+  GameStore._(this.preferences, this.secureStorage) {
+    // 聊天设置是本机偏好：创建 store 时读一次，切换走 setter。
+    _loadChatSettings();
+  }
 
   static const _endpointKey = 'server_endpoint';
   static const _tokenKey = 'login_token';
@@ -88,6 +91,48 @@ class GameStore extends ChangeNotifier {
   bool hasMoreMessages = false;
   String messageScope = 'all';
   String selectedChannelId = 'public';
+
+  /// 聊天设置：公开我的输入状态 / 自动切换到可用聊天频道。本机全局偏好
+  /// （同 release.dart 的全局键风格，不属于任何对局数据），默认都开启。
+  static const _typingPublicKey = 'chat_typing_public';
+  static const _autoSwitchKey = 'chat_auto_switch_channel';
+  bool typingPublicEnabled = true;
+  bool autoSwitchChannel = true;
+
+  /// 「正在输入」状态：频道 → 参与者 → (条目, 过期时间)。
+  /// 纯内存瞬态，不落库；换局与登出时清空，条目 8 秒无刷新自动过期。
+  static const _typingTtl = Duration(seconds: 8);
+  final Map<String, Map<String, (TypingUser, DateTime)>> typingByChannel = {};
+  Timer? _typingSweepTimer;
+  final Set<String> _typingActiveChannels = {};
+  DateTime? _typingLastSentAt;
+  String? _typingLastChannel;
+
+  void _loadChatSettings() {
+    typingPublicEnabled = preferences.getBool(_typingPublicKey) ?? true;
+    autoSwitchChannel = preferences.getBool(_autoSwitchKey) ?? true;
+  }
+
+  void setTypingPublicEnabled(bool value) {
+    if (typingPublicEnabled == value) return;
+    typingPublicEnabled = value;
+    unawaited(preferences.setBool(_typingPublicKey, value));
+    // 关掉公开的同时撤回还没过期的输入状态；之后也不再上报。
+    if (!value) {
+      for (final channelId in [..._typingActiveChannels]) {
+        live?.sendTyping(channelId, active: false);
+      }
+      _typingActiveChannels.clear();
+    }
+    notifyListeners();
+  }
+
+  void setAutoSwitchChannel(bool value) {
+    if (autoSwitchChannel == value) return;
+    autoSwitchChannel = value;
+    unawaited(preferences.setBool(_autoSwitchKey, value));
+    notifyListeners();
+  }
 
   /// 傀儡代发身份与频道：选中某个受控傀儡席位的频道后，发送身份切到该席位。
   /// 与自己的 [selectedChannelId] 分开存放，两条身份的频道选择与草稿永不互相串用。
@@ -953,6 +998,7 @@ class GameStore extends ChangeNotifier {
     selectedChannelId = 'public';
     puppetSeatId = null;
     selectedPuppetChannelId = 'public';
+    _clearTyping();
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
     messageScope = 'all';
@@ -1071,6 +1117,12 @@ class GameStore extends ChangeNotifier {
           if (message.id > _readCursor && message.senderId != actor?.id) {
             unreadMessageCount++;
           }
+          // 发出消息即输入结束：这条消息的发送者从「正在输入」里移除。
+          if (message.kind == 'chat' && message.senderId != null) {
+            typingByChannel[message.channelId]?.remove(message.senderId);
+          }
+        case 'typing':
+          noteTyping(TypingUser.fromJson(event));
       }
     } on FormatException catch (failure) {
       error = failure.message;
@@ -1082,10 +1134,15 @@ class GameStore extends ChangeNotifier {
   /// 供回归检查使用，界面代码只调用 enterGame / execute 等动作入口。
   void applyView(GameView next) => _applyView(next);
 
+  /// 把一条实时事件喂给事件处理：供回归检查使用（typing / message 等）。
+  void applyLiveEvent(Map<String, dynamic> event) => _onLiveEvent(event);
+
   void _applyView(GameView next) {
     // 换局（或本进程第一次看到这一局）：上一局「稍后」掉的对话框不该压住新局的内容。
     if (view != null && view!.id != next.id) {
       _dismissedDialogs.clear();
+      // 输入状态属于上一局的频道，换局即清空，别把旧局的「正在输入」带进新局。
+      _clearTyping();
     }
     // 「确认进入管理界面」一律以服务端为准：本局这个账号只要确认过一次
     // （换令牌、重新登录、重开应用都算），服务端就不再要求确认，客户端直接展开
@@ -1207,6 +1264,27 @@ class GameStore extends ChangeNotifier {
           item.id != selectedPuppetChannelId || item.status == 'ended')) {
         puppetSeatId = null;
         selectedPuppetChannelId = 'public';
+      }
+    }
+    // 自动切换到可用聊天频道：当前频道失效（结束/夜间关闭/出局等频道级原因，
+    // 不含顺序发言的「等待你的发言顺序」——服务端以 blocked_transient 标记）
+    // 且存在可用频道时，按列表顺序切到第一个可发言的频道。傀儡身份不参与。
+    if (autoSwitchChannel && puppetSeatId == null && next.status != 'ended') {
+      final channels = channelsFor(null);
+      GameChannel? current;
+      for (final item in channels) {
+        if (item.id == selectedChannelId) current = item;
+      }
+      final invalidated = current == null || current.status != 'active';
+      final blocked =
+          current != null && !current.canSend && !current.blockedTransient;
+      if (invalidated || blocked) {
+        for (final item in channels) {
+          if (item.canSend && item.status == 'active' && item.id != 'system') {
+            if (item.id != selectedChannelId) selectedChannelId = item.id;
+            break;
+          }
+        }
       }
     }
   }
@@ -1514,6 +1592,94 @@ class GameStore extends ChangeNotifier {
     return null;
   }
 
+  // -------------------------------------------------------- 输入状态上报
+
+  /// 服务端中继来的一条输入状态。
+  void noteTyping(TypingUser user) {
+    final channelId = user.raw['channel_id']?.toString();
+    if (channelId == null || channelId.isEmpty) return;
+    // 自己的状态不入表：本地不显示「你正在输入」。
+    if (user.id == actor?.id) return;
+    if (!user.active) {
+      final existed = typingByChannel[channelId]?.remove(user.id);
+      if (existed == null) return;
+    } else {
+      (typingByChannel[channelId] ??= {})[user.id] =
+          (user, DateTime.now().add(_typingTtl));
+      _ensureTypingSweep();
+    }
+    notifyListeners();
+  }
+
+  /// 当前频道里正在输入的其他人（已剔除过期条目），按最近活跃排序。
+  List<TypingUser> typingUsersIn(String channelId) {
+    final entries = typingByChannel[channelId];
+    if (entries == null || entries.isEmpty) return const [];
+    final now = DateTime.now();
+    final live = <TypingUser>[];
+    entries.removeWhere((_, record) => record.$2.isBefore(now));
+    // 保持插入顺序（Map 保序）：最早开始输入的人排前面。
+    for (final record in entries.values) {
+      live.add(record.$1);
+    }
+    return List.unmodifiable(live);
+  }
+
+  void _ensureTypingSweep() {
+    if (_typingSweepTimer != null) return;
+    _typingSweepTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final now = DateTime.now();
+      var changed = false;
+      for (final entries in typingByChannel.values) {
+        final before = entries.length;
+        entries.removeWhere((_, record) => record.$2.isBefore(now));
+        if (entries.length != before) changed = true;
+      }
+      typingByChannel.removeWhere((_, entries) => entries.isEmpty);
+      if (changed) notifyListeners();
+    });
+  }
+
+  void _clearTyping() {
+    _typingSweepTimer?.cancel();
+    _typingSweepTimer = null;
+    typingByChannel.clear();
+    _typingActiveChannels.clear();
+    _typingLastSentAt = null;
+    _typingLastChannel = null;
+  }
+
+  /// 上报「正在输入」：由输入框文本变化驱动。守卫齐全才发帧——
+  /// 未公开、傀儡代发、频道不可发言、不在局内都不上报；同频道 3 秒一帧。
+  /// [hasText] 为假（清空/已发送）或频道切换时，对之前上报过的频道补发停止。
+  void reportTyping({required bool hasText}) {
+    final channelId = activeChannelId;
+    final switched = _typingLastChannel != null && _typingLastChannel != channelId;
+    if (!hasText || switched) {
+      // 已经上报过的频道才需要停止帧；停止后清空节流基线。
+      for (final channel in _typingActiveChannels.where((c) => c != channelId || !hasText)) {
+        live?.sendTyping(channel, active: false);
+      }
+      _typingActiveChannels.clear();
+      if (!hasText) _typingLastSentAt = null;
+    }
+    _typingLastChannel = channelId;
+    if (!hasText) return;
+    if (!typingPublicEnabled || live == null) return;
+    if (actor == null || gameId == null || puppetSeatId != null) return;
+    if (view?.status == 'ended') return;
+    final channel = selectedChannel;
+    if (channel == null || !channel.canSend) return;
+    if (_typingLastSentAt != null &&
+        DateTime.now().difference(_typingLastSentAt!) <
+            const Duration(seconds: 3)) {
+      return;
+    }
+    _typingLastSentAt = DateTime.now();
+    _typingActiveChannels.add(channelId);
+    live!.sendTyping(channelId);
+  }
+
   Future<void> sendMessage(String text) async {
     final id = gameId;
     if (api == null || id == null || writeBusy || text.trim().isEmpty) return;
@@ -1784,6 +1950,7 @@ class GameStore extends ChangeNotifier {
     selectedChannelId = 'public';
     puppetSeatId = null;
     selectedPuppetChannelId = 'public';
+    _clearTyping();
     online = const <OnlineAccount>[];
     invites = const <LobbyInvite>[];
     announcements = const <Announcement>[];
@@ -1801,6 +1968,7 @@ class GameStore extends ChangeNotifier {
   @override
   void dispose() {
     _challengeGeneration++;
+    _clearTyping();
     live?.stop();
     api?.close();
     super.dispose();
