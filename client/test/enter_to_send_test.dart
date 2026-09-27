@@ -80,6 +80,15 @@ void main() {
   TextField composer(WidgetTester tester) =>
       tester.widget<TextField>(find.byType(TextField));
 
+  /// 输入框当前是否聚焦。
+  bool composerFocused(WidgetTester tester) => tester
+      .widget<EditableText>(find.descendant(
+        of: find.byType(TextField),
+        matching: find.byType(EditableText),
+      ))
+      .focusNode
+      .hasFocus;
+
   group('按 Enter 发送', () {
     test('平台默认值：安卓关闭、桌面开启', () {
       expect(GameStore.defaultEnterToSendFor(TargetPlatform.android), isFalse);
@@ -171,6 +180,58 @@ void main() {
       await tester.pump();
 
       expect(find.text('只换行不发送'), findsOneWidget, reason: '换行不该把内容发出去');
+    });
+  });
+
+  group('发送后的焦点', () {
+    // 桌面端（Windows）点在输入框以外的地方会让输入框失焦，这是 EditableText
+    // 默认 onTapOutside 的规矩；发送按钮就在输入框外，所以点一下发送焦点就没了。
+    testWidgets('Windows 上点发送按钮，发完输入框仍保持聚焦', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        final store = await previewStore();
+        expect(store.enterToSendEnabled, isTrue);
+        await pumpComposer(tester, store);
+
+        await tester.enterText(find.byType(TextField), '点按钮发送');
+        await tester.pump();
+        expect(composerFocused(tester), isTrue, reason: '打字时输入框是聚焦的');
+
+        await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+        await tester.pump();
+
+        expect(find.text('点按钮发送'), findsNothing, reason: '消息发出去了');
+        expect(composerFocused(tester), isTrue,
+            reason: '发完接着打下一条，不用再点一次输入框');
+      } finally {
+        // 只能在测试体里恢复：foundation 不变量检查跑在 tearDown 之前。
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    // 真机上发送时 store.writeBusy 为真（写请求在飞），界面会因此重建。
+    // TextField 一旦被禁掉，会把 FocusNode 的 canRequestFocus 一起关掉，正在
+    // 聚焦的输入框当场失焦——按钮和回车两条路径都会中招。
+    testWidgets('发送期间输入框保持可用且不丢焦点', (tester) async {
+      final store = await previewStore();
+      await pumpComposer(tester, store);
+
+      await tester.enterText(find.byType(TextField), '发送中的草稿');
+      await tester.pump();
+      expect(composerFocused(tester), isTrue);
+
+      store.writeBusy = true;
+      store.selectChannel('public'); // 触发一次与发送同源的重建。
+      await tester.pump();
+
+      expect(composer(tester).enabled, isTrue, reason: '发送期间还能继续打下一条');
+      expect(composerFocused(tester), isTrue, reason: '写请求在飞不该把焦点带走');
+      // 发送期间按回车不该把还没发出去的草稿清掉。
+      await tester.testTextInput.receiveAction(TextInputAction.send);
+      await tester.pump();
+      expect(find.text('发送中的草稿'), findsOneWidget, reason: '草稿要留着');
+
+      store.writeBusy = false;
     });
   });
 }

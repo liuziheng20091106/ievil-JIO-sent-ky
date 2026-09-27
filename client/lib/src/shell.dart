@@ -956,6 +956,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
   Future<void> send() async {
     final text = message.text;
     if (text.trim().isEmpty) return;
+    // 上一条还在发：输入框在发送期间保持可用，这一条先留在框里，别被 clear() 吞掉。
+    if (widget.store.writeBusy) return;
     setState(() => sendError = null);
     try {
       await widget.store.sendMessage(text);
@@ -1010,7 +1012,11 @@ class _Composer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canSend = channel?.canSend == true && !store.writeBusy;
+    // 频道本身能不能发言，与「上一条还在发」分开：输入框只在频道不可发言时禁用。
+    // 发送期间把它禁掉会让 FocusNode 的 canRequestFocus 一起变假，正在聚焦的
+    // 输入框当场失焦（按钮和回车两条路径都会），发完就再也不聚焦了。
+    final channelSendable = channel?.canSend == true;
+    final canSend = channelSendable && !store.writeBusy;
     // 「按 Enter 发送」：开启时回车直接发出，输入类型同时切成单行——安卓只在非多行
     // 类型下才会把回车报成 send 动作（多行一律按换行处理），两者必须一起切。
     // 关闭时保持多行 + 换行动作，回车就是换行。
@@ -1041,13 +1047,18 @@ class _Composer extends StatelessWidget {
                   onTap: onToggleEmoji,
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                _SendButton(enabled: canSend, onSend: onSend),
+                // 桌面端点在输入框以外的地方会让输入框失焦（EditableText 默认的
+                // onTapOutside）：发送按钮属于输入框自己的一部分，包进 tap region，
+                // 点发送不会把焦点带走，发完可以接着打下一条。
+                TextFieldTapRegion(
+                  child: _SendButton(enabled: canSend, onSend: onSend),
+                ),
               ],
             ),
             const SizedBox(height: AppSpacing.sm),
             TextField(
               controller: controller,
-              enabled: canSend,
+              enabled: channelSendable,
               maxLength: 2000,
               minLines: 1,
               maxLines: 4,
@@ -1061,7 +1072,7 @@ class _Composer extends StatelessWidget {
               // 可以接着打下一条（发送本身仍走 onSubmitted）。
               onEditingComplete: enterSends ? () {} : null,
               decoration: InputDecoration(
-                hintText: canSend ? '说点什么…' : '当前不可发言',
+                hintText: channelSendable ? '说点什么…' : '当前不可发言',
                 errorText: error,
                 counterText: '',
                 isDense: true,
@@ -1072,7 +1083,7 @@ class _Composer extends StatelessWidget {
               onChanged: (_) => onClearError(),
               onSubmitted: (_) => onSend(),
             ),
-            if (!canSend && (channel?.reason.isNotEmpty ?? false))
+            if (!channelSendable && (channel?.reason.isNotEmpty ?? false))
               Padding(
                 padding:  EdgeInsets.only(top: AppSpacing.sm),
                 child: Row(
