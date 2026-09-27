@@ -390,6 +390,9 @@ def typing_visible(db, game_id, actor, channel_id):
     观战频道只给观战者与已确认主持人、私信只给成员与已确认主持人、
     system 频道不存在输入状态。已结束的私信不再广播输入状态。
     """
+    if actor.get("kind") == "host" and not host_capable(actor):
+        # 未确认进入本局管理界面的主持人连消息都发不出去，也不该广播「正在输入」。
+        return False
     if channel_id == "public":
         return actor.get("kind") != "spectator"
     if channel_id == SPECTATOR_CHANNEL:

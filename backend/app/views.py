@@ -132,6 +132,9 @@ def result_title(result):
         return "本局已结束 · 好人获胜"
     if winner == "witch":
         return "本局已结束 · 魔女获胜"
+    if winner == "emma":
+        # 魔女化艾玛杀光全场时单独获胜，其余玩家均落败。
+        return "本局已结束 · 艾玛单独获胜"
     if winner == "aborted":
         return "本局已终止"
     return "本局已结束"

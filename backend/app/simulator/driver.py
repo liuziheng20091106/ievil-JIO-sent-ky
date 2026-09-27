@@ -202,11 +202,15 @@ class HostBrain:
                 if len(options) < want:
                     return None
                 payload[item["name"]] = options[:want]
-        self._fix_suspects(payload)
+        size = next(
+            (item.get("min") for item in descriptor["fields"] if item["name"] == "suspects"),
+            None,
+        ) or len(payload.get("suspects") or []) or 3
+        self._fix_suspects(payload, size)
         return self._submit_resolution(host, action_id, payload)
 
-    def _fix_suspects(self, payload):
-        """把疑似凶手名单修正为合法四人，并保留必填成员。"""
+    def _fix_suspects(self, payload, size):
+        """把疑似凶手名单修正为合法人数（汉娜在场 4 人、否则 3 人），并保留必填成员。"""
         suspects = payload.get("suspects")
         if not isinstance(suspects, list):
             return
@@ -214,11 +218,11 @@ class HostBrain:
         required = [role for role in ("hanna", killer) if role]
         chosen = list(dict.fromkeys([*required, *suspects]))
         for candidate in ("leia", "emma", "hiro", "sherry", "meruru", "noah"):
-            if len(chosen) >= 4:
+            if len(chosen) >= size:
                 break
             if candidate not in chosen:
                 chosen.append(candidate)
-        payload["suspects"] = chosen[:4]
+        payload["suspects"] = chosen[:size]
 
     def _submit_resolution(self, host, action_id, payload):
         try:
@@ -246,7 +250,8 @@ class HostBrain:
             named = [role_id for name, role_id in NAMED_ROLES.items() if name in detail]
             if named:
                 suspects = [*named, *payload["suspects"]]
-                fixed = {**payload, "suspects": list(dict.fromkeys(suspects))[:4]}
+                size = 4 if "hanna" in suspects else 3
+                fixed = {**payload, "suspects": list(dict.fromkeys(suspects))[:size]}
                 return self._submit_resolution(host, action_id, fixed)
         return None
 

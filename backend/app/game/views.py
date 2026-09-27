@@ -132,13 +132,22 @@ def host_tasks(game):
             }
         )
     if game["surrenders"]:
+        # 只有今天的意向才算数：跨天的申请已经失效，不再作为待审阅事项出现。
+        today = [
+            item["seat"]
+            for item in game["surrenders"]
+            if isinstance(item, dict) and item.get("day") == game["day"]
+        ]
+    else:
+        today = []
+    if today:
         tasks.append(
             {
                 "id": "surrender",
                 "kind": "surrender",
                 "title": "有交牌意向待审阅",
                 "detail": "",
-                "seats": list(game["surrenders"]),
+                "seats": today,
                 "action": "host.surrender",
                 "payload": {},
                 "blocking": True,
@@ -210,12 +219,19 @@ def status_cards(game, own):
     if destiny and game["status"] != "lobby" and int(own["id"]) <= len(destiny["seats"]):
         will = destiny["seats"][int(own["id"]) - 1]
         faction = list(destiny.get("first", []))
-        if own["id"] in faction:
+        now = current(game, own)
+        if now is not None and now["witch"]:
+            # 状态卡由实际状态派生：已经魔女化就陈述事实，不再预告（旧文案会和界面上的
+            # 实际状态互相打脸，也能被截图当成「我不会魔女化」的伪证）。
+            add("witch_destiny", "danger", "魔女化命运", "你的当前牌已魔女化：每夜可选择魔女刀。")
+        elif own["id"] in faction:
             # A、B 是魔女阵营：本人的那一份要说清是哪一天当值，而不是笼统的「会魔女化」。
             text = f"你是魔女阵营：第{faction.index(own['id']) + 1}天你的当前牌会魔女化。"
+            add("witch_destiny", "danger", "魔女化命运", text)
         else:
-            text = "本局你会魔女化。" if will else "本局你不会魔女化。"
-        add("witch_destiny", "danger" if will else "info", "魔女化命运", text)
+            # 别把「不会魔女化」说成整局的承诺：第四天起魔典仍可能转化任何合法目标。
+            text = "本局你会魔女化。" if will else "前三天你不会魔女化；第四天起魔典仍可能转化你。"
+            add("witch_destiny", "danger" if will else "info", "魔女化命运", text)
     protected = next(
         (card for card in cards if card["states"].get("treasure_protected_day", -1) >= game["day"]),
         None,
@@ -246,6 +262,9 @@ def status_cards(game, own):
     if any(card["role_id"] == "marg" for card in cards) and game.get("marg_love"):
         love = game["marg_love"]
         pending = game["half"] != "night" and game["day"] <= love.get("day", 0)
+        # 被爱的那张牌出局即转爱自己（用户批注 B20），不再等整席两张牌都出局。
+        loved = game["cards"].get(love.get("card_id") or "")
+        self_love = loved is None or not loved["alive"]
         add(
             "marg_love",
             "info",
@@ -255,7 +274,7 @@ def status_cards(game, own):
                 "（当天夜里才开始生效）"
                 if pending
                 else "（已转爱自己）"
-                if love.get("self")
+                if self_love
                 else "（免疫死亡与其他负伤）"
             ),
         )
@@ -274,7 +293,14 @@ def status_cards(game, own):
         add("sherry_bound", "info", "雪莉绑定", "胜负跟随汉娜，不能同意处决汉娜。")
     penalty_day = annan_penalty_day(game, own["id"])
     if penalty_day:
-        add("annan_penalty", "danger", "安安后果", f"第{penalty_day}天失去投票权并必须被处刑。")
+        add(
+            "annan_penalty",
+            "danger",
+            "安安后果",
+            "本日你与被洗脑者一同被处决，今天不再处决其他人。"
+            if penalty_day == game["day"]
+            else f"第{penalty_day}天失去投票权并必须被处刑。",
+        )
     for card in cards:
         if card["states"].get("puppet"):
             add("puppet", "danger", "傀儡", "不能投票，也不能发动角色技能。")
@@ -531,7 +557,11 @@ def game_view(game, actor):
             "deaths": deepcopy(game["deaths"]),
             "spiritual": deepcopy(game["spiritual"]),
             "winner_candidate": deepcopy(game["winner_candidate"]),
-            "surrenders": list(game["surrenders"]),
+            "surrenders": [
+                item["seat"]
+                for item in game["surrenders"]
+                if isinstance(item, dict) and item.get("day") == game["day"]
+            ],
             "warnings": deepcopy(game["warnings"]),
             "execution_rolls": deepcopy(game.get("execution_rolls", [])),
             "declarations": deepcopy(game["declarations"]),

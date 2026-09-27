@@ -50,14 +50,26 @@ def witch_information(game, events):
 
 
 def night_text(game, actions):
-    return (
-        "\n".join(
-            f"{a['seat_id']}号：{NIGHT_ABILITIES[a['ability']][1]}"
-            + (f"，目标{a['target_seat']}号" if a.get("target_seat") else "")
-            for a in actions
+    """可可看到的夜间行动清单。
+
+    除玩家提交的行动外，还要带上 `extra_attacks` 里的额外攻击（主持人伤害、13 水），
+    否则可可的「查看其他全部夜间行动」与照片授权报告都会漏掉这两类。
+    """
+    lines = [
+        f"{a['seat_id']}号：{NIGHT_ABILITIES[a['ability']][1]}"
+        + (f"，目标{a['target_seat']}号" if a.get("target_seat") else "")
+        for a in actions
+    ]
+    for attack in (game.get("night") or {}).get("extra_attacks", []):
+        source = game["cards"].get(attack.get("source_card"))
+        target = game["cards"].get(attack.get("target_card"))
+        who = f"{owner(game, source['id'])['id']}号" if source else "主持人"
+        where = f"，目标{owner(game, target['id'])['id']}号" if target else ""
+        label = {"water": "13水", "host": "主持人伤害"}.get(
+            attack.get("cause"), attack.get("cause") or ""
         )
-        or "其余玩家均未发动行动。"
-    )
+        lines.append(f"{who}：{label}{where}")
+    return "\n".join(lines) or "其余玩家均未发动行动。"
 
 
 def sync_night_confirmations(game, events):
@@ -149,18 +161,39 @@ def active_love(game):
     return love
 
 
+def love_is_self(game):
+    """玛格是否已经转爱自己。
+
+    用户批注（B20）：被爱的那张角色牌出局即转爱自己，不再等整席两张牌都出局。
+    老状态下没有记下被爱的牌（``card_id`` 缺失）时退回「被爱席位整席出局」的旧口径。
+    """
+    love = active_love(game)
+    if not love:
+        return False
+    cid = love.get("card_id")
+    if not cid:
+        return current(game, seat(game, love["seat_id"])) is None
+    card = game["cards"].get(cid)
+    return card is None or not card["alive"]
+
+
 def loved_card_id(game):
-    """玛格当前爱人的当前牌；爱人整席出局后玛格转爱自己。
+    """玛格当前爱人的角色牌；被爱的那张牌出局后，玛格转爱自己。
 
     玛格的爱在结算顺序里优先级最高，见 damage_preview 与 millia_substitute。
     """
     love = active_love(game)
     if not love:
         return None
-    loved = seat(game, love["seat_id"])
-    if not current(game, loved):
-        loved = owner(game, "marg")
-    card = current(game, loved) if loved else None
+    if love.get("card_id"):
+        card = (
+            current(game, owner(game, "marg"))
+            if love_is_self(game)
+            else game["cards"].get(love["card_id"])
+        )
+    else:
+        # 兼容没有记下具体牌的老状态：按被爱席位的当前牌算，整席出局才转爱自己。
+        card = current(game, seat(game, love["seat_id"])) or current(game, owner(game, "marg"))
     return card["id"] if card else None
 
 
@@ -233,6 +266,13 @@ def lock_night(game, events):
             night["rain"] = True
         if ability == "scapegoat" and action["effective"]:
             card["states"]["display_killer"] = action["target_card"]
+        if ability == "rest" and action["effective"]:
+            # 安安在医务室休息：本夜免艾玛毒素，雨天脚印改成直接公布凶手是不是她。
+            night["rest"] = {
+                "seat_id": action["seat_id"],
+                "card_id": card["id"],
+                "day": game["day"],
+            }
         if ability == "arisa_injure" and action["effective"]:
             seats = game["seats"]
             index = seats.index(owner(game, card["id"]))
@@ -251,7 +291,15 @@ def lock_night(game, events):
     for photo in game["photos"]:
         if photo.get("allowed"):
             actions = [a for a in night["actions"] if a["seat_id"] == photo["target"]]
-            notify(game, events, night_text(game, actions), [photo["sender"]], "信物授权的夜间行动")
+            notify(game, events, night_text(game, actions), [photo["sender"]], "照片授权的夜间行动")
+    if night.get("rest"):
+        # 医务室休息是公开信息：其他玩家当夜就知道安安是否在休息。
+        notify(
+            game,
+            events,
+            f"{night['rest']['seat_id']}号今晚在医务室休息。",
+            title="医务室休息",
+        )
     game["phase"] = "night_review"
     prepare_night_preview(game, events)
 
@@ -267,10 +315,10 @@ def damage_preview(game, attacks, protection=()):
         sid = owner(game, cid)["id"]
         if sid in guarded_seats or cid in dead:
             continue
-        if cid == loved:
-            # 玛格的爱优先级最高：爱人只吃玛格自己每夜那一次负伤，免疫其他死亡与负伤。
-            if attack.get("cause") == "love":
-                injured[cid] = True
+        if cid == loved and attack.get("cause") != "love":
+            # 玛格的爱优先级最高：爱人免疫魔女刀、13水、全场攻击、处决等其他一切死亡与负伤。
+            # 玛格自己每夜那一发（cause="love"）不在这里短路，落到下面的负伤判定：
+            # 第一次只负伤，已有负伤时再次负伤即无条件死亡（规则「免疫所有死亡和其他负伤」）。
             continue
         if current(game, sid)["id"] != cid and not attack.get("allow_lower"):
             continue
@@ -327,10 +375,12 @@ def millia_substitute(game, attacks, protection=()):
     at_night = game["phase"] in {"night", "night_coco", "night_review"}
     night = game["night"]
     swap = millia_swap_effective(game)
-    millia_card = role_card(game, "millia")
     if (
         swap is None
-        or not millia_card["alive"]
+        # 替死是米莉亚这张牌的技能：她还没登场（上层牌未出局）时不替死，这一击照常打在
+        # 原目标身上。只判 alive 会把改写后的攻击落到非当前牌上，被 damage_preview 静默
+        # 丢弃——目标不伤不死、米莉亚也不出局。
+        or not present(game, "millia")
         or (at_night and "millia" in night["reactions"])
     ):
         return attacks
@@ -414,7 +464,7 @@ def publish_survivor_witnesses(game, events, preview, killed):
         label = NIGHT_ABILITIES[target["cause"]][1]
         title = (
             f"{target['seat_id']}号夜间被{label}袭击（未出局）："
-            "填写四名疑似凶手（真凶、汉娜及额外两人）"
+            f"填写{witness_label(witness_size(game))}（真凶与汉娜优先）"
         )
         if not truthful:
             title += "；本夜当事人中毒、目击信息骰失败，发给他的名单不含真凶"
@@ -481,12 +531,9 @@ def night_damage(game):
             )
     love = active_love(game)
     if love:
-        loved = seat(game, love["seat_id"])
-        if not current(game, loved):
-            loved = owner(game, "marg")
-            love["seat_id"] = loved["id"]
-            love["self"] = True
-        target = current(game, loved)
+        # 被爱的那张牌出局后玛格转爱自己：love["self"] 只用于界面提示。
+        love["self"] = love_is_self(game)
+        target = game["cards"].get(loved_card_id(game) or "")
         if target:
             attacks.append({"target_card": target["id"], "source_card": "marg", "cause": "love", "once_injury": True})
     attacks.extend(night.get("extra_attacks", []))
@@ -499,9 +546,16 @@ def night_damage(game):
 
 
 def eliminate_seat(game, events, seat, notice):
-    """整席出局：两张牌直接作废，不触发出局流程（亡语、回溯、证物、疑似凶手等）。"""
+    """整席出局：两张牌直接作废，不触发出局流程（亡语、回溯、证物、疑似凶手等）。
+
+    「质疑失败」是「同一名玩家同一半天最多出局一张牌」的唯一例外：这里一次带走两张，
+    但已经出局的牌不再重复记账，也不再为它补写一条 death。
+    """
     for card_id in seat["cards"]:
-        game["cards"][card_id]["alive"] = False
+        card = game["cards"][card_id]
+        if not card["alive"]:
+            continue
+        card["alive"] = False
         game["deaths"].append(
             {
                 "id": uid(),
@@ -520,9 +574,9 @@ def eliminate_seat(game, events, seat, notice):
 
 
 def publish_witness(game, events, item, suspects, honoka_role="honoka"):
-    """向死者发送四人疑似凶手名单，并记录本夜已发目击供复活撤销。"""
+    """向死者发送疑似凶手名单（三人；汉娜在场时四人），并记录本夜已发目击供复活撤销。"""
     shown = [honoka_role if role == "honoka" else role for role in suspects]
-    text = "四名疑似凶手：" + "、".join(ROLES[role]["name"] for role in shown)
+    text = f"{witness_label(len(shown))}：" + "、".join(ROLES[role]["name"] for role in shown)
     notify(game, events, text, [item["seat_id"]], "夜间目击名单")
     game["witness"] = {
         "day": game["day"],
@@ -535,18 +589,30 @@ def publish_witness(game, events, item, suspects, honoka_role="honoka"):
         game["cards"][item["victim"]]["states"]["evidence_allowed"] = True
 
 
-def witness_suspects(game, victim_role):
-    """固定的四人目击名单：真凶、在场的梅露露、在场的汉娜，余位随机补齐。"""
-    fixed = []
-    if victim_role:
-        fixed.append(victim_role)
-    for role in ("meruru", "hanna"):
-        if present(game, role):
-            fixed.append(role)
-    suspects = list(dict.fromkeys(fixed))[:4]
+WITNESS_BASE = 3
+WITNESS_CN = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五"}
+
+
+def witness_size(game):
+    """七双目击名单人数：基础三人；汉娜在场（存活且是该席当前牌）时多一人。
+
+    用户批注（A01/A02）：只按汉娜是否在场决定 3 还是 4；梅露露不再必进名单。
+    """
+    return WITNESS_BASE + (1 if present(game, "hanna") else 0)
+
+
+def witness_label(size):
+    return f"{WITNESS_CN.get(size, size)}名疑似凶手"
+
+
+def witness_suspects(game, killer_role):
+    """七双目击名单：真凶（技能处理后的显示凶手）+ 在场的汉娜，余位随机补齐。"""
+    size = witness_size(game)
+    fixed = [role for role in (killer_role, "hanna" if present(game, "hanna") else None) if role]
+    suspects = list(dict.fromkeys(fixed))[:size]
     pool = [role for role in ROLES if role not in suspects]
     SystemRandom().shuffle(pool)
-    return suspects + pool[: 4 - len(suspects)]
+    return suspects + pool[: size - len(suspects)]
 
 
 def false_witness(game, suspects, shown_source):
@@ -579,7 +645,7 @@ def death_batch(game, events, preview):
             "previous_role_id": fallen_upper_role(game, s),
             "alive": current(game, s) is not None,
         }
-        # 四人目击是发给死者的信息：死者中毒时同样只掷一次信息骰，各1/2生效；
+        # 疑凶目击是发给死者的信息：死者中毒时同样只掷一次信息骰，各1/2生效；
         # 必须在判定出局前掷，否则出局后艾玛邻接毒源会随当前牌变化而失效。
         witness_truthful = True
         if game["half"] == "night":
@@ -606,15 +672,26 @@ def death_batch(game, events, preview):
             shown_source = game["cards"][source]["states"].get("display_killer", source)
             source_seat = owner(game, shown_source)
             if source_seat["id"] != s["id"]:
-                greater = int(source_seat["id"]) > int(s["id"])
-                if source == "hanna":
-                    greater = not greater
-                notify(
-                    game,
-                    events,
-                    f"雨夜脚印：凶手座位号{'大于' if greater else '小于'}死者座位号。",
-                    title="雨夜脚印",
-                )
+                rest = game["night"].get("rest") or {}
+                if rest:
+                    # 安安在医务室休息：方向不一样，脚印直接公布凶手是不是她。
+                    notify(
+                        game,
+                        events,
+                        f"雨夜脚印：凶手{'是' if source_seat['id'] == rest['seat_id'] else '不是'}"
+                        f"{rest['seat_id']}号（医务室方向）。",
+                        title="雨夜脚印",
+                    )
+                else:
+                    greater = int(source_seat["id"]) > int(s["id"])
+                    if source == "hanna":
+                        greater = not greater
+                    notify(
+                        game,
+                        events,
+                        f"雨夜脚印：凶手座位号{'大于' if greater else '小于'}死者座位号。",
+                        title="雨夜脚印",
+                    )
         hidden = bool(death.get("hide_cause"))
         suffixed = death.get("cause") == "water" and not hidden
         notice = (
@@ -633,18 +710,42 @@ def death_batch(game, events, preview):
             game["queued_notices"].append(notice)
             game["queued_reveals"].append(before)
             if suffixed:
-                # 未隐藏的13水死亡：直接构造并随机排序四人目击，无需主持人待办。
-                suspects = witness_suspects(game, src)
-                if not witness_truthful:
-                    suspects = false_witness(game, suspects, src)
-                publish_witness(
-                    game,
-                    events,
-                    {"seat_id": s["id"], "victim": cid, "death_id": record["id"]},
-                    suspects,
+                # 未隐藏的13水死亡：直接构造并随机排序疑凶目击，无需主持人待办。
+                # 替罪凶手与主持人填写路径口径一致：名单按「显示凶手」取名单位。
+                shown = (
+                    game["cards"][src]["states"].get("display_killer", src) if src else None
                 )
+                suspects = witness_suspects(game, shown)
+                if not witness_truthful:
+                    suspects = false_witness(game, suspects, shown)
+                witness_item = {"seat_id": s["id"], "victim": cid, "death_id": record["id"]}
+                if "honoka" in suspects and game["cards"]["honoka"]["witch"]:
+                    # 魔女穗乃香被列进自动名单时，同样由本人选择本次显示的角色。
+                    pending(
+                        game,
+                        "honoka_witness",
+                        "穗乃香被列入目击：等待本人选择显示角色",
+                        seat_id=owner(game, "honoka")["id"],
+                        victim=cid,
+                        witness_seat=s["id"],
+                        # 与主持人填写路径同一口径：带上这次死亡，梅露露复活时才撤得掉目击。
+                        death_id=record["id"],
+                        suspects=list(suspects),
+                    )
+                    notify(
+                        game,
+                        events,
+                        "你被列入一份目击名单，请选择本次显示的角色；超时将显示穗乃香。",
+                        [owner(game, "honoka")["id"]],
+                        "目击改名",
+                    )
+                else:
+                    publish_witness(game, events, witness_item, suspects)
             else:
-                title = f"{s['id']}号夜间死者：填写四名疑似凶手（真凶、汉娜及额外两人）"
+                title = (
+                    f"{s['id']}号夜间死者："
+                    f"填写{witness_label(witness_size(game))}（真凶与汉娜优先）"
+                )
                 if not witness_truthful:
                     title += "；本夜死者中毒、目击信息骰失败，发给他的名单不含真凶"
                 pending(
@@ -722,7 +823,10 @@ def revoke_death(game, events, death):
             if item["kind"] == "suspects" and (
                 item.get("death_id") == death["id"] or item.get("victim") == cid
             ):
-                item["title"] = f"{sid}号已被复活，被袭击的目击照发：填写四名疑似凶手"
+                item["title"] = (
+                    f"{sid}号已被复活，被袭击的目击照发："
+                    f"填写{witness_label(witness_size(game))}"
+                )
                 item["text"] = item["title"]
     if game.get("witness") and game["witness"].get("death_id") == death["id"] and not keeps_witness:
         game["witness"] = None
@@ -743,5 +847,6 @@ def revive(game, events, card_id, puppet=None):
     now = current(game, owner_seat)
     if now:
         owner_seat["avatar_role_id"] = now["role_id"]
-    notify(game, events, f"{owner_seat['id']}号玩家一张角色牌复活。", alert=True)
+    # 复活不单独播报：它与「当夜死亡通告被撤销 → 天亮判为平安夜」自相矛盾，还会把
+    # 「当夜有人被杀、魔女用过复活」这两件事一起泄露出去。撤销本身照常发生。
     check_winner(game)

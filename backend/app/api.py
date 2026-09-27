@@ -1109,6 +1109,10 @@ async def command(game_id: str, body: schemas.Command, request: Request):
             if puppet_seat:
                 # 只能执行她自己视图里那份带星号的傀儡行动，避免绕过按席生成的动作表。
                 require_puppet_action(db, game, controller, puppet_seat, body.action, payload)
+            elif host_delegated:
+                # 主持人「席位视角」代操作：动作表必须按被代理的席位（actor）算。
+                # 用 controller（主持人）的表会永远匹配不到玩家行动，代操作整条路 422。
+                require_listed_action(db, game, actor, body.action, payload)
             else:
                 require_listed_action(db, game, controller, body.action, payload)
             if body.action.startswith("channel."):

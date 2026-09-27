@@ -437,12 +437,19 @@ class WitchFactionRules(unittest.TestCase):
         self.assertTrue(all("魔女阵营" not in text for text in others))
 
     def test_third_night_is_emma_first_then_the_faction_pair(self):
-        # 艾玛在场：以最高优先级成为当天魔女，即使 A 的当前牌也可转化。
+        # 艾玛还活着但当前牌不是她（还在下层）：不转化她，改由 A 的当前牌接替。
         game = staged_game()
+        apply_command(game, HOST, "host.advance", {})
+        self.assertFalse(game["cards"]["emma"]["witch"])
+        self.assertTrue(game["cards"]["coco"]["witch"])
+        self.assertEqual(game["phase"], "night")
+
+        # 艾玛登场（她的牌就是当前牌）：以最高优先级成为当天魔女，即使 A 的当前牌也可转化。
+        game = staged_game()
+        game["seats"][0]["cards"] = ["emma", "coco"]
         apply_command(game, HOST, "host.advance", {})
         self.assertTrue(game["cards"]["emma"]["witch"])
         self.assertFalse(game["cards"]["coco"]["witch"])
-        self.assertEqual(game["phase"], "night")
 
         # 艾玛已出局：由 A 的当前牌接替。
         game = staged_game()
@@ -517,10 +524,11 @@ class WitchFactionRules(unittest.TestCase):
         self.assertFalse(game["cards"]["hanna"]["witch"])
         self.assertTrue(game["cards"]["coco"]["witch"])
 
-        # 艾玛在场：艾玛的最高优先级高于汉娜。
+        # 艾玛登场：艾玛的最高优先级高于汉娜。
         game = prepared()
         game["hanna_witch"] = True
         game["cards"]["emma"]["alive"] = True
+        game["seats"][0]["cards"] = ["emma", "coco"]
         apply_command(game, HOST, "host.advance", {})
         self.assertTrue(game["cards"]["emma"]["witch"])
         self.assertFalse(game["cards"]["hanna"]["witch"])
@@ -569,12 +577,28 @@ class WitchFactionRules(unittest.TestCase):
         game["cards"]["emma"]["alive"] = False
         check_winner(game)
         self.assertIsNone(game["winner_candidate"])
-        # A、B 两席都出局：好人胜利，理由点名魔女阵营。
+        # A、B 两席都出局：好人胜利，理由说明魔女牌（含魔典转化）已全部清空。
         game["cards"]["hiro"]["alive"] = False
         game["cards"]["millia"]["alive"] = False
         check_winner(game)
         self.assertEqual(game["winner_candidate"]["winner"], "good")
-        self.assertEqual(game["winner_candidate"]["reason"], "魔女阵营A、B两席出局")
+        self.assertEqual(game["winner_candidate"]["reason"], "魔女牌全部出局（含魔典转化）")
+
+    def test_good_win_also_waits_for_a_codex_converted_seat(self):
+        """魔典转化出魔女牌的席位同样要整席出局，才判好人胜利。"""
+        game = staged_game(day=2, half="day", phase="discussion")
+        game["cards"]["coco"]["witch"] = True
+        game["cards"]["noah"]["witch"] = True
+        game["generated_witches"] = ["noah"]
+        for cid in ("coco", "emma", "hiro", "millia"):
+            game["cards"][cid]["alive"] = False
+        check_winner(game)
+        self.assertIsNone(game["winner_candidate"])
+        game["cards"]["noah"]["alive"] = False
+        game["cards"]["annan"]["alive"] = False
+        check_winner(game)
+        self.assertEqual(game["winner_candidate"]["winner"], "good")
+        self.assertEqual(game["winner_candidate"]["reason"], "魔女牌全部出局（含魔典转化）")
 
 
 class PhaseBannerRules(unittest.TestCase):

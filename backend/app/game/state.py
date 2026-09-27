@@ -202,10 +202,12 @@ def hanna_witch_override(game):
     """
     return (
         bool(game.get("hanna_witch"))
-        and role_card(game, "hanna")["alive"]
+        # 「在场」一律按 present 判定：未登场的下层牌即使活着也不能成为当天魔女，
+        # 否则又会出现「没有刀可点的魔女」。这与第三天艾玛按「当前牌」判定同一口径。
+        and present(game, "hanna")
         and game["spiritual"]["sherry_bound"]
         and not sherry_bound_now(game)
-        and not role_card(game, "emma")["alive"]
+        and not present(game, "emma")
     )
 
 
@@ -387,6 +389,35 @@ def eligible_voters(game):
     ]
 
 
+def vote_denominator(game):
+    """本次投票的分母：投票开始时冻结，之后中途有人出局也不再改变它。
+
+    分母同时决定「严格过半」与蕾雅决斗的「半数」门槛。冻结前它随存活人数浮动，
+    会让已经下发到玩家表单上的门槛在计票那一刻悄悄变掉。
+    """
+    frozen = game.get("vote_freeze") or {}
+    if frozen.get("day") == game["day"] and frozen.get("denominator"):
+        return frozen["denominator"]
+    return len(eligible_voters(game))
+
+
+def surrendered_seats_today(game):
+    """今天已经私信主持人申请本阵营交牌的席位。
+
+    交牌意向按「席位 + 当天」记账：跨天自动失效，席位也不再因为被魔典兜底转化为
+    魔女而沿用一条陈旧的同意（旧版只存席位号，会跨天、跨阵营复用）。
+    """
+    return [
+        item["seat"]
+        for item in game.get("surrenders") or []
+        if isinstance(item, dict) and item.get("day") == game["day"]
+    ]
+
+
+def surrendered_today(game, seat_id):
+    return seat_id in surrendered_seats_today(game)
+
+
 def active_duel(game):
     """当天仍然有效的蕾雅决斗。
 
@@ -507,7 +538,16 @@ def poison_sources(game, card):
     target_seat = next((s for s in game["seats"] if card["id"] in s["cards"]), None)
     emma = game["cards"].get("emma")
     emma_seat = next((s for s in game["seats"] if emma and emma["id"] in s["cards"]), None)
-    if target_seat and emma_seat and emma["alive"]:
+    # 安安在医务室休息的这一夜不吃艾玛毒素（其他中毒来源照旧）。
+    resting = (game.get("night") or {}).get("rest") or {}
+    rest_exempt = (
+        bool(resting)
+        and game["half"] == "night"
+        and resting.get("day") == game["day"]
+        and target_seat is not None
+        and resting.get("seat_id") == target_seat["id"]
+    )
+    if target_seat and emma_seat and emma["alive"] and not rest_exempt:
         indexes = {s["id"]: index for index, s in enumerate(game["seats"])}
         distance = (indexes[target_seat["id"]] - indexes[emma_seat["id"]]) % len(game["seats"])
         same_other = target_seat == emma_seat and card["id"] != emma["id"]
@@ -616,7 +656,7 @@ def seat_operable(game, seat_id):
 # 不允许发到同一席位的角色对：每对的两个角色牌序索引 //2 必须不同。
 # 米莉亚与希罗同席时，米莉亚夜间临死换牌可能把希罗牌换走、希罗的回溯时点跟着错乱，
 # 规则上不允许两人同一天挤在同一席位。
-DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"), ("millia", "hiro"))
+DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"), ("millia", "hiro"), ("emma", "noah"))
 
 # 艾玛、米莉亚、亚里沙不会发给同一个人，且必须放在每席两张牌的下层（牌序索引为奇数）。
 DEAL_LOWER_ROLES = ("emma", "millia", "arisa")
@@ -769,6 +809,13 @@ def upgrade_game(game):
         changed = True
     add(game, "millia_swap", None)
     add(game, "discussion_end_requests", [])
+    add(game, "vote_freeze", None)
+    # 交牌意向由「席位号列表」改为「{席位, 日期}」记录，只对当天有效。旧格式分不清
+    # 日期与阵营，留着它就是把「陈旧意向被跨天、跨阵营复用」的缺陷一起留下，因此
+    # 停在旧局的意向直接丢弃，当事人重新点一次即可。
+    if any(isinstance(item, str) for item in game.get("surrenders") or []):
+        game["surrenders"] = [item for item in game["surrenders"] if isinstance(item, dict)]
+        changed = True
     # 热气球玩法已整体移除：停在热气球阶段的旧局直接改判为提名，并清掉该玩法的
     # 全部状态，否则旧阶段名与旧技能会在 PHASES／DAY_ABILITIES 里查表失败。
     if game.get("phase") == "balloon":
@@ -918,6 +965,8 @@ def create_game(codex):
         # 由 state.seat_choice 按规则实时推导；计票表（旧字段 votes）已删除。
         "ballots": {},
         "vote_rounds": [],
+        # 本次投票开始时冻结的分母（见 vote_denominator）；投票结束清空。
+        "vote_freeze": None,
         "execution": [],
         "execution_ready": [],
         # 本日处决阶段的临刑开枪：已提交的射击与每次掷骰。落在处决阶段的旧存档可能
@@ -1071,11 +1120,50 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
     notify(game, events, "游戏时间已回溯；已经获得的信息与聊天记忆保留。")
 
 
+def witch_seats(game):
+    """好人必须清空的魔女席位：命运席位 A、B，加上任何产生过魔女牌的席位。
+
+    用户批注（A08）：好人胜利条件按「魔女牌全部出局」判定，并且包含第 4 天起由
+    魔典转化的魔女牌。这里按席位记账而不是按单张牌：魔女牌出局后，同席的另一张
+    牌仍会在后续白天按魔典／第三天规则再魔女化，只看单张牌会提前判好人获胜。
+    """
+    seats = set(witch_faction(game))
+    for cid in game.get("generated_witches", []):
+        if game["cards"].get(cid):
+            seats.add(owner(game, cid)["id"])
+    return seats
+
+
+def emma_solo_win(game):
+    """魔女化艾玛单独获胜：她这一夜的全场攻击把其他每个席位的当前牌都打下场了。
+
+    全场攻击在引擎里每个席位只打掉「当前牌」（同一半天最多出一张牌，下层牌默认不吃
+    这批伤害），所以判据不是「所有牌都出局」，而是「这一夜其他每个席位都失去了一张牌」。
+    庇护、玛格的爱、米莉亚替死与希罗回溯照常可以先挡下某张牌——只要还有人没被打下场，
+    艾玛就没有杀光全场，不判单独获胜。
+    """
+    emma = role_card(game, "emma")
+    if not (emma["witch"] and emma["alive"]) or game["half"] != "night":
+        return False
+    emma_seat = owner(game, "emma")["id"]
+    others = [s for s in game["seats"] if s["id"] != emma_seat]
+    if not others:
+        return False
+    key = half_key(game)
+    return all(game["half_exits"].get(s["id"]) == key for s in others)
+
+
 def check_winner(game):
-    # 好人必须在魔女阵营的两个命运席位（A、B）都整席出局时才获胜：
-    # 单张魔女牌出局不算，A、B 的另一张牌仍能按第三天规则再魔女化。
+    if emma_solo_win(game):
+        # 艾玛的单胜独立于两个阵营：她单独获胜，其余玩家均落败。
+        game["winner_candidate"] = {
+            "winner": "emma",
+            "reason": "魔女化艾玛杀死所有其他角色，单独获胜，其余玩家均落败",
+        }
+        return
     faction = witch_faction(game)
-    good = bool(faction) and all(current(game, seat(game, sid)) is None for sid in faction)
+    seats = witch_seats(game)
+    good = bool(faction) and all(current(game, seat(game, sid)) is None for sid in seats)
     evil = not role_card(game, "millia")["alive"] and not role_card(game, "arisa")["alive"]
     winner = (
         ("good" if game["half"] == "day" else "witch")
@@ -1091,7 +1179,7 @@ def check_winner(game):
             "winner": winner,
             "reason": "双方同一半天达成条件，白天好人优先、夜晚魔女优先"
             if good and evil
-            else "魔女阵营A、B两席出局"
+            else "魔女牌全部出局（含魔典转化）"
             if good
             else "米莉亚与亚里沙均出局",
         }
@@ -1125,12 +1213,32 @@ def finish(game, events, winner, reason):
     log_event(
         game,
         "system",
-        f"对局结束：{'好人胜利' if winner == 'good' else '魔女胜利' if winner == 'witch' else '主持人结束'}（{reason}）",
+        "对局结束："
+        + (
+            "好人胜利"
+            if winner == "good"
+            else "魔女胜利"
+            if winner == "witch"
+            else "艾玛单独获胜"
+            if winner == "emma"
+            else "主持人结束"
+        )
+        + f"（{reason}）",
     )
     notify(
         game,
         events,
-        f"对局结束：{'好人' if winner == 'good' else '魔女' if winner == 'witch' else '主持人结束'}。{reason}",
+        "对局结束："
+        + (
+            "好人"
+            if winner == "good"
+            else "魔女"
+            if winner == "witch"
+            else "艾玛单独获胜（其余玩家均落败）"
+            if winner == "emma"
+            else "主持人结束"
+        )
+        + f"。{reason}",
     )
 
 
