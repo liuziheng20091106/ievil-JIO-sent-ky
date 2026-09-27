@@ -3,6 +3,9 @@ import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+// 量「视口下方还压着几条消息」要读渲染树（RenderSliverMultiBoxAdaptor 等），
+// material.dart 只导出 widgets 那一层，不带这些类。
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'action_sheet.dart';
@@ -691,6 +694,27 @@ class _ChatActionPageState extends State<ChatActionPage> {
   /// 发消息与收消息都不再把列表拽回底部，打断阅读。
   static const double _followThreshold = 160;
 
+  /// 「一键回底」的门槛：视口下方压着这么多条消息时，才算离开了最新消息。
+  ///
+  /// 按条数而不是像素：[_followThreshold] 那种像素容差在长短消息混排时忽多忽少，
+  /// 而这里要的判定是「最新的十条我一条都没看见」。
+  static const int _jumpButtonGap = 10;
+
+  /// 消息列表的渲染句柄：量「下方还压着几条」要顺着渲染树找到列表本身。
+  final GlobalKey _listKey = GlobalKey();
+
+  /// 聊天区的键盘焦点：上下键滚消息只在焦点落在这里（或它的子孙，例如输入框）时才生效。
+  final FocusNode keys = FocusNode(debugLabel: 'chat-keys');
+
+  /// 输入框自己的焦点节点：输入框里有字时，上下键留给文本光标。
+  final FocusNode composerFocus = FocusNode(debugLabel: 'chat-composer');
+
+  /// 视口下方（已经看不到）的消息条数，每帧末由 [_scheduleJumpCheck] 量一次。
+  int messagesBelow = 0;
+
+  /// 这一帧是否已经排过量算：滚动、收消息、视口变化都会触发，合并成每帧最多一次。
+  bool _jumpCheckScheduled = false;
+
   /// 上一次布局时消息视口的高度（由消息列表外的 LayoutBuilder 量得）。
   double? viewportHeight;
 
@@ -700,14 +724,19 @@ class _ChatActionPageState extends State<ChatActionPage> {
     widget.store.addListener(onStore);
     message.addListener(reportTyping);
     lastCount = widget.store.messages.length;
+    // 滚到哪变了，「下方还压着几条」就跟着变：滚完在帧末补量一次。
+    scroll.addListener(_scheduleJumpCheck);
   }
 
   @override
   void dispose() {
+    scroll.removeListener(_scheduleJumpCheck);
     widget.store.removeListener(onStore);
     message.removeListener(reportTyping);
     message.dispose();
     scroll.dispose();
+    keys.dispose();
+    composerFocus.dispose();
     super.dispose();
   }
 
@@ -728,6 +757,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
   /// 写法在模拟器/单测里成立，到真机上一律失效。视口高度只有界面这边量得到，也就只能
   /// 在界面这边补，而且按当前偏移做相对平移，不会和玩家自己的滚动打架。
   void noteViewportHeight(double height) {
+    // 视口一变，「下方还压着几条」也跟着变；量算排在帧末，等布局落定再算。
+    _scheduleJumpCheck();
     final previous = viewportHeight;
     viewportHeight = height;
     if (previous == null || previous == height) return;
@@ -764,11 +795,16 @@ class _ChatActionPageState extends State<ChatActionPage> {
     if (count != lastCount) {
       lastCount = count;
       // 停在最新消息附近才跟随滚动；往上翻历史时不拽回底部。
-      if (!_atLatestMessage) return;
+      if (!_atLatestMessage) {
+        _scheduleJumpCheck();
+        return;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) scrollToLatest();
       });
     }
+    // 收消息、切频道、加载更早的消息都会改变「下方还压着几条」。
+    _scheduleJumpCheck();
   }
 
   /// 滚到最新一条。
@@ -792,6 +828,130 @@ class _ChatActionPageState extends State<ChatActionPage> {
       if (position.pixels >= position.maxScrollExtent) return;
       scroll.jumpTo(position.maxScrollExtent);
     }
+  }
+
+  /// 是否显示「一键回底」：视口下方压着 [_jumpButtonGap] 条以上消息才算离开最新消息。
+  bool get showJumpToLatest =>
+      !widget.typing &&
+      widget.store.messages.isNotEmpty &&
+      messagesBelow >= _jumpButtonGap;
+
+  /// 排一次「下方还压着几条消息」的量算。
+  ///
+  /// 滚动、收消息、视口变化都会触发，合并成每帧最多一次；并且只有结果变了才 setState，
+  /// 否则滚动时每帧都在重建整页。
+  void _scheduleJumpCheck() {
+    if (_jumpCheckScheduled) return;
+    _jumpCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _jumpCheckScheduled = false;
+      if (!mounted) return;
+      final below = _countMessagesBelowViewport();
+      if (below == messagesBelow) return;
+      setState(() => messagesBelow = below);
+    });
+  }
+
+  /// 视口下方压着多少条消息：上沿落在视口下沿及以下的都算。
+  ///
+  /// 这个数只有渲染树知道：ListView 是惰性的，没进视口（也没进 cacheExtent）的消息
+  /// 根本没建出来，而 maxScrollExtent 在滚动中只是按已布局的几条估出来的，拿它换算
+  /// 条数会不准。这里遍历已经布局出来的子项，取最靠下的那个可见下标——它之后的消息
+  /// （包括压根还没建出来的）就都压在视口下方。
+  int _countMessagesBelowViewport() {
+    final total = widget.store.messages.length;
+    final sliver = _messageSliver();
+    if (total == 0 || sliver == null) return 0;
+    final viewport = _viewportOf(sliver);
+    if (viewport == null) return 0;
+    final height = viewport.size.height;
+    // 列表第 0 项是「加载更早消息」按钮，换算成消息下标时要扣掉。
+    final header = widget.store.hasMoreMessages ? 1 : 0;
+    var lastVisible = -1;
+    RenderBox? child = sliver.firstChild;
+    while (child != null) {
+      final parentData = child.parentData;
+      if (parentData is SliverMultiBoxAdaptorParentData &&
+          parentData.index != null) {
+        // 子项的屏幕坐标相对视口算：视口自己的滚动偏移由框架的绘制变换带上。
+        final top = child.localToGlobal(Offset.zero, ancestor: viewport).dy;
+        if (top < height) lastVisible = parentData.index!;
+      }
+      child = sliver.childAfter(child);
+    }
+    // 首帧还没布局出任何子项：先当作停在底部，下一帧再量。
+    if (lastVisible < 0) return 0;
+    return (total - 1 - (lastVisible - header)).clamp(0, total);
+  }
+
+  /// 消息列表所在的 sliver：惰性列表里已经布局出来的子项都挂在它下面。
+  RenderSliverMultiBoxAdaptor? _messageSliver() {
+    final root = _listKey.currentContext?.findRenderObject();
+    if (root == null) return null;
+    RenderSliverMultiBoxAdaptor? found;
+    void visit(RenderObject node) {
+      if (found != null) return;
+      if (node is RenderSliverMultiBoxAdaptor) {
+        found = node;
+        return;
+      }
+      node.visitChildren(visit);
+    }
+
+    visit(root);
+    return found;
+  }
+
+  /// 列表所在的视口：比较子项屏幕坐标时以它为原点。
+  RenderViewportBase? _viewportOf(RenderSliverMultiBoxAdaptor sliver) {
+    RenderObject? node = sliver.parent;
+    while (node != null && node is! RenderViewportBase) {
+      node = node.parent;
+    }
+    return node as RenderViewportBase?;
+  }
+
+  /// 点消息区就把键盘焦点交给聊天区：之后上下键即可滚消息。
+  ///
+  /// 软键盘正开着（玩家在输入框里打字）时不抢焦点，否则点一下消息键盘就收了。
+  void focusMessagesForKeys() {
+    if (MediaQuery.viewInsetsOf(context).bottom > 0) return;
+    keys.requestFocus();
+  }
+
+  /// 上下键每次滚动的距离：约三分之一屏。
+  double get _keyScrollStep {
+    if (!scroll.hasClients) return 120;
+    return (scroll.position.viewportDimension / 3).clamp(60.0, 320.0);
+  }
+
+  /// 上下键滚动消息列表。
+  ///
+  /// 返回 ignored 时事件继续上浮给框架的文本编辑快捷键：输入框里已经写了字，
+  /// 上下键就是文本光标的事，不能被聊天滚动截走。
+  KeyEventResult onScrollKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final up = key == LogicalKeyboardKey.arrowUp;
+    if (!up && key != LogicalKeyboardKey.arrowDown) {
+      return KeyEventResult.ignored;
+    }
+    if (composerFocus.hasFocus && message.text.isNotEmpty) {
+      return KeyEventResult.ignored;
+    }
+    scrollMessagesBy(up ? -_keyScrollStep : _keyScrollStep);
+    return KeyEventResult.handled;
+  }
+
+  /// 按像素滚一段：动画很短，按住（键盘重复）就是连续滚动。
+  void scrollMessagesBy(double delta) {
+    if (!scroll.hasClients) return;
+    final position = scroll.position;
+    final target = (position.pixels + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if (target == position.pixels) return;
+    scroll.animateTo(target,
+        duration: const Duration(milliseconds: 140), curve: Curves.easeOut);
   }
 
   List<ActionDescriptor> get actions {
@@ -827,12 +987,58 @@ class _ChatActionPageState extends State<ChatActionPage> {
     'host': ('主持人', Icons.workspace_premium_outlined),
   };
 
+  /// 消息列表本体：空范围给空状态，否则渲染惰性列表。
+  Widget _messageList(GameStore store) => store.messages.isEmpty
+      ? const EmptyState(
+          icon: Icons.chat_bubble_outline,
+          title: '当前筛选范围没有消息',
+          detail: '切换上方筛选可以查看公屏、私信与系统信息。',
+        )
+      : LayoutBuilder(builder: (context, constraints) {
+          // 只为了量到消息视口的高度：输入区被顶起时视口会被顶矮多少，
+          // 偏移就补多少（见 noteViewportHeight）。
+          noteViewportHeight(constraints.maxHeight);
+          return ListView.builder(
+            key: _listKey,
+            controller: scroll,
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
+            itemCount: store.messages.length + (store.hasMoreMessages ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (store.hasMoreMessages && index == 0) {
+                return Center(
+                  child: TextButton(
+                    onPressed: store.loadOlderMessages,
+                    child: const Text('加载更早消息'),
+                  ),
+                );
+              }
+              final item =
+                  store.messages[index - (store.hasMoreMessages ? 1 : 0)];
+              return MessageBubble(
+                message: item,
+                self: store.actor?.id,
+                store: store,
+                onAvatar: (senderId) {
+                  final ref = participantRefFor(store, senderId);
+                  if (ref != null) showAvatarMenu(context, store, ref);
+                },
+                // 长按走「快速标记」：不经菜单，直接选标记。
+                onAvatarLongPress: (senderId) {
+                  final ref = participantRefFor(store, senderId);
+                  if (ref != null) showMarkMenu(context, store, ref);
+                },
+              );
+            },
+          );
+        });
+
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
     final typing = widget.typing;
     final channel = store.selectedChannel;
-    return Column(
+    final body = Column(
       children: [
         // 键盘打开后页内只留输入区：筛选、阶段进度、主持人快捷工具、傀儡面板与
         // 常驻提示全部让位，消息列表继续占满剩余空间，边打字边看上下文。
@@ -868,50 +1074,28 @@ class _ChatActionPageState extends State<ChatActionPage> {
           _DiscussionProgressCard(view: store.view!),
         if (!typing && store.actor!.isHost) _HostQuickTools(store: store),
         Expanded(
-          child: store.messages.isEmpty
-              ? const EmptyState(
-                  icon: Icons.chat_bubble_outline,
-                  title: '当前筛选范围没有消息',
-                  detail: '切换上方筛选可以查看公屏、私信与系统信息。',
-                )
-              : LayoutBuilder(builder: (context, constraints) {
-                  // 只为了量到消息视口的高度：输入区被顶起时视口会被顶矮多少，
-                  // 偏移就补多少（见 noteViewportHeight）。
-                  noteViewportHeight(constraints.maxHeight);
-                  return ListView.builder(
-                    controller: scroll,
-                    padding: const EdgeInsets.fromLTRB(AppSpacing.lg,
-                        AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
-                    itemCount: store.messages.length +
-                        (store.hasMoreMessages ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (store.hasMoreMessages && index == 0) {
-                        return Center(
-                          child: TextButton(
-                            onPressed: store.loadOlderMessages,
-                            child: const Text('加载更早消息'),
-                          ),
-                        );
-                      }
-                      final item = store
-                          .messages[index - (store.hasMoreMessages ? 1 : 0)];
-                      return MessageBubble(
-                        message: item,
-                        self: store.actor?.id,
-                        store: store,
-                        onAvatar: (senderId) {
-                          final ref = participantRefFor(store, senderId);
-                          if (ref != null) showAvatarMenu(context, store, ref);
-                        },
-                        // 长按走「快速标记」：不经菜单，直接选标记。
-                        onAvatarLongPress: (senderId) {
-                          final ref = participantRefFor(store, senderId);
-                          if (ref != null) showMarkMenu(context, store, ref);
-                        },
-                      );
-                    },
-                  );
-                }),
+          child: Stack(
+            // 与原先的 Expanded 子项一样占满整块：Stack 默认给非定位子项松约束，
+            // 空状态会跑到顶部去。
+            fit: StackFit.expand,
+            children: [
+              // 点一下消息区就把键盘焦点交给聊天区：之后上下键即可滚消息。
+              Listener(
+                onPointerDown: (_) => focusMessagesForKeys(),
+                child: _messageList(store),
+              ),
+              // 离开最新消息（视口下方压着 10 条以上）才出现，点一下滚回底部。
+              if (showJumpToLatest)
+                Positioned(
+                  right: AppSpacing.md,
+                  bottom: AppSpacing.md,
+                  child: _JumpToLatestButton(
+                    count: messagesBelow,
+                    onTap: scrollToLatest,
+                  ),
+                ),
+            ],
+          ),
         ),
         if (!typing && store.view!.puppetSpectator)
           const Padding(
@@ -927,6 +1111,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
           store: store,
           channel: channel,
           controller: message,
+          focusNode: composerFocus,
           typing: typing,
           actions: actions,
           bottomInset: widget.bottomInset,
@@ -940,6 +1125,14 @@ class _ChatActionPageState extends State<ChatActionPage> {
           onClearError: () => setState(() => sendError = null),
         ),
       ],
+    );
+    // 上下键滚消息：焦点在本页（或它的子孙，例如输入框）时才收键，见 onScrollKey。
+    return Focus(
+      focusNode: keys,
+      autofocus: true,
+      skipTraversal: true,
+      onKeyEvent: onScrollKey,
+      child: body,
     );
   }
 
@@ -970,12 +1163,50 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 }
 
+/// 「一键回底」：离开最新消息（视口下方压着 10 条以上）时浮在消息区右下角，
+/// 点一下滚回最新一条。提示里的数字是下方还没看到的消息条数。
+class _JumpToLatestButton extends StatelessWidget {
+  const _JumpToLatestButton({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Tooltip(
+      message: '回到最新消息（下方还有 $count 条）',
+      child: Material(
+        color: palette.surface,
+        elevation: 3,
+        shadowColor: Colors.black26,
+        shape: CircleBorder(side: BorderSide(color: palette.border)),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(
+              Icons.keyboard_double_arrow_down_rounded,
+              size: 22,
+              color: palette.accent,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 输入区：频道选择 + 输入框 + 行动入口。键盘弹出时只保留紧凑行动入口。
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.store,
     required this.channel,
     required this.controller,
+    required this.focusNode,
     required this.typing,
     required this.actions,
     required this.bottomInset,
@@ -992,6 +1223,10 @@ class _Composer extends StatelessWidget {
   final GameStore store;
   final GameChannel? channel;
   final TextEditingController controller;
+
+  /// 输入框自己的焦点节点：聊天区据此判断「玩家正在输入框里写字」，
+  /// 把上下键让给文本光标而不是消息滚动。
+  final FocusNode focusNode;
 
   /// 软键盘已打开：行动入口收成一个按钮，不再横向铺开。
   final bool typing;
@@ -1058,6 +1293,7 @@ class _Composer extends StatelessWidget {
             const SizedBox(height: AppSpacing.sm),
             TextField(
               controller: controller,
+              focusNode: focusNode,
               enabled: channelSendable,
               maxLength: 2000,
               minLines: 1,
