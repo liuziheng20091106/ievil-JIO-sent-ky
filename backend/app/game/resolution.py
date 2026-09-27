@@ -792,9 +792,30 @@ def death_batch(game, events, preview):
     if game["half"] == "night":
         # 被魔女袭击指到却没出局的席位同样要有目击：目击看的是「被指到」。
         publish_survivor_witnesses(game, events, preview, killed)
+    wipe_massacred_seats(game, events, killed)
     # 无人出局也要判一次胜负：魔女化艾玛的清场夜即使一个人都没打死（庇护/爱/替死全挡住）
     # 同样直接判她单独获胜，见 state.emma_solo_win。check_winner 是幂等的。
     check_winner(game)
+
+
+def wipe_massacred_seats(game, events, killed):
+    """全场攻击是「杀死所有其他角色」：被它打下当前牌的席位，另一张牌一并作废。
+
+    用户 2026-09-27 追加：这是「同一半天同一人最多出一张牌」的第二条例外（第一条是
+    质疑失败整席出局）。这里只把剩下的牌直接置为出局、**不补 death 记录**——同一玩家
+    一夜只该有一条死亡公告、一份目击与一个证物，补记录会把这些都翻倍。
+    被庇护、玛格的爱或米莉亚替死挡下当前牌的席位不算被打下场，照常两张牌都在。
+    """
+    for death in killed:
+        if death.get("cause") != "massacre":
+            continue
+        s = seat(game, death["seat_id"])
+        for cid in s["cards"]:
+            card = game["cards"][cid]
+            if not card["alive"]:
+                continue
+            card["alive"] = False
+            log_event(game, "death", f"{s['id']}号的{ROLES[cid]['name']}被全场攻击一并打下场")
     return killed
 
 
