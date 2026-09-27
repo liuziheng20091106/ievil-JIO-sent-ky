@@ -74,6 +74,7 @@ DEFAULTS = {
     "S3_PREFIX": "releases",
     "S3_PUBLIC_BASE": "https://s3.tkcloud.online",
     "S3_TIMEOUT": "300",
+    "S3_PART_TIMEOUT": "30",
 }
 # 端点里云厂商占位符（Cloudflare R2 控制台常给带 * 的示例）与掩码占位符都视为未填写。
 PLACEHOLDER_CHARS = "*<>"
@@ -89,10 +90,17 @@ PUBLIC_VERIFY_AGENT = "MagicJudgeReleaseCheck/1.0"
 
 
 # 分片上传参数：实测单连接 PUT 只有 ~0.2 MB/s，拆片并发能吃满带宽。
-# 片太小时请求数太多，太大时单片重传代价高；8MB × 6 路对本项目的 40-60MB 包比较合适。
+# 2026-09-27 拿 43.9MB 的 Windows 包与 51.4MB 的 APK 各量了两组：
+#   8MB × 6  → 15.3s（2.9 MB/s）／16.9s（3.0 MB/s）
+#   5MB × 12 → 18.4s（2.4 MB/s）／18.5s（2.8 MB/s）
+# 聚合速度稳定卡在 ~3 MB/s（本机上行瓶颈），拆得更碎、加更多并发只会让单片更慢，
+# 所以维持 8MB × 6；要提速得先换上行，不是调这两个数。
 MULTIPART_THRESHOLD = 8 * 1024 * 1024  # 超过这个大小走分片上传
 MULTIPART_PART_SIZE = 8 * 1024 * 1024
 MULTIPART_CONCURRENCY = 6
+# 聚合速度低于这个值且总用时明显偏长时提示一句：多半是本机上行被占用或对象存储抖动。
+SLOW_UPLOAD_BYTES_PER_SECOND = 1536 * 1024
+SLOW_UPLOAD_MIN_SECONDS = 30
 
 
 class ReleaseError(Exception):
@@ -281,6 +289,33 @@ def timeout_of(values: dict) -> int:
         raise ReleaseError(f"S3_TIMEOUT 不是数字：{raw}") from error
 
 
+def part_timeout_of(values: dict) -> int:
+    """分片 PUT 的 socket 超时：多久没有任何进展就放弃这条连接、重传该片。
+
+    不能跟别的请求共用 `S3_TIMEOUT`（默认 300s）：2026-09-27 实测出现过 43.9MB 的包
+    上传 293.8s（聚合 153 KB/s，像是一条连接卡住不动），而同一个文件、同一套参数
+    健康时只要 15.3s。健康分片实测 6-16s 就能传完 8MB，所以默认 30s 无进展就换连接重传。
+    """
+    raw = str(values.get("S3_PART_TIMEOUT") or "30").strip()
+    try:
+        return max(1, int(float(raw)))
+    except ValueError as error:
+        raise ReleaseError(f"S3_PART_TIMEOUT 不是数字：{raw}") from error
+
+
+def part_ranges(size: int, part_size: int) -> list[tuple[int, int, int]]:
+    """把 size 按 part_size 切成 `(片号, 偏移, 长度)`；片号从 1 起，最后一片可以短。"""
+    ranges = []
+    offset = 0
+    number = 1
+    while offset < size:
+        length = min(part_size, size - offset)
+        ranges.append((number, offset, length))
+        number += 1
+        offset += length
+    return ranges
+
+
 def object_url(values: dict, key: str) -> str:
     """路径式寻址：端点/bucket/键。键里的中文与空格按 RFC3986 百分号编码。"""
     endpoint = values["S3_ENDPOINT"].rstrip("/")
@@ -350,8 +385,13 @@ def with_retry(action, what: str, attempts: int = 3):
 
 
 def _signed_request(values: dict, method: str, url: str, payload_hash: str, extra: dict,
-                    query_params: dict | None = None, data=None, read_body: bool = False):
-    """构造并发送一个 SigV4 签名请求，返回 (status, headers, body)。"""
+                    query_params: dict | None = None, data=None, read_body: bool = False,
+                    timeout: int | None = None):
+    """构造并发送一个 SigV4 签名请求，返回 (status, headers, body)。
+
+    `timeout` 缺省用 `S3_TIMEOUT`；分片 PUT 会传 `S3_PART_TIMEOUT`，避免一条卡住的
+    连接按整次请求的超时（默认 300s）干等。
+    """
     split = urllib.parse.urlsplit(url)
     query = canonical_query(query_params) if query_params else ""
     amz_date, authorization = build_signature(
@@ -364,7 +404,9 @@ def _signed_request(values: dict, method: str, url: str, payload_hash: str, extr
         "x-amz-date": amz_date,
         "Authorization": authorization,
     }
-    return request_once(target, method, data, headers, timeout_of(values), read_body=read_body)
+    return request_once(
+        target, method, data, headers, timeout or timeout_of(values), read_body=read_body
+    )
 
 
 def _s3_object_put(values: dict, local: Path, key: str) -> None:
@@ -396,6 +438,7 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
     url = object_url(values, key)
     size = local.stat().st_size
     content_type = content_type_of(local)
+    part_timeout = part_timeout_of(values)
 
     # 1) 发起分片上传。x-amz-content-sha256 用 UNSIGNED-PAYLOAD，免去逐片算哈希。
     empty = hashlib.sha256(b"").hexdigest()
@@ -414,45 +457,42 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
         raise ReleaseError(f"发起分片上传 {key} 失败：HTTP {status}，响应里没有 UploadId")
     upload_id = match.group(1)
     log(f"分片上传 {key}（{human(size)}，{MULTIPART_PART_SIZE // (1024 * 1024)}MB/片 × "
-        f"{MULTIPART_CONCURRENCY} 路）…")
+        f"{MULTIPART_CONCURRENCY} 路，{part_timeout}s 无进展换连接重传）…")
 
     # 2) 计算分片并并发 PUT（partNumber 从 1 开始，除最后一片外都必须等长）。
-    parts = []
-    offset = 0
-    part_number = 1
-    while offset < size:
-        length = min(MULTIPART_PART_SIZE, size - offset)
-        parts.append((part_number, offset, length))
-        part_number += 1
-        offset += length
+    parts = part_ranges(size, MULTIPART_PART_SIZE)
 
     uploaded_etags: dict[int, str] = {}
+    part_seconds: dict[int, float] = {}
     failures: list[str] = []
 
-    def send_part(number: int, offset: int, length: int) -> tuple[int, str]:
+    def send_part(number: int, offset: int, length: int) -> tuple[int, str, float]:
         with local.open("rb") as handle:
             handle.seek(offset)
             block = handle.read(length)
             if len(block) != length:
                 raise ReleaseError(f"读取分片 {number} 时文件变短了，重试发布")
         digest = hashlib.sha256(block).hexdigest()
+        started_part = time.monotonic()
 
         def attempt():
             _, response_headers, _ = _signed_request(
                 values, "PUT", url, digest, {},
                 {"partNumber": number, "uploadId": upload_id}, data=block,
+                timeout=part_timeout,
             )
             return response_headers.get("ETag") or ""
 
         etag = with_retry(attempt, f"上传分片 {number}")
-        return number, etag.strip('"')
+        return number, etag.strip('"'), time.monotonic() - started_part
 
     with ThreadPoolExecutor(max_workers=MULTIPART_CONCURRENCY) as pool:
         futures = [pool.submit(send_part, *item) for item in parts]
         for future in as_completed(futures):
             try:
-                number, etag = future.result()
+                number, etag, seconds = future.result()
                 uploaded_etags[number] = etag
+                part_seconds[number] = seconds
             except Exception as error:  # noqa: BLE001 - 汇总后统一报错
                 failures.append(str(error))
 
@@ -490,7 +530,13 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
     with_retry(complete, f"合并分片 {key}")
     elapsed = time.monotonic() - started
     speed = size / elapsed if elapsed > 0 else 0
-    log(f"  完成，用时 {elapsed:.1f}s（{human(int(speed))}/s，{len(parts)} 片）")
+    slowest = max(part_seconds.values()) if part_seconds else 0
+    log(f"  完成，用时 {elapsed:.1f}s（{human(int(speed))}/s，{len(parts)} 片，"
+        f"最慢一片 {slowest:.1f}s）")
+    if elapsed >= SLOW_UPLOAD_MIN_SECONDS and speed < SLOW_UPLOAD_BYTES_PER_SECOND:
+        log("  提示：本次明显慢于实测基线（8MB×6 约 3 MB/s），多半是本机上行被占用"
+            "或对象存储侧抖动；分片超过 "
+            f"{part_timeout}s 没有进展会自动换连接重传，重跑发布即可。")
 
 
 def upload(values: dict, local: Path, key: str) -> dict:
