@@ -3,6 +3,8 @@
 #include <commctrl.h>
 #include <shlobj.h>
 
+#include <algorithm>
+
 #include "install.h"
 #include "system.h"
 #include "version.h"
@@ -23,7 +25,6 @@ enum ControlId {
   kIdProgress,
   kIdInstall,
   kIdCancel,
-  kIdChoiceText,
   kIdChoiceUpdate,
   kIdChoiceUninstall,
   kIdChoiceQuit,
@@ -33,7 +34,6 @@ enum ControlId {
   kIdRemoveFiles,
   kIdRemoveData,
   kIdUninstallStart,
-  kIdModeLabel,
   kIdModeInstall,
   kIdModePortable,
   kIdDesktopShortcut,
@@ -45,12 +45,50 @@ enum WindowMessage {
   kMessageDone = WM_APP + 2,
 };
 
-constexpr int kWizardWidth = 640;
-constexpr int kWizardHeight = 420;
-constexpr int kChoiceWidth = 560;
-constexpr int kChoiceHeight = 280;
-constexpr int kUninstallWidth = 620;
-constexpr int kUninstallHeight = 360;
+// ==== 界面文案 ====
+// 布局要按文字实测宽度算高度，切换方式时也要用同一份文字，所以统一放在一处。
+
+const wchar_t* const kTextBackendLabel = L"后端地址";
+const wchar_t* const kTextDirectoryLabel = L"安装目录";
+const wchar_t* const kTextBrowse = L"浏览…";
+const wchar_t* const kTextLocationGroup = L"安装位置";
+const wchar_t* const kTextProgramFiles = L"安装到 Program Files（需要管理员权限）";
+const wchar_t* const kTextLaunch = L"安装完成后启动魔法裁判";
+const wchar_t* const kTextModeGroup = L"安装方式";
+const wchar_t* const kTextModeInstall = L"安装（推荐）";
+const wchar_t* const kTextModePortable = L"仅下载便携版";
+const wchar_t* const kTextDesktopShortcut = L"创建桌面快捷方式（可选；开始菜单快捷方式总是创建）";
+const wchar_t* const kTextInstallButton = L"开始安装";
+const wchar_t* const kTextDownloadButton = L"开始下载";
+const wchar_t* const kTextUninstallButton = L"开始卸载";
+const wchar_t* const kTextCancelButton = L"取消";
+
+// 两种方式各自的说明与初始提示：跟着选中的方式走，避免提示与按钮文字对不上。
+const wchar_t* const kModeHintInstallText =
+    L"安装：装到上面的目录，创建开始菜单快捷方式（含「卸载魔法裁判」入口），"
+    L"桌面快捷方式可选，并准备好应用内静默更新。";
+const wchar_t* const kModeHintPortableText =
+    L"便携版：把整包解压到上面的目录，不写注册表、不建快捷方式，也没有卸载入口；"
+    L"换电脑直接拷走整个文件夹即可。";
+const wchar_t* const kStatusReadyInstall = L"确认无误后点「开始安装」，将下载并安装最新版本。";
+const wchar_t* const kStatusReadyPortable = L"确认无误后点「开始下载」，只下载便携版，不改动现有安装。";
+const wchar_t* const kStatusWorkingInstall = L"正在准备安装……";
+const wchar_t* const kStatusWorkingPortable = L"正在准备下载便携版……";
+
+// 「已经装过了」选择窗口与卸载窗口的文案。
+const wchar_t* const kTextChoiceHeading = L"检测到本机已经安装过魔法裁判：";
+const wchar_t* const kTextChoiceHint =
+    L"请选择要执行的操作。「更新到最新」会下载并覆盖当前安装；"
+    L"「下载便携版」只把整包解压到你指定的目录，不动现有安装；"
+    L"「卸载」会删除程序文件与快捷方式（Updater.exe 自身保留）。";
+const wchar_t* const kTextChoiceUpdate = L"更新到最新";
+const wchar_t* const kTextChoicePortable = L"下载便携版";
+const wchar_t* const kTextChoiceUninstall = L"卸载";
+const wchar_t* const kTextChoiceQuit = L"退出";
+const wchar_t* const kTextUninstallHeading = L"将删除以下内容：";
+const wchar_t* const kTextRemoveFiles = L"删除程序文件";
+const wchar_t* const kTextRemoveData = L"删除持久化数据（存档与配置）";
+const wchar_t* const kTextUninstallReady = L"确认后开始卸载，Updater.exe 自身会保留。";
 
 HFONT UiFont() {
   static HFONT font = nullptr;
@@ -113,9 +151,201 @@ int RunMessageLoop(HWND window) {
   return 0;
 }
 
+// ==== 布局度量 ====
+//
+// 界面尺寸不写字面像素值：统一按系统 DPI 缩放，行高与文字宽度按当前界面字体实测，
+// 窗口高度由内容自上而下算出来。这样在高 DPI 或系统大字体下，控件既不会被裁掉，
+// 也不会互相挤压（旧版把控件钉死在 640x420 里，底下的按钮正好被窗口下沿切掉）。
+
+// 屏幕 DC 报出的就是本进程的真实 DPI（清单里声明了系统 DPI 感知）。
+UINT ScreenDpi(HDC dc) {
+  const int dpi = dc != nullptr ? ::GetDeviceCaps(dc, LOGPIXELSX) : 96;
+  return dpi >= 72 && dpi <= 480 ? static_cast<UINT>(dpi) : 96;
+}
+
+// 测量期间把界面字体选进 DC，析构时还原。
+struct FontSelection {
+  HDC dc = nullptr;
+  HGDIOBJ previous = nullptr;
+  explicit FontSelection(HDC target) : dc(target) {
+    if (dc != nullptr) {
+      previous = ::SelectObject(dc, UiFont());
+    }
+  }
+  ~FontSelection() {
+    if (dc != nullptr && previous != nullptr) {
+      ::SelectObject(dc, previous);
+    }
+  }
+};
+
+// 窗口还没建好时先在屏幕 DC 上量布局：窗口大小要用它算。
+struct ScreenCanvas {
+  HDC dc = nullptr;
+  FontSelection font;
+  ScreenCanvas() : dc(::GetDC(nullptr)), font(dc) {}
+  ~ScreenCanvas() {
+    if (dc != nullptr) {
+      ::ReleaseDC(nullptr, dc);
+    }
+  }
+};
+
+int TextWidth(HDC dc, const std::wstring& text) {
+  if (dc == nullptr || text.empty()) {
+    return 0;
+  }
+  SIZE size{};
+  ::GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+  return size.cx;
+}
+
+int LineHeight(HDC dc) {
+  if (dc == nullptr) {
+    return 15;
+  }
+  TEXTMETRICW metrics{};
+  ::GetTextMetricsW(dc, &metrics);
+  return metrics.tmHeight + metrics.tmExternalLeading;
+}
+
+// 按控件宽度换行后的文字高度：静态文本的自动换行与 DT_WORDBREAK 一致。
+int WrappedHeight(HDC dc, const std::wstring& text, int width) {
+  if (dc == nullptr || width <= 0) {
+    return 0;
+  }
+  RECT rect{0, 0, width, 0};
+  ::DrawTextW(dc, text.c_str(), -1, &rect, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+  return rect.bottom - rect.top;
+}
+
+// 一套缩放好的尺寸；字段都已经是像素值，不再二次缩放。
+struct Layout {
+  UINT dpi = 96;
+  int textHeight = 15;
+  int margin = 16;        // 窗口四周留白
+  int sectionGap = 12;    // 区块之间
+  int labelWidth = 72;    // 左列标签宽度
+  int labelGap = 8;       // 标签与控件的间距
+  int groupCaption = 17;  // 分组框标题占的高度
+  int groupPadding = 10;  // 分组框内边距
+  int groupBottom = 10;   // 分组框底部内边距
+  int editHeight = 25;
+  int buttonHeight = 28;
+  int checkboxHeight = 21;
+  int contentWidth = 580;
+
+  int Scale(int pixels) const { return ::MulDiv(pixels, static_cast<int>(dpi), 96); }
+  int left() const { return margin; }
+  int right() const { return margin + contentWidth; }
+  int innerLeft() const { return margin + groupPadding; }
+  int innerRight() const { return margin + contentWidth - groupPadding; }
+  int clientWidth() const { return contentWidth + 2 * margin; }
+};
+
+Layout BaseLayout(HDC dc) {
+  Layout layout;
+  layout.dpi = ScreenDpi(dc);
+  layout.textHeight = LineHeight(dc);
+  layout.margin = layout.Scale(16);
+  layout.sectionGap = layout.Scale(12);
+  layout.labelWidth = layout.Scale(72);
+  layout.labelGap = layout.Scale(8);
+  layout.groupCaption = layout.textHeight + layout.Scale(2);
+  layout.groupPadding = layout.Scale(10);
+  layout.groupBottom = layout.Scale(10);
+  layout.editHeight = std::max(layout.Scale(24), layout.textHeight + layout.Scale(10));
+  layout.buttonHeight = std::max(layout.Scale(28), layout.textHeight + layout.Scale(12));
+  layout.checkboxHeight = std::max(layout.Scale(20), layout.textHeight + layout.Scale(6));
+  layout.contentWidth = layout.Scale(580);
+  return layout;
+}
+
+// 复选框要的宽度：方块 + 文字。
+int CheckboxWidth(const Layout& layout, HDC dc, const std::wstring& text) {
+  return layout.Scale(22) + TextWidth(dc, text);
+}
+
+// 让单行标签与相邻控件在竖直方向居中对齐。
+RECT AlignLabel(const Layout& layout, int x, int y, int controlHeight, int width) {
+  const int top = y + (controlHeight - layout.textHeight) / 2;
+  return RECT{x, top, x + width, top + layout.textHeight};
+}
+
+HWND CreateChildRect(HWND parent, const wchar_t* className, const wchar_t* text, DWORD style,
+                     const RECT& rect, int id) {
+  return CreateChild(parent, className, text, style, rect.left, rect.top, rect.right - rect.left,
+                     rect.bottom - rect.top, id);
+}
+
+// 按客户区尺寸算窗口尺寸（含标题栏与边框），保证客户区正好放得下布局。
+SIZE WindowSizeForClient(int clientWidth, int clientHeight) {
+  RECT rect{0, 0, clientWidth, clientHeight};
+  ::AdjustWindowRectEx(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, 0);
+  SIZE size{};
+  size.cx = rect.right - rect.left;
+  size.cy = rect.bottom - rect.top;
+  return size;
+}
+
 // ==== 「已经装过了」选择窗口 ====
 
+struct ChoiceLayout {
+  RECT heading;
+  RECT subtitle;
+  RECT hint;
+  RECT update;
+  RECT portable;
+  RECT uninstall;
+  RECT quit;
+  int clientWidth = 0;
+  int clientHeight = 0;
+};
+
+ChoiceLayout ComputeChoiceLayout(HDC dc, const std::wstring& subtitle) {
+  Layout layout = BaseLayout(dc);
+  const int buttonGap = layout.Scale(10);
+  int textWidth = TextWidth(dc, kTextChoiceUpdate);
+  textWidth = std::max(textWidth, TextWidth(dc, kTextChoicePortable));
+  textWidth = std::max(textWidth, TextWidth(dc, kTextChoiceUninstall));
+  textWidth = std::max(textWidth, TextWidth(dc, kTextChoiceQuit));
+  const int buttonWidth = std::max(layout.Scale(96), textWidth + layout.Scale(28));
+  const int buttonRow = 4 * buttonWidth + 3 * buttonGap;
+  layout.contentWidth = std::max(layout.Scale(520), buttonRow);
+
+  ChoiceLayout result;
+  const int left = layout.left();
+  const int right = layout.right();
+  int y = layout.margin;
+
+  result.heading = RECT{left, y, right, y + layout.textHeight};
+  y += layout.textHeight + layout.Scale(6);
+  // 安装目录可能很长：让它换行，高度按实测给，别把后面的版本号挤掉。
+  const int subtitleHeight = std::max(layout.textHeight, WrappedHeight(dc, subtitle, layout.contentWidth));
+  result.subtitle = RECT{left, y, right, y + subtitleHeight};
+  y += subtitleHeight + layout.Scale(12);
+  const int hintHeight = WrappedHeight(dc, kTextChoiceHint, layout.contentWidth);
+  result.hint = RECT{left, y, right, y + hintHeight};
+  y += hintHeight + layout.Scale(18);
+
+  // 四个按钮等宽排在右下角。
+  const int rowLeft = right - buttonRow;
+  result.update = RECT{rowLeft, y, rowLeft + buttonWidth, y + layout.buttonHeight};
+  result.portable = RECT{result.update.right + buttonGap, y,
+                         result.update.right + buttonGap + buttonWidth, y + layout.buttonHeight};
+  result.uninstall = RECT{result.portable.right + buttonGap, y,
+                          result.portable.right + buttonGap + buttonWidth, y + layout.buttonHeight};
+  result.quit = RECT{result.uninstall.right + buttonGap, y,
+                     result.uninstall.right + buttonGap + buttonWidth, y + layout.buttonHeight};
+  y += layout.buttonHeight + layout.margin;
+
+  result.clientWidth = layout.clientWidth();
+  result.clientHeight = y;
+  return result;
+}
+
 struct ChoiceState {
+  ChoiceLayout layout;
   int result = kInstalledChoiceQuit;
 };
 
@@ -127,22 +357,18 @@ LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       const CREATESTRUCTW* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
       state = reinterpret_cast<ChoiceState*>(create->lpCreateParams);
       ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
-      CreateChild(window, L"STATIC", L"检测到本机已经安装过魔法裁判：", SS_LEFT, 20, 18, 500, 22,
-                  kIdChoiceText);
-      CreateChild(window, L"STATIC", create->lpszName, SS_LEFT, 20, 46, 500, 22, kIdChoiceText + 1000);
-      CreateChild(window, L"STATIC",
-                  L"请选择要执行的操作。「更新到最新」会下载并覆盖当前安装；「下载便携版」只把整包"
-                  L"解压到你指定的目录，不动现有安装；「卸载」会删除程序文件与快捷方式"
-                  L"（Updater.exe 自身保留）。",
-                  SS_LEFT, 20, 76, 500, 56, kIdChoiceText + 1001);
-      CreateChild(window, L"BUTTON", L"更新到最新", BS_DEFPUSHBUTTON | WS_TABSTOP, 40, 156, 110, 30,
-                  kIdChoiceUpdate);
-      CreateChild(window, L"BUTTON", L"下载便携版", BS_PUSHBUTTON | WS_TABSTOP, 160, 156, 110, 30,
-                  kIdChoicePortable);
-      CreateChild(window, L"BUTTON", L"卸载", BS_PUSHBUTTON | WS_TABSTOP, 280, 156, 110, 30,
-                  kIdChoiceUninstall);
-      CreateChild(window, L"BUTTON", L"退出", BS_PUSHBUTTON | WS_TABSTOP, 400, 156, 110, 30,
-                  kIdChoiceQuit);
+      const ChoiceLayout& layout = state->layout;
+      CreateChildRect(window, L"STATIC", kTextChoiceHeading, SS_LEFT, layout.heading, 0);
+      CreateChildRect(window, L"STATIC", create->lpszName, SS_LEFT, layout.subtitle, 0);
+      CreateChildRect(window, L"STATIC", kTextChoiceHint, SS_LEFT, layout.hint, 0);
+      CreateChildRect(window, L"BUTTON", kTextChoiceUpdate, BS_DEFPUSHBUTTON | WS_TABSTOP,
+                      layout.update, kIdChoiceUpdate);
+      CreateChildRect(window, L"BUTTON", kTextChoicePortable, BS_PUSHBUTTON | WS_TABSTOP,
+                      layout.portable, kIdChoicePortable);
+      CreateChildRect(window, L"BUTTON", kTextChoiceUninstall, BS_PUSHBUTTON | WS_TABSTOP,
+                      layout.uninstall, kIdChoiceUninstall);
+      CreateChildRect(window, L"BUTTON", kTextChoiceQuit, BS_PUSHBUTTON | WS_TABSTOP, layout.quit,
+                      kIdChoiceQuit);
       return 0;
     }
     case WM_COMMAND: {
@@ -181,10 +407,121 @@ LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
 std::wstring ReadWindowText(HWND control);
 
+struct WizardLayout {
+  RECT backendLabel;
+  RECT backendEdit;
+  RECT locationGroup;
+  RECT directoryLabel;
+  RECT directoryEdit;
+  RECT browse;
+  RECT programFiles;
+  RECT modeGroup;
+  RECT modeInstall;
+  RECT modePortable;
+  RECT modeHint;
+  RECT desktopShortcut;
+  RECT launch;
+  RECT status;
+  RECT progress;
+  RECT install;
+  RECT cancel;
+  int clientWidth = 0;
+  int clientHeight = 0;
+};
+
+WizardLayout ComputeWizardLayout(HDC dc) {
+  Layout layout = BaseLayout(dc);
+  const int browseWidth = std::max(layout.Scale(84), TextWidth(dc, kTextBrowse) + layout.Scale(26));
+  // 宽度按最宽的一行内容撑开：高 DPI 或系统大字体下也不会把字裁掉。
+  int required = layout.Scale(580);
+  required = std::max(required,
+                      CheckboxWidth(layout, dc, kTextProgramFiles) + 2 * layout.groupPadding);
+  required = std::max(required,
+                      CheckboxWidth(layout, dc, kTextDesktopShortcut) + 2 * layout.groupPadding);
+  required = std::max(required, layout.labelWidth + layout.labelGap + layout.Scale(260));
+  required = std::max(required, 2 * layout.groupPadding + layout.labelWidth + layout.labelGap +
+                                    layout.Scale(300) + layout.labelGap + browseWidth);
+  layout.contentWidth = required;
+
+  WizardLayout result;
+  const int left = layout.left();
+  const int right = layout.right();
+  const int innerLeft = layout.innerLeft();
+  const int innerRight = layout.innerRight();
+  int y = layout.margin;
+
+  // 后端地址。
+  result.backendLabel = AlignLabel(layout, left, y, layout.editHeight, layout.labelWidth);
+  result.backendEdit =
+      RECT{left + layout.labelWidth + layout.labelGap, y, right, y + layout.editHeight};
+  y += layout.editHeight + layout.sectionGap;
+
+  // 安装位置：目录框 + 浏览按钮 + Program Files 选项。
+  result.locationGroup = RECT{left, y, right, 0};
+  int cursor = y + layout.groupCaption;
+  const int directoryLeft = innerLeft + layout.labelWidth + layout.labelGap;
+  result.directoryLabel = AlignLabel(layout, innerLeft, cursor, layout.editHeight, layout.labelWidth);
+  result.directoryEdit = RECT{directoryLeft, cursor, innerRight - browseWidth - layout.labelGap,
+                              cursor + layout.editHeight};
+  result.browse = RECT{innerRight - browseWidth, cursor, innerRight, cursor + layout.editHeight};
+  cursor += layout.editHeight + layout.Scale(8);
+  result.programFiles = RECT{innerLeft, cursor, innerRight, cursor + layout.checkboxHeight};
+  cursor += layout.checkboxHeight + layout.groupBottom;
+  result.locationGroup.bottom = cursor;
+  y = cursor + layout.sectionGap;
+
+  // 安装方式：两种方式 + 说明 + 桌面快捷方式。
+  result.modeGroup = RECT{left, y, right, 0};
+  cursor = y + layout.groupCaption;
+  const int installWidth = CheckboxWidth(layout, dc, kTextModeInstall);
+  const int portableWidth = CheckboxWidth(layout, dc, kTextModePortable);
+  result.modeInstall =
+      RECT{innerLeft, cursor, innerLeft + installWidth, cursor + layout.checkboxHeight};
+  result.modePortable = RECT{innerLeft + installWidth + layout.Scale(24), cursor,
+                             innerLeft + installWidth + layout.Scale(24) + portableWidth,
+                             cursor + layout.checkboxHeight};
+  cursor += layout.checkboxHeight + layout.Scale(6);
+  // 说明文字的高度按换行后的实测值取，两种方式里取高的那个，切换时高度不跳。
+  const int hintHeight = std::max(WrappedHeight(dc, kModeHintInstallText, innerRight - innerLeft),
+                                  WrappedHeight(dc, kModeHintPortableText, innerRight - innerLeft));
+  result.modeHint = RECT{innerLeft, cursor, innerRight, cursor + hintHeight};
+  cursor += hintHeight + layout.Scale(8);
+  result.desktopShortcut = RECT{innerLeft, cursor, innerRight, cursor + layout.checkboxHeight};
+  cursor += layout.checkboxHeight + layout.groupBottom;
+  result.modeGroup.bottom = cursor;
+  y = cursor + layout.sectionGap;
+
+  // 安装完成后是否启动。
+  result.launch = RECT{left, y, right, y + layout.checkboxHeight};
+  y += layout.checkboxHeight + layout.sectionGap;
+
+  // 状态文字留两行，进度条通栏。
+  result.status = RECT{left, y, right, y + 2 * layout.textHeight + layout.Scale(2)};
+  y += (result.status.bottom - result.status.top) + layout.Scale(8);
+  result.progress = RECT{left, y, right, y + layout.Scale(20)};
+  y += layout.Scale(20) + layout.Scale(16);
+
+  // 右下角两个等宽按钮。
+  int buttonText = std::max(TextWidth(dc, kTextInstallButton), TextWidth(dc, kTextDownloadButton));
+  buttonText = std::max(buttonText, TextWidth(dc, kTextCancelButton));
+  const int buttonWidth = std::max(layout.Scale(96), buttonText + layout.Scale(28));
+  const int buttonGap = layout.Scale(10);
+  result.cancel = RECT{right - buttonWidth, y, right, y + layout.buttonHeight};
+  result.install = RECT{right - 2 * buttonWidth - buttonGap, y, right - buttonWidth - buttonGap,
+                        y + layout.buttonHeight};
+  y += layout.buttonHeight + layout.margin;
+
+  result.clientWidth = layout.clientWidth();
+  result.clientHeight = y;
+  return result;
+}
+
 struct WizardState {
+  WizardLayout layout;
   HWND window = nullptr;
   HWND backendEdit = nullptr;
   HWND directoryEdit = nullptr;
+  HWND browseButton = nullptr;
   HWND programFilesCheck = nullptr;
   HWND launchCheck = nullptr;
   HWND statusLabel = nullptr;
@@ -220,15 +557,14 @@ void ApplyWizardMode(HWND window, WizardState* state, bool portable) {
   ::EnableWindow(state->programFilesCheck, portable ? FALSE : TRUE);
   ::EnableWindow(state->desktopShortcutCheck, portable ? FALSE : TRUE);
   if (state->modeHint != nullptr) {
-    ::SetWindowTextW(state->modeHint,
-                     portable ? L"便携版：把整包解压到上面的目录，不写注册表、不建快捷方式，"
-                                L"也没有卸载入口；换电脑直接拷走整个文件夹即可。"
-                              : L"安装：装到上面的目录，创建开始菜单快捷方式"
-                                L"（含「卸载魔法裁判」入口），桌面快捷方式可选，"
-                                L"并准备好应用内静默更新。");
+    ::SetWindowTextW(state->modeHint, portable ? kModeHintPortableText : kModeHintInstallText);
   }
   if (state->installButton != nullptr) {
-    ::SetWindowTextW(state->installButton, portable ? L"开始下载" : L"开始安装");
+    ::SetWindowTextW(state->installButton, portable ? kTextDownloadButton : kTextInstallButton);
+  }
+  // 状态提示跟着方式走，免得提示里的按钮名和按钮上的文字对不上。
+  if (state->statusLabel != nullptr && state->thread == nullptr) {
+    ::SetWindowTextW(state->statusLabel, portable ? kStatusReadyPortable : kStatusReadyInstall);
   }
   // 目录还是自动值时跟着模式换；用户自己填过就不动他填的路径。
   const std::wstring current = Trim(ReadWindowText(state->directoryEdit));
@@ -237,6 +573,25 @@ void ApplyWizardMode(HWND window, WizardState* state, bool portable) {
                      (portable ? state->portableDefaultDir : state->installDefaultDir).c_str());
   }
   (void)window;
+}
+
+// 安装进行中把整张表单一起禁掉：不再留下「看着能点、点了没反应」的控件。
+void SetWizardBusy(WizardState* state, bool busy) {
+  HWND controls[] = {state->backendEdit,         state->directoryEdit,
+                     state->browseButton,        state->programFilesCheck,
+                     state->desktopShortcutCheck, state->launchCheck,
+                     state->modeInstallRadio,    state->modePortableRadio,
+                     state->installButton,       state->cancelButton};
+  for (HWND control : controls) {
+    if (control != nullptr) {
+      ::EnableWindow(control, busy ? FALSE : TRUE);
+    }
+  }
+  if (!busy) {
+    // 便携版用不到这两项，收工后按当前方式恢复。
+    ::EnableWindow(state->programFilesCheck, state->portable ? FALSE : TRUE);
+    ::EnableWindow(state->desktopShortcutCheck, state->portable ? FALSE : TRUE);
+  }
 }
 
 void WizardProgress(void* context, int percent, const std::wstring& message) {
@@ -300,18 +655,14 @@ void BeginInstall(HWND window, WizardState* state) {
       ::SendMessageW(state->desktopShortcutCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state->launch = ::SendMessageW(state->launchCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
-  ::EnableWindow(state->installButton, FALSE);
-  ::EnableWindow(state->backendEdit, FALSE);
-  ::EnableWindow(state->directoryEdit, FALSE);
-  ::EnableWindow(state->programFilesCheck, FALSE);
-  ::EnableWindow(state->desktopShortcutCheck, FALSE);
-  ::EnableWindow(state->modeInstallRadio, FALSE);
-  ::EnableWindow(state->modePortableRadio, FALSE);
+  SetWizardBusy(state, true);
   ::SetWindowTextW(state->statusLabel,
-                   state->portable ? L"正在准备下载便携版……" : L"正在准备安装……");
+                   state->portable ? kStatusWorkingPortable : kStatusWorkingInstall);
   state->thread = ::CreateThread(nullptr, 0, &WizardThread, state, 0, nullptr);
   if (state->thread == nullptr) {
-    ::EnableWindow(state->installButton, TRUE);
+    SetWizardBusy(state, false);
+    ::SetWindowTextW(state->statusLabel,
+                     state->portable ? kStatusReadyPortable : kStatusReadyInstall);
     ::MessageBoxW(window, L"无法创建工作线程。", L"魔法裁判 安装向导", MB_OK | MB_ICONERROR);
   }
 }
@@ -325,54 +676,62 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       state = reinterpret_cast<WizardState*>(create->lpCreateParams);
       state->window = window;
       ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+      const WizardLayout& layout = state->layout;
 
-      CreateChild(window, L"STATIC", L"后端地址", SS_LEFT, 20, 20, 90, 22, kIdBackendLabel);
-      state->backendEdit = CreateChild(window, L"EDIT", create->lpszName,
-                                       WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 120, 18, 480, 24,
-                                       kIdBackendEdit);
-      CreateChild(window, L"STATIC", L"安装目录", SS_LEFT, 20, 56, 90, 22, kIdDirectoryLabel);
-      state->directoryEdit = CreateChild(window, L"EDIT", state->directory.c_str(),
-                                         WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 120, 54, 370, 24,
-                                         kIdDirectoryEdit);
-      CreateChild(window, L"BUTTON", L"浏览…", BS_PUSHBUTTON | WS_TABSTOP, 500, 54, 100, 24,
-                  kIdBrowse);
+      CreateChildRect(window, L"STATIC", kTextBackendLabel, SS_LEFT, layout.backendLabel,
+                      kIdBackendLabel);
+      state->backendEdit =
+          CreateChildRect(window, L"EDIT", create->lpszName,
+                          WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, layout.backendEdit, kIdBackendEdit);
+
+      // 安装位置：装到哪儿。
+      CreateChildRect(window, L"BUTTON", kTextLocationGroup, BS_GROUPBOX, layout.locationGroup, 0);
+      CreateChildRect(window, L"STATIC", kTextDirectoryLabel, SS_LEFT, layout.directoryLabel,
+                      kIdDirectoryLabel);
+      state->directoryEdit = CreateChildRect(window, L"EDIT", state->directory.c_str(),
+                                             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+                                             layout.directoryEdit, kIdDirectoryEdit);
+      state->browseButton = CreateChildRect(window, L"BUTTON", kTextBrowse,
+                                            BS_PUSHBUTTON | WS_TABSTOP, layout.browse, kIdBrowse);
       state->programFilesCheck =
-          CreateChild(window, L"BUTTON", L"安装到 Program Files（需要管理员权限）",
-                      BS_AUTOCHECKBOX | WS_TABSTOP, 120, 88, 400, 22, kIdProgramFiles);
-      state->launchCheck = CreateChild(window, L"BUTTON", L"安装完成后启动魔法裁判",
-                                       BS_AUTOCHECKBOX | WS_TABSTOP, 120, 114, 400, 22, kIdLaunch);
-      ::SendMessageW(state->launchCheck, BM_SETCHECK, BST_CHECKED, 0);
+          CreateChildRect(window, L"BUTTON", kTextProgramFiles, BS_AUTOCHECKBOX | WS_TABSTOP,
+                          layout.programFiles, kIdProgramFiles);
 
-      // 两种方式：安装（带快捷方式与卸载入口）或只下载便携版。
-      CreateChild(window, L"STATIC", L"选择方式", SS_LEFT, 20, 152, 90, 22, kIdModeLabel);
+      // 安装方式：安装（带快捷方式与卸载入口）或只下载便携版。
+      CreateChildRect(window, L"BUTTON", kTextModeGroup, BS_GROUPBOX, layout.modeGroup, 0);
       state->modeInstallRadio =
-          CreateChild(window, L"BUTTON", L"安装（推荐）",
-                      BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 120, 150, 160, 22, kIdModeInstall);
+          CreateChildRect(window, L"BUTTON", kTextModeInstall,
+                          BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, layout.modeInstall,
+                          kIdModeInstall);
       state->modePortableRadio =
-          CreateChild(window, L"BUTTON", L"仅下载便携版",
-                      BS_AUTORADIOBUTTON | WS_TABSTOP, 290, 150, 160, 22, kIdModePortable);
-      state->modeHint = CreateChild(window, L"STATIC", L"", SS_LEFT, 120, 176, 480, 40, kIdModeHint);
+          CreateChildRect(window, L"BUTTON", kTextModePortable, BS_AUTORADIOBUTTON | WS_TABSTOP,
+                          layout.modePortable, kIdModePortable);
+      state->modeHint =
+          CreateChildRect(window, L"STATIC", kModeHintInstallText, SS_LEFT, layout.modeHint,
+                          kIdModeHint);
       state->desktopShortcutCheck =
-          CreateChild(window, L"BUTTON", L"创建桌面快捷方式（可选；开始菜单快捷方式总是创建）",
-                      BS_AUTOCHECKBOX | WS_TABSTOP, 120, 220, 480, 22, kIdDesktopShortcut);
+          CreateChildRect(window, L"BUTTON", kTextDesktopShortcut, BS_AUTOCHECKBOX | WS_TABSTOP,
+                          layout.desktopShortcut, kIdDesktopShortcut);
       ::SendMessageW(state->desktopShortcutCheck, BM_SETCHECK, BST_CHECKED, 0);
       ::SendMessageW(state->portable ? state->modePortableRadio : state->modeInstallRadio,
                      BM_SETCHECK, BST_CHECKED, 0);
 
-      state->statusLabel = CreateChild(
-          window, L"STATIC", L"选好方式后点「开始安装」下载并安装最新版本。", SS_LEFT, 20, 256, 580,
-          40, kIdStatus);
-      state->progressBar = CreateChild(window, PROGRESS_CLASS, L"", WS_BORDER, 20, 306, 580, 22,
-                                       kIdProgress);
+      state->launchCheck = CreateChildRect(window, L"BUTTON", kTextLaunch,
+                                           BS_AUTOCHECKBOX | WS_TABSTOP, layout.launch, kIdLaunch);
+      ::SendMessageW(state->launchCheck, BM_SETCHECK, BST_CHECKED, 0);
+
+      state->statusLabel =
+          CreateChildRect(window, L"STATIC", kStatusReadyInstall, SS_LEFT, layout.status, kIdStatus);
+      state->progressBar =
+          CreateChildRect(window, PROGRESS_CLASS, L"", WS_BORDER, layout.progress, kIdProgress);
       if (state->progressBar != nullptr) {
         ::SendMessageW(state->progressBar, PBM_SETRANGE32, 0, 100);
       }
-      state->installButton = CreateChild(window, L"BUTTON", L"开始安装",
-                                         BS_DEFPUSHBUTTON | WS_TABSTOP, 380, 351, 100, 30,
-                                         kIdInstall);
-      state->cancelButton =
-          CreateChild(window, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, 500, 351, 100, 30,
-                      kIdCancel);
+      state->installButton =
+          CreateChildRect(window, L"BUTTON", kTextInstallButton,
+                          BS_DEFPUSHBUTTON | WS_TABSTOP, layout.install, kIdInstall);
+      state->cancelButton = CreateChildRect(window, L"BUTTON", kTextCancelButton,
+                                            BS_PUSHBUTTON | WS_TABSTOP, layout.cancel, kIdCancel);
       ApplyWizardMode(window, state, state->portable);
       return 0;
     }
@@ -497,7 +856,61 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
 // ==== 卸载向导 ====
 
+struct UninstallLayout {
+  RECT heading;
+  RECT list;
+  RECT filesCheck;
+  RECT dataCheck;
+  RECT status;
+  RECT start;
+  RECT cancel;
+  int clientWidth = 0;
+  int clientHeight = 0;
+};
+
+UninstallLayout ComputeUninstallLayout(HDC dc) {
+  Layout layout = BaseLayout(dc);
+  int required = layout.Scale(560);
+  required = std::max(required, CheckboxWidth(layout, dc, kTextRemoveData));
+  required = std::max(required, layout.labelWidth + layout.labelGap + layout.Scale(240));
+  layout.contentWidth = required;
+
+  UninstallLayout result;
+  const int left = layout.left();
+  const int right = layout.right();
+  int y = layout.margin;
+
+  result.heading = RECT{left, y, right, y + layout.textHeight};
+  y += layout.textHeight + layout.Scale(6);
+  // 文件清单是只读多行框，按 10 行左右留高度，装不下的部分自己滚动。
+  const int listHeight = std::max(layout.Scale(150), 8 * layout.textHeight);
+  result.list = RECT{left, y, right, y + listHeight};
+  y += listHeight + layout.sectionGap;
+
+  result.filesCheck = RECT{left, y, right, y + layout.checkboxHeight};
+  y += layout.checkboxHeight + layout.Scale(6);
+  result.dataCheck = RECT{left, y, right, y + layout.checkboxHeight};
+  y += layout.checkboxHeight + layout.sectionGap;
+
+  // 状态留两行：卸载过程中的提示常带完整路径。
+  result.status = RECT{left, y, right, y + 2 * layout.textHeight + layout.Scale(2)};
+  y += (result.status.bottom - result.status.top) + layout.Scale(10);
+
+  int buttonText = std::max(TextWidth(dc, kTextUninstallButton), TextWidth(dc, kTextCancelButton));
+  const int buttonWidth = std::max(layout.Scale(100), buttonText + layout.Scale(28));
+  const int buttonGap = layout.Scale(10);
+  result.cancel = RECT{right - buttonWidth, y, right, y + layout.buttonHeight};
+  result.start = RECT{right - 2 * buttonWidth - buttonGap, y, right - buttonWidth - buttonGap,
+                      y + layout.buttonHeight};
+  y += layout.buttonHeight + layout.margin;
+
+  result.clientWidth = layout.clientWidth();
+  result.clientHeight = y;
+  return result;
+}
+
 struct UninstallState {
+  UninstallLayout layout;
   HWND window = nullptr;
   HWND filesCheck = nullptr;
   HWND dataCheck = nullptr;
@@ -549,28 +962,31 @@ LRESULT CALLBACK UninstallProc(HWND window, UINT message, WPARAM wparam, LPARAM 
       state = reinterpret_cast<UninstallState*>(create->lpCreateParams);
       state->window = window;
       ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+      const UninstallLayout& layout = state->layout;
 
-      CreateChild(window, L"STATIC", L"将删除以下内容：", SS_LEFT, 20, 16, 560, 22, kIdUninstallText);
-      CreateChild(window, L"EDIT", create->lpszName,
-                  WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL, 20, 42, 560,
-                  150, kIdUninstallList);
-      state->filesCheck =
-          CreateChild(window, L"BUTTON", L"删除程序文件", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 204, 260,
-                      24, kIdRemoveFiles);
-      state->dataCheck = CreateChild(window, L"BUTTON", L"删除持久化数据（存档与配置）",
-                                     BS_AUTOCHECKBOX | WS_TABSTOP, 20, 232, 320, 24, kIdRemoveData);
+      CreateChildRect(window, L"STATIC", kTextUninstallHeading, SS_LEFT, layout.heading,
+                      kIdUninstallText);
+      CreateChildRect(window, L"EDIT", create->lpszName,
+                      WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
+                      layout.list, kIdUninstallList);
+      state->filesCheck = CreateChildRect(window, L"BUTTON", kTextRemoveFiles,
+                                          BS_AUTOCHECKBOX | WS_TABSTOP, layout.filesCheck,
+                                          kIdRemoveFiles);
+      state->dataCheck = CreateChildRect(window, L"BUTTON", kTextRemoveData,
+                                         BS_AUTOCHECKBOX | WS_TABSTOP, layout.dataCheck,
+                                         kIdRemoveData);
       ::SendMessageW(state->filesCheck, BM_SETCHECK, BST_CHECKED, 0);
       ::SendMessageW(state->dataCheck, BM_SETCHECK, BST_CHECKED, 0);
       if (state->directory.empty()) {
         ::EnableWindow(state->filesCheck, FALSE);
       }
-      state->statusLabel = CreateChild(window, L"STATIC", L"确认后开始卸载，Updater.exe 自身会保留。",
-                                       SS_LEFT, 20, 264, 560, 22, kIdStatus);
-      state->startButton = CreateChild(window, L"BUTTON", L"开始卸载",
-                                       BS_DEFPUSHBUTTON | WS_TABSTOP, 360, 292, 100, 30,
-                                       kIdUninstallStart);
-      state->cancelButton = CreateChild(window, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, 480,
-                                        292, 100, 30, kIdCancel);
+      state->statusLabel = CreateChildRect(window, L"STATIC", kTextUninstallReady, SS_LEFT,
+                                           layout.status, kIdStatus);
+      state->startButton = CreateChildRect(window, L"BUTTON", kTextUninstallButton,
+                                           BS_DEFPUSHBUTTON | WS_TABSTOP, layout.start,
+                                           kIdUninstallStart);
+      state->cancelButton = CreateChildRect(window, L"BUTTON", kTextCancelButton,
+                                            BS_PUSHBUTTON | WS_TABSTOP, layout.cancel, kIdCancel);
       return 0;
     }
     case WM_COMMAND: {
@@ -600,6 +1016,13 @@ LRESULT CALLBACK UninstallProc(HWND window, UINT message, WPARAM wparam, LPARAM 
         ::SetWindowTextW(state->statusLabel, L"正在卸载……");
         state->thread = ::CreateThread(nullptr, 0, &UninstallThread, state, 0, nullptr);
         if (state->thread == nullptr) {
+          ::EnableWindow(state->startButton, TRUE);
+          ::EnableWindow(state->cancelButton, TRUE);
+          ::EnableWindow(state->dataCheck, TRUE);
+          if (!state->directory.empty()) {
+            ::EnableWindow(state->filesCheck, TRUE);
+          }
+          ::SetWindowTextW(state->statusLabel, kTextUninstallReady);
           ::MessageBoxW(window, L"无法创建工作线程。", L"魔法裁判 卸载", MB_OK | MB_ICONERROR);
         }
         return 0;
@@ -706,16 +1129,22 @@ int ShowInstalledChoiceDialog(const std::wstring& installDir, const std::wstring
   if (!version.empty()) {
     subtitle += L"    版本：" + version;
   }
+  {
+    // 窗口大小由内容算出来，按钮和换行后的文字都不会被切掉。
+    ScreenCanvas canvas;
+    state.layout = ComputeChoiceLayout(canvas.dc, subtitle);
+  }
   const std::wstring title = L"魔法裁判 检测到已有安装";
+  const SIZE size = WindowSizeForClient(state.layout.clientWidth, state.layout.clientHeight);
   HWND window = ::CreateWindowExW(WS_EX_DLGMODALFRAME, L"MagicJudgeUpdaterChoice", subtitle.c_str(),
                                   WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, kChoiceWidth, kChoiceHeight, nullptr,
-                                  nullptr, ::GetModuleHandleW(nullptr), &state);
+                                  CW_USEDEFAULT, CW_USEDEFAULT, size.cx, size.cy, nullptr, nullptr,
+                                  ::GetModuleHandleW(nullptr), &state);
   if (window == nullptr) {
     return kInstalledChoiceQuit;
   }
   ::SetWindowTextW(window, title.c_str());
-  CenterWindow(window, kChoiceWidth, kChoiceHeight);
+  CenterWindow(window, size.cx, size.cy);
   ::SetForegroundWindow(window);
   RunMessageLoop(window);
   return state.result;
@@ -743,18 +1172,23 @@ int RunInstallWizard(const Options& options) {
   state.portable = options.portable;
   state.desktopShortcut = options.desktopShortcut;
   state.directory = state.portable ? state.portableDefaultDir : state.installDefaultDir;
+  {
+    ScreenCanvas canvas;
+    state.layout = ComputeWizardLayout(canvas.dc);
+  }
   std::wstring backend = options.from.empty() ? std::wstring(kDefaultBackend) : options.from;
   const std::wstring title = L"魔法裁判 安装向导";
+  const SIZE size = WindowSizeForClient(state.layout.clientWidth, state.layout.clientHeight);
   HWND window = ::CreateWindowExW(0, L"MagicJudgeUpdaterWizard", backend.c_str(),
                                   WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, kWizardWidth, kWizardHeight, nullptr,
-                                  nullptr, ::GetModuleHandleW(nullptr), &state);
+                                  CW_USEDEFAULT, CW_USEDEFAULT, size.cx, size.cy, nullptr, nullptr,
+                                  ::GetModuleHandleW(nullptr), &state);
   if (window == nullptr) {
     ShowErrorDialog(L"魔法裁判 安装向导", L"创建窗口失败。");
     return kExitFailure;
   }
   ::SetWindowTextW(window, title.c_str());
-  CenterWindow(window, kWizardWidth, kWizardHeight);
+  CenterWindow(window, size.cx, size.cy);
   ::SetForegroundWindow(window);
   RunMessageLoop(window);
   return state.result;
@@ -772,17 +1206,22 @@ int RunUninstallWizard(const Options& options) {
   state.directory = options.dir.empty() ? TrimTrailingSlash(info.installDir)
                                         : TrimTrailingSlash(options.dir);
   const std::wstring summary = BuildUninstallSummary(state.directory);
+  {
+    ScreenCanvas canvas;
+    state.layout = ComputeUninstallLayout(canvas.dc);
+  }
   const std::wstring title = L"魔法裁判 卸载";
+  const SIZE size = WindowSizeForClient(state.layout.clientWidth, state.layout.clientHeight);
   HWND window = ::CreateWindowExW(0, L"MagicJudgeUpdaterUninstall", summary.c_str(),
                                   WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, kUninstallWidth, kUninstallHeight,
-                                  nullptr, nullptr, ::GetModuleHandleW(nullptr), &state);
+                                  CW_USEDEFAULT, CW_USEDEFAULT, size.cx, size.cy, nullptr, nullptr,
+                                  ::GetModuleHandleW(nullptr), &state);
   if (window == nullptr) {
     ShowErrorDialog(L"魔法裁判 卸载", L"创建窗口失败。");
     return kExitFailure;
   }
   ::SetWindowTextW(window, title.c_str());
-  CenterWindow(window, kUninstallWidth, kUninstallHeight);
+  CenterWindow(window, size.cx, size.cy);
   ::SetForegroundWindow(window);
   RunMessageLoop(window);
   return state.result;
