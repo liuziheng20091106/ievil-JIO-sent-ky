@@ -11,6 +11,7 @@ from .actions import (
     challengeable,
     day_fake_allowed,
     discussion_end_reached,
+    evidence_public_text,
     outstanding_seats,
 )
 from .catalog import (
@@ -845,10 +846,13 @@ def resolve_pending(game, events, data):
             recipients = None if data.get("public") else data.get("recipients", [])
             require(recipients is None or recipients, "请选择公开或指定接收者")
             if item.get("text") or item.get("image_id"):
+                # 公示正文默认是「N号留下遗物xxx」；主持人改过就用改过的，
+                # 老客户端不带这个字段时仍按默认补全前缀。
+                text = data.get("text") or evidence_public_text(item)
                 notify(
                     game,
                     events,
-                    item.get("text") or "死者留下证物。",
+                    text,
                     recipients,
                     "遗留证物",
                     item.get("image_id"),

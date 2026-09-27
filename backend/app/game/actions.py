@@ -459,6 +459,11 @@ def night_abilities(game, card):
     return abilities
 
 
+def evidence_public_text(item):
+    """证物公示的默认正文：带上「X号留下遗物」前缀；主持人可在裁定表单里改写。"""
+    return f"{item.get('seat_id') or '?'}号留下遗物{item.get('text') or ''}"
+
+
 def pending_action(game, item):
     kind = item["kind"]
     fields = []
@@ -495,6 +500,13 @@ def pending_action(game, item):
             fields.append(field("true_source", "补充裁定实际真凶", "select", role_options()))
     elif kind == "evidence":
         fields = [
+            field(
+                "text",
+                "公示内容（默认带「X号留下遗物」前缀）",
+                "textarea",
+                required=False,
+                default=evidence_public_text(item),
+            ),
             field("public", "向全员公开", "checkbox", required=False, default=True),
             field(
                 "recipients",

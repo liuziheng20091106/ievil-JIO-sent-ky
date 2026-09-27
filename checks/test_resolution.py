@@ -2736,6 +2736,58 @@ class EvidenceAnnouncement(unittest.TestCase):
         )
 
 
+class EvidenceAnnouncement(unittest.TestCase):
+    """证物公示：默认正文带「N号留下遗物」前缀，主持人可以在表单里改写。"""
+
+    def pending_evidence(self, game, text="一句话", image_id=None):
+        return pending(
+            game,
+            "evidence",
+            "1号遗留证物：裁定内容与公开范围",
+            seat_id="1",
+            text=text,
+            image_id=image_id,
+        )
+
+    def ruling_form(self, game, item):
+        return next(
+            action
+            for action in game_view(game, HOST)["actions"]
+            if action["id"] == "host.resolve"
+            and action["payload"]["pending_id"] == item["id"]
+        )
+
+    def publish(self, game, item, **overrides):
+        """按表单默认值裁定发布，模拟主持人直接点提交。"""
+        defaults = {
+            entry["name"]: entry.get("default")
+            for entry in self.ruling_form(game, item)["fields"]
+            if entry["type"] != "checkbox"
+        }
+        payload = {"pending_id": item["id"], "allow": True, "public": True, **defaults, **overrides}
+        events = command(game, HOST, "host.resolve", payload)
+        return [event["text"] for event in events if event.get("title") == "遗留证物"]
+
+    def test_the_default_public_text_carries_the_seat_prefix(self):
+        game = arranged_game("discussion")
+        item = self.pending_evidence(game)
+        self.assertEqual(self.publish(game, item), ["1号留下遗物一句话"])
+
+    def test_an_image_only_evidence_still_names_the_seat(self):
+        # 只传图不写字：前缀照旧发出去，否则全场看不出是谁留下的。
+        game = arranged_game("discussion")
+        item = self.pending_evidence(game, text="", image_id="ev-1")
+        self.assertEqual(self.publish(game, item), ["1号留下遗物"])
+
+    def test_the_host_can_rewrite_the_public_text(self):
+        game = arranged_game("discussion")
+        item = self.pending_evidence(game)
+        self.assertEqual(
+            self.publish(game, item, text="1号留下遗物：一把沾血的刀"),
+            ["1号留下遗物：一把沾血的刀"],
+        )
+
+
 class ActionDescriptions(unittest.TestCase):
     """行动说明由服务端下发，客户端只负责渲染：每个行动都要带非空说明。"""
 
