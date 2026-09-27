@@ -19,6 +19,8 @@ from fastapi.testclient import TestClient
 
 from backend.app import auth_storage, pow_guard, storage
 from backend.app.main import app
+from backend.app.simulator.client import ProtocolClient
+from backend.app.simulator.transport import TestClientTransport, gateway_authenticator
 
 
 def solve(token, difficulty):
@@ -151,6 +153,35 @@ class ChallengeEndpoints(unittest.TestCase):
                 "/api/native/auth/challenges", json={"token": "x", "nonce": "1"}
             )
             self.assertEqual(response.status_code, 422)
+
+    def test_simulator_client_solves_the_puzzle(self):
+        """模拟器走真实协议，开启防护时也必须自己解题登录，否则脚本一律 428。
+
+        这里保护的是 join-bots.py / run-simulator.py 的实际入口：登录挑战失败会让
+        整套模拟器与虚拟玩家脚本完全不可用。
+        """
+        with patch.dict(
+            os.environ,
+            {"GAME_POW_DIFFICULTY": "3", "GAME_QQ_GROUP_ID": "1105925736"},
+            clear=False,
+        ):
+            # 登录轮询会写会话表：必须进入 lifespan 让各存储初始化。
+            with TestClient(
+                app, base_url="http://testserver", headers={"Origin": "http://testserver"}
+            ) as client:
+                transport = TestClientTransport(client)
+                authenticate = gateway_authenticator(
+                    transport, "test-gateway-secret", "1105925736"
+                )
+                player = ProtocolClient(transport, "虚拟玩家1", origin="http://testserver")
+                player.login_player(
+                    "900001",
+                    "虚拟玩家1",
+                    gateway_token="test-gateway-secret",
+                    group_id="1105925736",
+                    authenticator=authenticate,
+                )
+                self.assertTrue(player.token, "开启 PoW 后模拟器拿不到玩家令牌")
 
 
 if __name__ == "__main__":

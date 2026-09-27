@@ -4,10 +4,26 @@
 都走和其它客户端完全相同的路径，这样模拟器发现的缺陷才是真实缺陷。
 """
 
+import hashlib
 import json
 import threading
 import time
 from collections.abc import Iterable
+
+
+def solve_pow(token, difficulty):
+    """解出使 ``sha256(token + nonce)`` 十六进制前缀有 difficulty 个 '0' 的 nonce。
+
+    与服务端 :mod:`backend.app.pow_guard` 的校验一致；模拟器刻意走真实协议，
+    所以服务端开启 ``GAME_POW_DIFFICULTY`` 时它也要像客户端一样自己解题。
+    """
+    prefix = "0" * max(0, int(difficulty))
+    nonce = 0
+    while True:
+        digest = hashlib.sha256(f"{token}{nonce}".encode("utf-8")).hexdigest()
+        if digest.startswith(prefix):
+            return nonce
+        nonce += 1
 
 
 class ProtocolError(RuntimeError):
@@ -64,13 +80,26 @@ class ProtocolClient:
 
     # ------------------------------------------------------------------ 登录
 
+    def pow_solution(self):
+        """领一道工作量谜题并解出 nonce；服务端未开启防护时返回 None。
+
+        返回 None 时挑战请求按旧形状发送（不带请求体），接口形状与以前一致。
+        """
+        puzzle = self.call("POST", "/api/pow/challenges", {}, action="pow")
+        if not isinstance(puzzle, dict) or not puzzle.get("required"):
+            return None
+        return {
+            "token": puzzle["token"],
+            "nonce": solve_pow(puzzle["token"], puzzle["difficulty"]),
+        }
+
     def login_host(self, authenticator, qq_id, nickname, *, group_id=None):
         """主持人也是 QQ 账号：先被授权，再走与玩家相同的群登录码流程。
 
         ``authenticator(code, qq_id, nickname, group_id)`` 与玩家登录共用。
         """
         challenge = self.call(
-            "POST", "/api/native/auth/host/challenges", {}, action="host.challenge"
+            "POST", "/api/native/auth/host/challenges", self.pow_solution(), action="host.challenge"
         )
         authenticator(challenge["code"], qq_id, nickname, group_id)
         payload = self.call(
@@ -88,7 +117,9 @@ class ProtocolClient:
         ``authenticator(code, qq_id, nickname, group_id)`` 由调用方提供，可以是
         真实网关 HTTP 调用，也可以直接调 ``auth_storage.complete_challenge``。
         """
-        challenge = self.call("POST", "/api/native/auth/challenges", {}, action="challenge")
+        challenge = self.call(
+            "POST", "/api/native/auth/challenges", self.pow_solution(), action="challenge"
+        )
         authenticator(challenge["code"], qq_id, nickname, group_id)
         payload = self.call(
             "GET",
