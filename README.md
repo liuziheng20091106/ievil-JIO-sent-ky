@@ -246,12 +246,13 @@ package-release.cmd
 }
 ```
 
-- 匹配规则：`min_version <= 客户端版本 < max_version`（缺省边界表示不限），`platform` 可以是 `windows` / `android` / `any`；没有匹配时退回环境变量 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`。
+- 匹配规则：`min_version <= 客户端版本 < max_version`（缺省边界表示不限），`platform` 可以是 `windows` / `android` / `any`；**版本标签只认这个文件**，后端不读任何版本环境变量，文件缺失或没有匹配区间时就什么都不下发。文件每次请求现读，改完不用重启后端。
+- Windows 更新器/安装程序（UA `magicjudge-updater/<版本> (windows)`）是唯一例外：它不问自己旧不旧，直接拿该平台那份兜底区间（没有 `min_version` / `max_version` 的那条）的更新包——它要装的就是「当前发布版」，按版本比较会让刚发布的那一版更新器拿不到自己的包。
 - 客户端低于该区间的 `minimum` 时判为强制更新：`POST /api/games/{id}/participations`（以玩家身份入局）与接受邀请会被拒（426），**其它功能一律不受限**。UA 缺失或不认识（浏览器、模拟器、检查脚本）时不做任何拦截。
 - `notes` 是 Markdown，客户端在更新弹窗里渲染；`guide_url` 非空时多一个「打开网页」按钮；`url` 留空时只引导网页。
 - `size` / `sha256` / `updater_url` 由 `package-release.cmd`（`tools/package-release.py` + `tools/update_manifest.py`）自动刷新（只更新该平台「没有区间边界」的那条兜底区间，手工写的 `title` / `notes` / `minimum` / `guide_url` 与更窄的区间条目都保留）。
 
-Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，由它「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限静默替换程序 → 自动重启客户端，全程无需 UAC。
+Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，由它「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限静默替换程序 → 自动重启客户端，全程无需 UAC。更新器/安装程序向 `/api/health` 要包时用的是自己的版本号，但后端对它不做版本比较：它拿到的永远是当前发布版（首次安装、修复安装、应用内更新是同一条路径）。
 
 `Updater.exe` 是**独立发布产物**（网页首页的「Windows 安装程序」，也是首次安装入口）。它的向导给两个选择：
 

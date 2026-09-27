@@ -1321,14 +1321,16 @@ class GameStore extends ChangeNotifier {
     if (actor?.isSpectator == true && selectedChannelId == 'public') {
       selectedChannelId = 'spectator';
     }
-    // 傀儡控制关系解除或频道失效同样要退回公屏：留着旧的 as_seat 会让下一次
+    // 傀儡控制关系解除（面板消失）、对局结束，或选中的傀儡频道失效：前两者退回
+    // 自己的身份，后者留在该身份上退回它的公屏——留着旧的 as_seat 会让下一次
     // 发送落到服务端已拒绝的身份上。
     if (puppetSeatId != null) {
       final puppetChannels = channelsFor(puppetSeatId);
-      // 控制关系仍在，只是选中的频道结束了：留在该身份上，退回它的公屏。
-      if (puppetChannels.every((item) =>
-          item.id != selectedPuppetChannelId || item.status == 'ended')) {
+      if (puppetChannels.isEmpty || next.status == 'ended') {
         puppetSeatId = null;
+        selectedPuppetChannelId = 'public';
+      } else if (puppetChannels.every((item) =>
+          item.id != selectedPuppetChannelId || item.status == 'ended')) {
         selectedPuppetChannelId = 'public';
       }
     }
@@ -1455,7 +1457,8 @@ class GameStore extends ChangeNotifier {
     if (api == null || id == null) return;
     messageScope = scope;
     try {
-      final page = await api!.messages(id, scope: scope);
+      // 傀儡身份的消息用 as_seat 代读：服务端只放行该席位所在的聊天频道。
+      final page = await api!.messages(id, scope: scope, asSeat: activeAsSeat);
       messages = page.messages;
       hasMoreMessages = page.hasMore;
       error = null;
@@ -1474,6 +1477,7 @@ class GameStore extends ChangeNotifier {
         gameId!,
         scope: messageScope,
         before: messages.first.id,
+        asSeat: activeAsSeat,
       );
       _mergeMessages(page.messages);
       hasMoreMessages = page.hasMore;
@@ -1487,8 +1491,8 @@ class GameStore extends ChangeNotifier {
     if (api == null || gameId == null) return;
     final after = messages.isEmpty ? 0 : messages.last.id;
     try {
-      final page =
-          await api!.messages(gameId!, scope: messageScope, after: after);
+      final page = await api!
+          .messages(gameId!, scope: messageScope, after: after, asSeat: activeAsSeat);
       _mergeMessages(page.messages);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -1616,13 +1620,18 @@ class GameStore extends ChangeNotifier {
 
   /// 选择发送频道；带 [asSeat] 表示以该受控傀儡席位的身份发言。
   /// 两条身份的频道选择分开存放：写给傀儡私信的内容不可能落到自己的频道上。
+  /// 切换身份同时按新身份重取一次消息：傀儡频道的历史只有 `as_seat` 口径才读得到。
   void selectChannel(String channelId, {String? asSeat}) {
+    final previousAsSeat = puppetSeatId;
     if (asSeat == null) {
       puppetSeatId = null;
       selectedChannelId = channelId;
     } else {
       puppetSeatId = asSeat;
       selectedPuppetChannelId = channelId;
+    }
+    if (previousAsSeat != puppetSeatId) {
+      unawaited(loadMessages(messageScope));
     }
     notifyListeners();
   }

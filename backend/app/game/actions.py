@@ -12,6 +12,7 @@ from .catalog import (
 from .resolution import coco_seat, target_allowed, treasure_protected
 from .state import (
     ballot_complete,
+    can_use_ability,
     can_use_card,
     card_actionable,
     controlled_cards,
@@ -27,8 +28,11 @@ from .state import (
     nomination_rounds,
     owner,
     pending_nominators,
+    pending_revive,
     player_seat,
     present,
+    revive_deaths,
+    revive_declined,
     role_card,
     seat,
     seat_choice,
@@ -163,11 +167,11 @@ NIGHT_ABILITY_DESCRIPTIONS = {
 }
 
 # 白天技能：真实与伪装走同一条描述，伪装的说明另外点出「可被质疑」。
+# 处决幻视自 2026-09-27 起是被动技能，不再是可声明的白天技能，所以这里没有它。
 DAY_ABILITY_DESCRIPTIONS = {
     "interrupt": "立即打断指定席位的发言，每个白天一次；艾玛在下层也可使用。",
     "mass_brainwash": "洗脑全场处决一名角色；你与目标一同被处决，且今天不再处决其他人。",
     "love": "宣布爱上一人或移情（从当天夜里开始生效）；此后每夜令爱人席当前牌负伤一次。",
-    "gaze": "查看本日处决名单是否含魔女，结果只发给你。",
     "duel": "白天宣布与一张当前牌决斗：你失去本技能，今天所有人必须至少同意你或决斗对象之一，且这两张牌达到半数即可处决。",
     "photo": "赠送自己的照片；受赠者可授权你查看其夜间行动。",
 }
@@ -292,6 +296,13 @@ def outstanding_seats(game):
             and owner(game, cid)["id"] not in game["execution_ready"]
             and card_actionable(game, game["cards"][cid])
         ]
+    elif phase == "night_results":
+        # 「夜间结果与证物」是复活窗口的最后一站：主持人一推进就是天亮，死讯公示、
+        # 下层牌登场，这张牌再也回不来。所以没决定的复活算本阶段还没做完的玩家行动，
+        # 主持人可以警告30秒，也可以直接推进（未完成立刻按超时＝放弃复活处理）。
+        revive_seat = pending_revive(game)
+        if revive_seat:
+            result.append(revive_seat)
     result += [
         item["seat_id"] for item in game["pending"] if item["kind"] == "honoka_witness"
     ]
@@ -364,7 +375,9 @@ def can_day_ability(game, card, ability):
             and card["uses"].get("interrupt_day") != game["day"]
         )
     if ability == "gaze":
-        return role == "nanoka" and phase == "execution" and card["uses"].get("gaze_day") != game["day"]
+        # 处决幻视自 2026-09-27 起是被动技能：处决名单一定下来就由 engine.auto_gaze
+        # 自动把结果私下发给奈乃香，因此这里对任何人（含示人奈乃香的穗乃香）都不再放行声明。
+        return False
     if ability == "duel":
         # 决斗必须在投票开始前宣布，且当天只能有一场：两张决斗牌要排在轮次表最前面。
         return (
@@ -397,12 +410,13 @@ CHALLENGE_PHASES = {"speech", "discussion", "nomination", "voting"}
 def challengeable(game, declaration):
     """除照片、爱人选择与处决幻视以外，所有开放的白天技能声明均可质疑。
 
-    处决幻视属于处决阶段的临刑技能，不能伪装发动，因此没有可质疑的真假。
+    处决幻视自 2026-09-27 起是被动技能，已经不存在这类声明；这里保留白名单只是为了让
+    旧存档里已经写下的 gaze 声明照旧不可质疑。
     """
     return declaration["ability"] not in {"photo", "love", "gaze"}
 
 def day_fake_allowed(game, card, ability):
-    # 处决幻视只能由奈乃香本人在处决阶段发动，不存在伪装声明。
+    # 处决幻视是被动技能（engine.auto_gaze），不能伪装成它，真奈乃香也声明不了。
     if ability == "gaze":
         return False
     phase = game["phase"]
@@ -430,6 +444,14 @@ def day_fake_allowed(game, card, ability):
 
 
 def night_abilities(game, card):
+    """该牌本夜可选的技能；失去技能（含傀儡）的牌一个技能都没有。
+
+    夜间行动本身仍由控制者代确认，但傀儡「不能发动技能」——回空列表之后
+    :func:`sync_night_confirmations` 会把它当作「本夜无事可做」自动确认，
+    既不会卡住阶段，也不会让傀儡替主人多打一刀。
+    """
+    if card["states"].get("no_ability"):
+        return []
     role, witch, uses = card["role_id"], card["witch"], card["uses"]
     abilities = ["knife"] if witch else []
     if role == "emma":
@@ -1109,7 +1131,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                 result.append(
                     action("night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True)
                 )
-    if card and game["half"] == "day":
+    if card and game["half"] == "day" and can_use_ability(game, card, puppet_controlled):
         day_cards = [card]
         # 新版规则：艾玛即使在下层也可打断一次发言。
         emma_card = next((c for c in game["cards"].values() if c["role_id"] == "emma"), None)
@@ -1198,8 +1220,13 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                 [field("role", "示人身份", "select", role_options())],
             )
         )
-    if card and card["role_id"] == "hiro" and card["witch"]:
-        # 主动出局是魔女化希罗的技能；未魔女化时只能等即将死亡时的自动回溯。
+    if (
+        card
+        and card["role_id"] == "hiro"
+        and card["witch"]
+        # 主动出局是魔女化希罗的技能：未魔女化时只能等即将死亡时的自动回溯，傀儡不能发动。
+        and can_use_ability(game, card, puppet_controlled)
+    ):
         result.append(action("hiro.exit", "主动出局", danger=True))
     if game["half"] == "day" and game["phase"] in CHALLENGE_PHASES and not lost_by_challenge(
         game, active_seat
@@ -1303,8 +1330,12 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         and card
         and card["id"] in game["execution"]
         and sid not in game["execution_ready"]
+        # 处决阶段只等奈乃香的临刑枪响应（其他牌不需要确认），见 engine.advance。
+        and card["role_id"] == "nanoka"
+        and card["uses"].get("bullets", 0) > 0
     ):
-        if card["role_id"] == "nanoka" and card["uses"].get("bullets", 0) > 0:
+        # 临刑枪是奈乃香的技能：傀儡不能发动，但仍要给「确认」让处决阶段能收尾。
+        if can_use_ability(game, card, puppet_controlled):
             threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
             result.append(
                 action(
@@ -1321,9 +1352,9 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                     ),
                 )
             )
-            result.append(
-                action("execution.confirm", "收手并确认", group="处决", blocking=True)
-            )
+        result.append(
+            action("execution.confirm", "收手并确认", group="处决", blocking=True)
+        )
     for photo in game["photos"]:
         if photo["target"] == sid:
             result.append(
@@ -1350,16 +1381,17 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         result.append(
             action("water.use", "使用本夜13水（立即进入预结算）", fields, group="私密行动", danger=True)
         )
-    meruru = role_card(game, "meruru")
-    if card and card["id"] == "meruru" and card["witch"] and not card["uses"].get("revive"):
-        deaths = [
-            death
-            for death in game["deaths"]
-            if death["day"] == game["day"]
-            and death["half"] == "night"
-            and death.get("source_card") == meruru["id"]
-            and not game["cards"][death["target_card"]]["alive"]
-        ]
+    if (
+        card
+        and card["id"] == "meruru"
+        and card["witch"]
+        and not card["uses"].get("revive")
+        # 「当夜」就是当夜：天亮之后死讯已经公示、下层牌已经登场，撤销会把这些
+        # 公开信息悄悄回滚（见 engine 的同名校验）。本人放弃之后入口一并关闭。
+        and game["half"] == "night"
+        and not revive_declined(game)
+    ):
+        deaths = revive_deaths(game)
         if deaths:
             result.append(
                 action(
@@ -1377,7 +1409,13 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             )
     for cid in active_seat["cards"]:
         dead = game["cards"][cid]
-        if dead["states"].get("evidence_allowed") and not dead["states"].get("evidence_used"):
+        # 证物只属于「因此出局的最后一张牌」：活着的牌（例如刚被复活的傀儡）即便
+        # 带着旧的 evidence_allowed 也不能留遗物。
+        if (
+            not dead["alive"]
+            and dead["states"].get("evidence_allowed")
+            and not dead["states"].get("evidence_used")
+        ):
             fields = [
                 field("text", "留下一个证物", "textarea", required=False),
                 field("image", "证物图像", "drawing", required=False),

@@ -10,6 +10,7 @@ from starlette.websockets import WebSocketState
 
 from . import auth, storage, views
 from .game import expire_warnings, run_auto_advance, run_speech_timer, touch_speech_timer
+from .game.state import controlled_cards, owner
 from .game.views import seat_chat
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,24 @@ def detach(peer, code=4401):
     return peer.participant_id not in online(peer.game_id)
 
 
+def puppet_access_ids(game, actor):
+    """控制者代读用的额外参与身份：它当前控制的傀儡席操作者。
+
+    与 ``api.authorized_as_seat``、``views.puppet_channel_view`` 共用同一套控制权判定
+    （``controlled_cards`` 会一并校验主人是否仍是自己席位的当前牌）。
+    """
+    if actor.get("kind") != "player" or not actor.get("seat_id"):
+        return set()
+    seat = next((s for s in game["seats"] if s["id"] == actor["seat_id"]), None)
+    if seat is None:
+        return set()
+    return {
+        occupant
+        for card in controlled_cards(game, seat["id"])
+        if (occupant := owner(game, card["id"])["occupant_id"])
+    }
+
+
 def publish(game_id, new_messages=(), state=True):
     """Called under lock, only after mutation transaction has committed."""
     notices = list(new_messages)
@@ -104,8 +123,20 @@ def publish(game_id, new_messages=(), state=True):
             actor = auth.actor_for_token(db, peer.token_hash, game_id)
             if not actor:
                 continue
+            # 傀儡代读：控制者要能实时看到它所控制的席位在私信频道里收到的话
+            # （api 的 GET ?as_seat 是同一条口径）。额外访问名单只用于聊天消息，
+            # 该席位的系统情报与证物照旧不代读。
+            puppet_viewer = None
+            puppet_ids = puppet_access_ids(game, actor)
+            if puppet_ids:
+                puppet_viewer = {**actor, "access_ids": sorted(puppet_ids)}
             for row in notices:
-                if storage.visible_message(row, actor):
+                visible = storage.visible_message(row, actor) or (
+                    puppet_viewer is not None
+                    and row["kind"] == "chat"
+                    and storage.visible_message(row, puppet_viewer)
+                )
+                if visible:
                     enqueue(peer, {"type": "message", "message": storage.message_view(row, actor)})
             if state:
                 enqueue(

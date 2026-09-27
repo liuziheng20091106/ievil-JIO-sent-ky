@@ -2,19 +2,24 @@
 
 三份东西都由部署者在 `data/` 下维护，改完即生效、不入库：
 
-- `data/updates.json`：按「平台 + 版本区间」下发不同的更新信息（见文件内示例）；
-  文件缺失或没有匹配区间时退回环境变量 `GAME_CLIENT_LATEST` / `GAME_CLIENT_MINIMUM`。
+- `data/updates.json`：按「平台 + 版本区间」下发不同的更新信息（见文件内示例）。
+  **版本标签的唯一来源**：不再读任何版本环境变量，清单缺失或没有匹配区间时就什么
+  都不下发（不会拿别处的旧版本号兜底，免得和清单打架）。
 - `data/agreement.md`：用户协议正文（Markdown），客户端首次连接时展示。
 - `data/releases/`：更新包本体（Windows zip、APK、Updater.exe），由 `/releases/{name}` 同源下发。
 
 客户端版本从请求的 User-Agent 里读：`seven-double-flutter/<x.y.z> (windows|android)`。
 UA 缺失或不是本客户端时一律「不作判断」：既不下发平台相关的更新信息，也不拒绝入局
 （浏览器、网页端、模拟器与检查脚本都不发这个 UA）。
+
+Windows 更新器/安装程序发的是自己那一份 UA：`magicjudge-updater/<x.y.z> (windows)`。
+它的任务不是「判断自己旧不旧」，而是把**当前发布版**装上去（首次安装、修复安装与应用内
+静默更新都是同一件事），所以它永远拿该平台的发布包——按它自己的版本去比 latest 会让
+刚发布的 1.0.13 更新器问不到 1.0.13 的包（真实故障）。
 """
 
 import hashlib
 import json
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -43,9 +48,7 @@ _INT_FIELDS = ("size",)
 
 def parse_client_agent(user_agent):
     """返回 `(版本, 平台)`；不是本客户端、版本号形状不符时返回 `(None, None)`。"""
-    if not user_agent:
-        return None, None
-    match = CLIENT_AGENT.search(user_agent)
+    match = _match_client_agent(user_agent)
     if not match:
         return None, None
     client = match.group(1).lower()
@@ -58,6 +61,22 @@ def parse_client_agent(user_agent):
         # 平台认不出来时仍认版本（例如以后加了新平台），只是不匹配分平台的区间。
         platform = None
     return version, platform
+
+
+def is_updater_agent(user_agent):
+    """是不是 Windows 更新器/安装程序（`magicjudge-updater/<x.y.z> (windows)`）。
+
+    更新器不问自己算不算旧：它要的是「当前发布版装到哪」，所以下发时不做版本比较
+    （见 `resolve_client`）。
+    """
+    match = _match_client_agent(user_agent)
+    return bool(match and match.group(1).lower() == "magicjudge-updater")
+
+
+def _match_client_agent(user_agent):
+    if not user_agent:
+        return None
+    return CLIENT_AGENT.search(user_agent)
 
 
 def parse_version(value):
@@ -81,12 +100,6 @@ def compare_versions(left, right):
     if a is None or b is None:
         return None
     return (a > b) - (a < b)
-
-
-def _environment_labels():
-    latest = (os.environ.get("GAME_CLIENT_LATEST") or "").strip() or None
-    minimum = (os.environ.get("GAME_CLIENT_MINIMUM") or "").strip() or None
-    return latest, minimum
 
 
 def load_update_entries():
@@ -172,16 +185,39 @@ def match_entry(version, platform):
     return None
 
 
-def resolve_client(version, platform):
+def catch_all_entry(platform):
+    """该平台的兜底区间：既没有 `min_version` 也没有 `max_version` 的那条。
+
+    `package-release` 每次发版刷新的就是它，所以它代表「当前发布版」。同一平台写了
+    多条时取最后一条——和 `tools/update_manifest.py` 刷新时选的那条一致。
+    """
+    found = None
+    for entry in load_update_entries():
+        if entry.get("platform", "any") != platform:
+            continue
+        if entry.get("min_version") or entry.get("max_version"):
+            continue
+        found = entry
+    return found
+
+
+def resolve_client(version, platform, updater=False):
     """返回 `(latest, minimum, update)`。
 
-    - 匹配到区间：`latest`/`minimum` 取自该区间，`update` 只在「确实有更新」时给出。
-    - 没有匹配：`latest`/`minimum` 退回环境变量，`update` 为 None（不知道该下发哪个平台）。
+    - 更新器/安装程序（`updater=True`）：永远给该平台的当前发布包（先取该平台的兜底
+      区间——`platform=any` 的那条可能没写 url，不能拿它顶替；没有再退回普通区间
+      匹配），否则「装最新版」会因为自己就是最新版而拿不到任何地址。
+    - 普通客户端：`latest`/`minimum` 取自匹配到的区间，`update` 只在确实有更新时给出；
+      没有匹配区间就什么都不下发（版本标签只认 `data/updates.json`）。
     """
+    if updater:
+        entry = catch_all_entry(platform or "windows") or match_entry(version, platform)
+        if entry is None:
+            return None, None, None
+        return entry["latest"], entry.get("minimum"), build_update(entry, version, platform)
     entry = match_entry(version, platform) if version else None
     if entry is None:
-        latest, minimum = _environment_labels()
-        return latest, minimum, None
+        return None, None, None
     latest = entry["latest"]
     minimum = entry.get("minimum")
     comparison = compare_versions(version, latest)
@@ -215,7 +251,8 @@ def build_update(entry, version, platform):
 def health_payload(user_agent):
     """`/api/health` 的版本字段：任何身份（含无 UA 的网页与旧客户端）都能读。"""
     version, platform = parse_client_agent(user_agent)
-    latest, minimum, update = resolve_client(version, platform)
+    updater = is_updater_agent(user_agent)
+    latest, minimum, update = resolve_client(version, platform, updater=updater)
     return {"client_latest": latest, "client_minimum": minimum, "update": update}
 
 
@@ -226,10 +263,8 @@ def update_available(user_agent):
         return False
     entry = match_entry(version, platform)
     if entry is None:
-        latest, _ = _environment_labels()
-    else:
-        latest = entry["latest"]
-    comparison = compare_versions(version, latest) if latest else None
+        return False
+    comparison = compare_versions(version, entry["latest"])
     return bool(comparison is not None and comparison < 0)
 
 

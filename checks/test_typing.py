@@ -316,8 +316,14 @@ class TypingRelay(unittest.TestCase):
             if state["phase"] == "speech":
                 break
             self.command(self.host, "host.advance")
+        # 座位是随机分配的，players[1] 有可能是本轮发言人（那时公屏本来就能发言）：
+        # 断言的是「没轮到的人看到的是临时等待」，所以要显式挑一个非发言人。
+        speaker = self.client.get(self.root + "/state", headers=self.host).json()["public"][
+            "current_actor"
+        ]["seat_id"]
+        waiting = next(actor for actor in players if actor["seat_id"] != speaker)
         state = self.client.get(
-            self.root + "/state", headers=self.account(self._qq_by_actor[players[1]["id"]])
+            self.root + "/state", headers=self.account(self._qq_by_actor[waiting["id"]])
         ).json()
         self.assertEqual(state["phase"], "speech", "推进后应到达顺序发言阶段")
         self.assertEqual(state["half"], "day")

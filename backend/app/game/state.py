@@ -221,11 +221,15 @@ def player_seat(game, actor):
 
 
 def puppet_master(game, card):
-    """当前控制该傀儡牌的魔女梅露露牌；控制关系已撤销或主人已出局时返回 None。"""
+    """当前控制该傀儡牌的魔女梅露露牌；控制关系已撤销或主人已出局时返回 None。
+
+    主人还必须仍是自己席位的**当前牌**：主人换牌后它连自己的行动都提交不了，更谈不上
+    代操作；这种傀儡由 :func:`orphan_puppet_cards` 判定为「无人控制」并解除。
+    """
     master = game["cards"].get(card["states"].get("puppet") or "")
     if master is None or not master["alive"] or not master["witch"]:
         return None
-    return master
+    return master if current(game, owner(game, master["id"])) == master else None
 
 
 def puppet_controlled_by(game, card, seat_id):
@@ -233,8 +237,25 @@ def puppet_controlled_by(game, card, seat_id):
     master = puppet_master(game, card)
     if master is None:
         return False
-    holder = owner(game, master["id"])
-    return holder["id"] == seat_id and current(game, holder) == master
+    return owner(game, master["id"])["id"] == seat_id
+
+
+def puppet_cards(game):
+    """全部仍挂着傀儡状态的牌（含已出局、已不是当前牌的历史残留）。"""
+    return [card for card in game["cards"].values() if card["states"].get("puppet")]
+
+
+def orphan_puppet_cards(game):
+    """主人已经不能控制的傀儡牌；由 engine.sync_puppet_bonds 解除并通知本人。"""
+    return [card for card in puppet_cards(game) if puppet_master(game, card) is None]
+
+
+def release_puppet(card):
+    """解除一张牌的傀儡状态（连同「无技能」标记）；返回它原本是不是傀儡。"""
+    was_puppet = bool(card["states"].get("puppet"))
+    card["states"].pop("puppet", None)
+    card["states"].pop("no_ability", None)
+    return was_puppet
 
 
 def controlled_cards(game, seat_id):
@@ -603,6 +624,18 @@ def can_use_card(game, card, puppet_controlled=False):
     return not card["states"].get("no_ability")
 
 
+def can_use_ability(game, card, puppet_controlled=False):
+    """当前牌此刻能否**发动角色技能**。
+
+    傀儡可以代行投票、发言、提名与被动的临刑确认，但规则明令「不能发动技能」，
+    所以 ``no_ability``（复活成傀儡时打上）在技能入口一律生效——它比
+    :func:`can_use_card` 严格，且不因为控制者代操作而放宽。
+    """
+    if not card or card["states"].get("no_ability"):
+        return False
+    return can_use_card(game, card, puppet_controlled)
+
+
 def card_actionable(game, card):
     """该当前牌现在是否可能由某位操作者行动（傀儡由其控制者代行）。"""
     if not card:
@@ -651,6 +684,47 @@ def seat_operable(game, seat_id):
     if card["states"].get("puppet"):
         return puppet_master(game, card) is not None
     return True
+
+
+def revive_declined(game):
+    """本夜梅露露是否已经放弃复活。
+
+    ``game["night"]`` 每夜重建，所以这个标记天然只对本夜有效；30秒警告超时与
+    主持人的强制推进（推进＝视为放弃）都会写它，写完之后复活入口随之关闭。
+    """
+    return bool((game.get("night") or {}).get("revive_declined"))
+
+
+def revive_deaths(game):
+    """当夜由这张梅露露牌造成、且尚未被处理的死亡；没有则空表。"""
+    meruru = role_card(game, "meruru")
+    return [
+        death
+        for death in game["deaths"]
+        if death["day"] == game["day"]
+        and death["half"] == "night"
+        and death.get("source_card") == meruru["id"]
+        and not game["cards"][death["target_card"]]["alive"]
+    ]
+
+
+def pending_revive(game):
+    """当夜仍可用、但本人还没决定的梅露露席位；没有则返回 None。
+
+    条件是 ``actions_for`` 里那枚「复活」按钮的同一套（当夜、魔女化、本局次数未用、
+    当夜仍有由这张牌造成的死亡），只多一条「本人还没放弃」。两处必须同一口径，
+    否则会出现「按钮还在、主持人却看不到待办」或反过来「待办挡着、按钮已经没了」。
+    """
+    if game["status"] != "playing" or game["half"] != "night" or revive_declined(game):
+        return None
+    meruru = role_card(game, "meruru")
+    if not meruru["witch"] or meruru["uses"].get("revive"):
+        return None
+    if not can_use_card(game, meruru):
+        return None
+    if not revive_deaths(game):
+        return None
+    return owner(game, "meruru")["id"]
 
 
 # 不允许发到同一席位的角色对：每对的两个角色牌序索引 //2 必须不同。
@@ -737,6 +811,7 @@ def upgrade_game(game):
         "preview": None,
         "reactions": [],
         "extra_attacks": [],
+        "revive_declined": False,
     }.items():
         add(night, key, value)
     # 「汉娜魔化」是主持人开关，默认关闭；旧局补齐为关。
@@ -873,6 +948,16 @@ def upgrade_game(game):
         if states.pop("protected", None):
             states.setdefault("protected_day", game.get("day", 1))
             changed = True
+    # 傀儡与「无技能」必须成对：旧存档（修复前保存的对局）只有 puppet 标记，
+    # 补上 no_ability 才不会让升级后的傀儡继续发动角色技能。
+    for card in (game.get("cards") or {}).values():
+        if card["states"].get("puppet") and not card["states"].get("no_ability"):
+            card["states"]["no_ability"] = True
+            changed = True
+    for states in (spiritual.get("persistent_states") or {}).values():
+        if states.get("puppet") and not states.get("no_ability"):
+            states["no_ability"] = True
+            changed = True
     # 第六版：投票改为一次性提交全部候选，计票表 votes 换成 ballots。
     # 正停在投票阶段的旧局要把已经投出的当前轮选票搬过去，否则当事人得重投一轮。
     legacy_votes = game.pop("votes", None)
@@ -940,6 +1025,8 @@ def create_game(codex):
             "preview": None,
             "reactions": [],
             "extra_attacks": [],
+            # 本夜梅露露是否已经放弃复活（30秒警告超时或主持人推进＝放弃）；每夜重建。
+            "revive_declined": False,
         },
         "warnings": {},
         "deaths": [],
@@ -1111,6 +1198,12 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
     game["spiritual"] = spiritual
     for cid, states in spiritual["persistent_states"].items():
         game["cards"][cid]["states"].update(states)
+        # 傀儡与「无技能」必须成对（旧存档里可能只记了 puppet）：回放持久状态后
+        # 统一校准一次，免得回溯出一个「有主人但会发动技能」的傀儡。
+        if states.get("puppet"):
+            game["cards"][cid]["states"]["no_ability"] = True
+        elif "puppet" in states:
+            release_puppet(game["cards"][cid])
     for cid, states in retained.items():
         game["cards"][cid]["states"].update(states)
     if mode == "witch":

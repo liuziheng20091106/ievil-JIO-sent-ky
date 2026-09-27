@@ -99,7 +99,7 @@ def show(path: Path) -> int:
     print(f"客户端版本：{client_version()}（来自 {PUBSPEC}）")
     print(f"更新清单：{path}")
     if not path.exists():
-        print("  （文件不存在：后端会退回 GAME_CLIENT_LATEST / GAME_CLIENT_MINIMUM）")
+        print("  （文件不存在：后端不会下发任何版本标签，也就没人会被提示更新）")
         return 0
     for item in load_manifest(path).get("updates") or []:
         if not isinstance(item, dict):

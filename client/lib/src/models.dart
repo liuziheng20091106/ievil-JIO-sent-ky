@@ -352,7 +352,9 @@ class GameChannel {
 /// 服务端已把标签加 `*` 前缀，客户端只负责原样显示与提交。
 class PuppetPanel {
   PuppetPanel.fromJson(Object? value) : raw = jsonObject(value, 'panel') {
-    seatId = jsonString(raw['seat_id'], 'panel.seat_id');
+    // 席位号缺失时退化成空串而不是抛异常：GameView 的这一段解析在 build 里
+    // （puppetControls 是 late getter），抛异常会直接打断整页渲染。
+    seatId = raw['seat_id']?.toString() ?? '';
     name = raw['name']?.toString() ?? '';
     actions = raw['actions'] == null
         ? const []
@@ -713,10 +715,13 @@ class GameView {
       : jsonObject(raw['action_prompt'], 'state.action_prompt');
 
   /// 控制傀儡的梅露露视角面板；无控制关系时为空。
+  /// 缺 seat_id 的面板整块丢掉：没有席位就没法把动作以正确身份提交（面板标题、
+  /// 频道的 as_seat 都依赖它），留着只会在渲染或提交时抛错。
   List<PuppetPanel> get puppetControls => self['puppet_controls'] == null
       ? const []
       : jsonArray(self['puppet_controls'], 'state.self.puppet_controls')
           .map(PuppetPanel.fromJson)
+          .where((panel) => panel.seatId.isNotEmpty)
           .toList(growable: false);
 
   Map<String, dynamic> get public =>

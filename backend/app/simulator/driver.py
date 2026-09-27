@@ -111,6 +111,11 @@ class HostBrain:
         advance = next((t for t in tasks if t["kind"] == "advance" and t.get("blocking")), None)
         if advance:
             return self._advance(host)
+        # 「夜间结果与证物」阶段梅露露还没决定复活时，主持人待办里只有这一条阻塞项，
+        # 推进按钮不再显示为就绪。真人主持人可以直接推进（＝视为放弃），脚本主持人
+        # 也照此收尾，否则玩家端一旦没能提交复活，整局会永远停在这一步。
+        if any(t["kind"] == "revive" for t in tasks):
+            return self._advance(host)
         return None
 
     # ------------------------------------------------------------------ 细节

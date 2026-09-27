@@ -86,15 +86,16 @@ class ReleaseData(unittest.TestCase):
         self.data_patch = patch.object(storage, "DATA_DIR", self.data_dir)
         self.data_patch.start()
         self.addCleanup(self.data_patch.stop)
-        # 版本标签默认清空：部署环境里可能设了它们，不清掉会让断言跟着环境变。
+        # 版本标签的唯一来源是 data/updates.json：这里故意设上非空的环境变量，
+        # 断言它们不再参与任何下发（以前用它兜底，会和清单里的版本号打架）。
         self.env_patch = patch.dict(
             os.environ,
             {
                 "GAME_GATEWAY_TOKEN": "test-gateway-secret",
                 "GAME_QQ_GROUP_ID": "123456",
                 "GAME_ADMIN_QQ": "10001",
-                "GAME_CLIENT_LATEST": "",
-                "GAME_CLIENT_MINIMUM": "",
+                "GAME_CLIENT_LATEST": "9.9.9",
+                "GAME_CLIENT_MINIMUM": "9.9.0",
             },
         )
         self.env_patch.start()
@@ -191,16 +192,15 @@ class UpdateRanges(ReleaseData):
         self.assertTrue(self.health("1.0.0")["update"]["required"])
         self.assertFalse(self.health("1.1.0")["update"]["required"])
 
-    def test_environment_fallback_without_a_matching_range(self):
-        os.environ["GAME_CLIENT_LATEST"] = "1.4.0"
-        os.environ["GAME_CLIENT_MINIMUM"] = "1.3.0"
+    def test_no_matching_range_means_no_labels(self):
+        # 没有匹配区间就什么都不下发：版本标签只认 updates.json，环境变量已不再兜底。
         self.write_updates({"updates": []})
         body = self.health("1.0.0")
-        self.assertEqual(body["client_latest"], "1.4.0")
-        self.assertEqual(body["client_minimum"], "1.3.0")
+        self.assertIsNone(body["client_latest"])
+        self.assertIsNone(body["client_minimum"])
         self.assertIsNone(body["update"])
 
-    def test_broken_config_falls_back_instead_of_failing(self):
+    def test_broken_config_means_no_labels_instead_of_an_error(self):
         (self.data_dir / "updates.json").write_text("{ not json", encoding="utf-8")
         body = self.health("1.0.0")
         self.assertIsNone(body["client_latest"])
@@ -222,6 +222,85 @@ class UpdateRanges(ReleaseData):
         body = self.health(headers={})
         self.assertIsNone(body["client_latest"])
         self.assertIsNone(body["update"], "不知道平台就不下发更新详情")
+
+
+class UpdaterPackage(ReleaseData):
+    """Windows 更新器/安装程序：不问自己旧不旧，永远拿当前发布包。
+
+    回归的是真实故障：`Updater-1.0.13.exe` 用 `magicjudge-updater/1.0.13 (windows)`
+    请求 `/api/health`，按普通客户端比版本（1.0.13 不低于 latest=1.0.13）拿不到
+    `update`，于是「后端没有下发更新包地址」——刚发的那一版自己反而装不上。
+    """
+
+    UPDATES = {
+        "updates": [
+            {
+                "platform": "windows",
+                "min_version": "1.0.0",
+                "max_version": "1.1.0",
+                "latest": "1.1.0",
+                "notes": "给老客户端先升到中间版本",
+                "url": "/releases/魔法裁判Windows-1.1.0.zip",
+            },
+            {
+                "platform": "windows",
+                "latest": "1.2.0",
+                "minimum": "1.1.0",
+                "url": "/releases/魔法裁判Windows-1.2.0.zip",
+                "updater_url": "/releases/Updater-1.2.0.exe",
+                "size": 456,
+                "sha256": "a" * 64,
+            },
+            {
+                "platform": "android",
+                "latest": "1.2.0",
+                "url": "/releases/app-release-1.2.0.apk",
+            },
+            {"platform": "any", "latest": "1.2.0", "notes": "通用兜底（没有 url）"},
+        ]
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.write_updates(self.UPDATES)
+
+    def updater(self, version, suffix=" (windows)"):
+        return self.health(headers={"User-Agent": f"magicjudge-updater/{version}{suffix}"})
+
+    def test_updater_at_latest_still_gets_the_package(self):
+        body = self.updater("1.2.0")
+        self.assertEqual(body["client_latest"], "1.2.0")
+        update = body["update"]
+        self.assertEqual(update["url"], "/releases/魔法裁判Windows-1.2.0.zip")
+        self.assertEqual(update["updater_url"], "/releases/Updater-1.2.0.exe")
+        self.assertEqual(update["size"], 456)
+
+    def test_updater_skips_a_range_meant_for_old_clients(self):
+        # 窄区间是给老客户端「先升到中间版本」的，更新器要的是当前发布包。
+        self.assertEqual(
+            self.updater("1.0.9")["update"]["url"],
+            "/releases/魔法裁判Windows-1.2.0.zip",
+        )
+
+    def test_updater_without_a_platform_suffix_is_windows(self):
+        self.assertEqual(
+            self.updater("1.2.0", suffix="")["update"]["url"],
+            "/releases/魔法裁判Windows-1.2.0.zip",
+        )
+
+    def test_updater_uses_the_any_range_when_the_platform_has_none(self):
+        # 清单里没写 Windows 的兜底区间时，退回普通匹配，`platform=any` 的那条也能用。
+        self.write_updates(
+            {"updates": [{"platform": "any", "latest": "1.3.0", "url": "/releases/通用.zip"}]}
+        )
+        body = self.updater("1.2.0")
+        self.assertEqual(body["client_latest"], "1.3.0")
+        self.assertEqual(body["update"]["url"], "/releases/通用.zip")
+
+    def test_plain_client_at_latest_still_gets_no_update_payload(self):
+        # 普通客户端在最新版上不该收到更新详情（更新器是唯一例外）。
+        self.assertEqual(self.health("1.2.0")["client_latest"], "1.2.0")
+        self.assertIsNone(self.health("1.2.0")["update"])
 
 
 class OnlineFlag(ReleaseData):

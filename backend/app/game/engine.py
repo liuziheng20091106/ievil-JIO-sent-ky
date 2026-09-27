@@ -51,6 +51,8 @@ from .state import (
     GameError,
     apply_honoka_disguise,
     audience,
+    can_use_ability,
+    can_use_card,
     card_actionable,
     chat_event,
     check_winner,
@@ -74,12 +76,15 @@ from .state import (
     lost_by_challenge,
     nomination_auto_yes,
     nomination_rounds,
+    orphan_puppet_cards,
     pending_nominators,
+    pending_revive,
     notify,
     owner,
     pending,
     player_seat,
     present,
+    release_puppet,
     require,
     rewind,
     role_card,
@@ -398,7 +403,7 @@ def speech_plan(game, dead_first):
     return ascending if rank(ascending) <= rank(descending) else descending
 
 
-def enter_execution(game):
+def enter_execution(game, events):
     """把当天的处决名单定下来并进入处决阶段。
 
     投票轮次跑完之后调用。安安的「洗脑全场」按用户批注（B14）是「你也被处决，且今天
@@ -417,6 +422,8 @@ def enter_execution(game):
     if lock.get("day") == game["day"]:
         # 洗脑后的当天：只有被洗脑者与安安本人会被处决，投票选出的其他候选不执行。
         game["execution"] = [cid for cid in game["execution"] if cid in lock["cards"]]
+    # 名单到这里才算定稿：奈乃香的被动幻视就在这一刻自动结算（见 auto_gaze）。
+    auto_gaze(game, events)
     if game["phase"] != "execution":
         # 奈乃香的命中率只在她自己的这一次处决里递增：刚进入处决阶段时清零，
         # 不留「上一轮残留让第一枪就是高命中」这个隐式前提。
@@ -433,6 +440,31 @@ def enter_execution(game):
     game["vote_freeze"] = None
 
 
+def auto_gaze(game, events):
+    """处决幻视是被动技能：当天的处决名单一定下来就自动结算一次，结果私下发给奈乃香。
+
+    用户 2026-09-27 确认：不再需要（也不允许）她声明发动，所以这里不由玩家点按触发——
+    原来的实现只在处决阶段给一个 5 秒窗口，实战里根本点不到。中毒时照旧必定收到一条结果，
+    真假由 ``information()`` 的那一次信息骰决定，且不告诉她掷骰结果。
+    """
+    card = game["cards"].get("nanoka")
+    if not card or card["uses"].get("gaze_day") == game["day"]:
+        return
+    # 傀儡、失去技能、已出局或不是本席当前牌的奈乃香都没有这个技能。
+    if not can_use_card(game, card):
+        return
+    card["uses"]["gaze_day"] = game["day"]
+    truth = any(game["cards"][cid]["witch"] for cid in game["execution"])
+    information(
+        game,
+        events,
+        card,
+        "处决幻视",
+        f"本日处决名单{'含有' if truth else '不含'}魔女。",
+        f"本日处决名单{'不含' if truth else '含有'}魔女。",
+    )
+
+
 def open_vote(game, events):
     rounds = nomination_rounds(game)
     if duel_cards(game):
@@ -440,7 +472,7 @@ def open_vote(game, events):
         game["duel"]["locked"] = True
     index = len(game["vote_rounds"])
     if index >= len(rounds):
-        enter_execution(game)
+        enter_execution(game, events)
         return
     game["phase"] = "voting"
     # 投票一开始就冻结分母：轮次表、门槛都按这一刻有投票权的人数算，中途有人出局也
@@ -664,6 +696,8 @@ def advance(game, events):
     if game.pop("rewound_night", False):
         # 本阶段内的预结算触发了希罗回溯：时间线已换掉，不得再写阶段/快照/日志。
         return
+    # 夜间预结算/处决判死发生在本函数里：主人出局后要立刻解除傀儡（见 sync_puppet_bonds）。
+    sync_puppet_bonds(game, events)
     game["warnings"] = {}
     game["deadline"] = None
     # 顺序发言的30秒倒计时随阶段进出：刚进入发言阶段就为第一位计时，离开即清除。
@@ -680,21 +714,7 @@ def execute_declaration(game, events, declaration):
     data = declaration["data"]
     cid, sid, ability = declaration["card_id"], declaration["seat_id"], declaration["ability"]
     card = game["cards"][cid]
-    if ability == "gaze":
-        # 处决幻视在处决阶段由奈乃香本人发动，不能伪装，也不判定技能失败：
-        # 中毒时本人必定收到一条结果，由 information() 单掷一次信息骰决定真话还是假话。
-        card["uses"]["gaze_day"] = game["day"]
-        truth = any(game["cards"][target_id]["witch"] for target_id in game["execution"])
-        information(
-            game,
-            events,
-            card,
-            "处决幻视",
-            f"本日处决名单{'含有' if truth else '不含'}魔女。",
-            f"本日处决名单{'不含' if truth else '含有'}魔女。",
-        )
-        declaration["executed"] = True
-        return
+    # 处决幻视自 2026-09-27 起是被动技能，不再有声明：名单定稿时由 auto_gaze 直接结算。
     # 效果类声明里只剩「赠送照片」仍吃中毒效果骰；其余真实声明不再因中毒被判假。
     if (
         ability in POISON_EFFECT_ABILITIES
@@ -1148,10 +1168,25 @@ def host_command(game, events, action, data):
         else:
             if state == "puppet":
                 require(not value or data.get("master"), "傀儡需指定主人")
-                value = data.get("master") if value else None
-            card["states"][state] = value
+                value = data["master"] if value else None
+                if value:
+                    # 傀儡与「无技能」必须成对：少了 no_ability 就变成会发动技能的怪物，
+                    # 多了它又会在解除之后永久废掉一张牌（release_puppet 一起清）。
+                    card["states"]["puppet"] = value
+                    card["states"]["no_ability"] = True
+                else:
+                    release_puppet(card)
+            else:
+                card["states"][state] = value
             if data.get("persistent"):
-                game["spiritual"]["persistent_states"].setdefault(cid, {})[state] = value
+                kept = game["spiritual"]["persistent_states"].setdefault(cid, {})
+                # 傀儡的持久化要连 no_ability 一起写：回溯只回放这里记下的键，
+                # 少了它就会复活出一个「有主人但会发动技能」的傀儡。
+                kept.update(
+                    {"puppet": value, "no_ability": bool(value)}
+                    if state == "puppet"
+                    else {state: value}
+                )
             # 傀儡化或失去技能会立刻改变本夜谁能行动，必须同步已确认集合，
             # 否则该席既拿不到行动又留下阻塞的主持人待办。
             sync_night_confirmations(game, events)
@@ -1267,6 +1302,12 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         ability = data["ability"]
         cid = game["night"]["actors"][sid]
         card = game["cards"][cid]
+        # 被傀儡化或失去技能的牌本夜没有技能可选（行动表里也不会出现这些入口），
+        # 这里再挡一道：主持人代操作（by_host）不受限，那是纠错通道。
+        require(
+            by_host or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            "傀儡与失去技能的角色不能发动技能",
+        )
         target = current(game, data["target"]) if data.get("target") else None
         if target:
             require(target_allowed(game, target["id"]), "本夜所有目标必须符合注视范围")
@@ -1382,6 +1423,13 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         unlock_coco(game, events)
     elif action == "day.skill":
         ability = data["ability"]
+        # 傀儡与失去技能的角色不能发动白天技能（含伪装声明）：行动表里已经不给入口，
+        # 这里再挡一道，避免绕过表单直接提交。
+        require(
+            by_host
+            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            "傀儡与失去技能的角色不能发动技能",
+        )
         use_card = card
         if data.get("card_id") and data["card_id"] != (card["id"] if card else None):
             candidate = game["cards"].get(data["card_id"])
@@ -1515,6 +1563,11 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             pending_item for pending_item in game["pending"] if pending_item["id"] != item["id"]
         ]
     elif action == "hiro.exit":
+        require(
+            by_host
+            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            "傀儡与失去技能的角色不能发动技能",
+        )
         attack = {"target_card": card["id"], "cause": "voluntary", "unconditional": True}
         if game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"}:
             game["night"].setdefault("extra_attacks", []).append(attack)
@@ -1606,6 +1659,11 @@ def player_command(game, actor, events, action, data, *, by_host=False):
     elif action == "execution.shoot":
         # 奈乃香的临刑枪是连发：每开一枪都重新选目标，直到子弹用完或本人收手。
         # 因此这里不写 execution_ready，只有 execution.confirm（收手）或打空才结束。
+        require(
+            by_host
+            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            "傀儡与失去技能的角色不能发动技能",
+        )
         require(card["uses"].get("bullets", 0) > 0, "子弹已经用完")
         card["uses"]["bullets"] -= 1
         threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
@@ -1673,19 +1731,21 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             prepare_night_preview(game, events)
         notify(game, events, f"{sid}号使用13水指定{data['target']}号。")
     elif action == "meruru.revive":
-        card["uses"]["revive"] = True
         death = next(death for death in game["deaths"] if death["id"] == data["death_id"])
         require(
-            death["day"] == game["day"]
+            game["half"] == "night"
+            and death["day"] == game["day"]
             and death["half"] == "night"
             and death.get("source_card") == card["id"],
-            "只能复活当天夜里由该梅露露牌造成的死亡",
+            "只能复活当夜由该梅露露牌造成的死亡",
         )
         require(not game["cards"][death["target_card"]]["alive"], "该死亡已被处理")
+        card["uses"]["revive"] = True
         revoke_death(game, events, death)
         revive(game, events, death["target_card"], puppet=card["id"])
     elif action == "evidence.submit":
         dead = game["cards"][data["card_id"]]
+        require(not dead["alive"], "只有已经出局的牌可以留下证物")
         require(data.get("text") or data.get("image_id"), "至少填写证物或上传图像")
         dead["states"]["evidence_used"] = True
         pending(
@@ -1824,10 +1884,36 @@ def command_log_text(game, actor, action, data, *, by_host=False):
     return f"{prefix}执行 {action}"
 
 
+def sync_puppet_bonds(game, events):
+    """解除已经无人能控制的傀儡：主人出局/不再是当前牌时，原玩家立即恢复自主操作。
+
+    傀儡机制要求主人「代其投票、发言、行动与私信」（见 state.puppet_master 与
+    puppet_action_panels）。主人离场后这条链路再也走不通，若只把控制关系判成无效，
+    留下的就是一个既不能投票、也不能发言、界面上还一直写着「由魔女梅露露代为行动」
+    的活人。这里按解除处理：清掉傀儡状态与「无技能」标记并告知本人，之后它是一张
+    普通牌。解除是永久的——主人后来被复活也不会把已经恢复自主的玩家再次拉成傀儡。
+    """
+    for card in orphan_puppet_cards(game):
+        holder = owner(game, card["id"])
+        was_active = card["alive"] and current(game, holder) == card
+        release_puppet(card)
+        if was_active:
+            notify(
+                game,
+                events,
+                "控制关系已解除：你恢复了普通玩家权限。",
+                [holder["id"]],
+                "傀儡解除",
+            )
+
+
 def apply_command(game, actor, action, payload, *, by_host=False):
     require(game["status"] != "ended", "对局已结束，不能再操作")
-    validate_command(game, actor, action, payload)
     events = []
+    # 先解除「主人已经离场」的傀儡（例如主持人在别的入口改了状态、或旧存档带过来的）：
+    # 行动表与校验都按解除后的牌面算，否则刚恢复自主的玩家会拿不到自己的行动。
+    sync_puppet_bonds(game, events)
+    validate_command(game, actor, action, payload)
     if actor["kind"] == "host":
         host_command(game, events, action, payload)
     else:
@@ -1842,6 +1928,7 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             events,
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
         )
+    sync_puppet_bonds(game, events)
     sync_speaker(game, events)
     sync_auto_advance(game)
     game["version"] += 1
@@ -1902,7 +1989,8 @@ def timeout_seat(game, events, sid):
     """把一个席位当前未完成的行动按超时（视为放弃）处理；返回是否确有行动被放弃。
 
     与主持人的30秒警告到点共用同一套分支：夜间视为放弃并确认，顺序发言顺延到
-    下一位，提名记作放弃，投票记弃权，处决响应记作确认，穗乃香目击按默认显示。
+    下一位，提名记作放弃，投票记弃权，处决响应记作确认，穗乃香目击按默认显示，
+    「夜间结果与证物」阶段还没决定的复活记作本夜放弃。
     """
     phase = game["phase"]
     witness = next(
@@ -1941,6 +2029,10 @@ def timeout_seat(game, events, sid):
     elif phase == "execution":
         if sid not in game["execution_ready"]:
             game["execution_ready"].append(sid)
+    elif phase == "night_results" and sid == pending_revive(game):
+        # 「夜间结果与证物」的复活：主持人警告到点或强制推进都按放弃处理，
+        # 本人不再有机会撤回当夜的死亡，入口与主持人待办随之消失。
+        game["night"]["revive_declined"] = True
     else:
         return False
     game["warnings"].pop(sid, None)

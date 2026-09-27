@@ -1894,7 +1894,9 @@ class _PuppetActionPanel extends StatelessWidget {
                       context,
                       store,
                       action,
-                      asSeat: panel.seatId,
+                      // 动作自带的 as_seat 才是权威身份（服务端逐条给出），
+                      // 面板席位号只是它缺失时的兜底。
+                      asSeat: action.asSeat ?? panel.seatId,
                     ),
                   );
                 },

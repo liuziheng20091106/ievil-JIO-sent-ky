@@ -226,6 +226,7 @@ class GameApi {
     int? before,
     int? after,
     String? channelId,
+    String? asSeat,
   }) async {
     final body = jsonObject(await _request(
       'GET',
@@ -235,6 +236,9 @@ class GameApi {
         'before': before?.toString(),
         'after': after?.toString(),
         'channel_id': channelId,
+        // 傀儡代读：以受控席位的身份读取它所在频道的聊天历史（服务端只放行聊天，
+        // 不下发该席位的系统情报与证物）。
+        'as_seat': asSeat,
       },
     ));
     return (

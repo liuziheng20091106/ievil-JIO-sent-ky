@@ -72,7 +72,8 @@ class SimulatorCase(unittest.TestCase):
             harness.simulation.max_steps = GAME_STEPS
             result = harness.run()
             self.assertEqual(result.status, "ended", "\n".join(result.log[-20:]))
-            self.assertIn(result.winner, {"good", "witch", "aborted"})
+            # emma：魔女化艾玛的清场夜直接判她单独获胜（state.emma_solo_win，2026-09-27）。
+            self.assertIn(result.winner, {"good", "witch", "emma", "aborted"})
             self.assertTrue(result.reason)
             self.assertGreater(result.days, 0)
 
@@ -288,6 +289,51 @@ class SimulatorCase(unittest.TestCase):
             actor.client.refresh()
             seat = next(item for item in actor.client.view["seats"] if item["id"] == actor.seat_id)
             self.assertTrue(seat["ready"], "策略把自己的准备状态取消了")
+
+    def test_host_brain_advances_past_an_undecided_revive(self):
+        """梅露露没决定复活时待办里只有这一条阻塞项：脚本主持人推进＝放弃，不能空转。
+
+        真人主持人可以直接推进（这时推进按钮仍然可用），脚本主持人也照此收尾；
+        否则玩家端一旦没能提交复活，整局会永远停在「夜间结果与证物」。
+        """
+        from backend.app.simulator.driver import HostBrain
+
+        submitted = []
+
+        class FakeHost:
+            def __init__(self, view):
+                self.view = view
+
+            def submit(self, action, payload):
+                submitted.append((action, payload))
+
+        view = {
+            "status": "playing",
+            "day": 2,
+            "host": {
+                "tasks": [
+                    {
+                        "id": "revive",
+                        "kind": "revive",
+                        "blocking": True,
+                        "action": "host.warn",
+                        "payload": {"seat_id": "3"},
+                        "seats": ["3"],
+                    },
+                    # 复活算未完成的玩家行动：推进按钮此时不再显示为就绪。
+                    {
+                        "id": "advance",
+                        "kind": "advance",
+                        "blocking": False,
+                        "action": "host.advance",
+                        "payload": {},
+                        "seats": [],
+                    },
+                ]
+            },
+        }
+        self.assertEqual(HostBrain().act(FakeHost(view)), "host.advance")
+        self.assertEqual(submitted, [("host.advance", {})])
 
     def test_policy_drives_puppet_panels_through_as_seat(self):
         """傀儡席没有自主行动，策略必须像真人控制者那样用 as_seat 代提交。

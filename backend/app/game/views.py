@@ -25,6 +25,7 @@ from .state import (
     host_label,
     host_view_actor,
     pending_nominators,
+    pending_revive,
     owner,
     player_seat,
     poison_sources,
@@ -118,6 +119,25 @@ def host_tasks(game):
                 "blocking": True,
             }
         )
+    if phase == "night_results":
+        revive_seat = pending_revive(game)
+        if revive_seat:
+            # 「夜间结果与证物」是复活窗口的最后一站：推进到白天就公示死讯、下层登场，
+            # 撤销会把公开信息悄悄回滚。因此还没决定的复活标成阻塞待办提醒主持人；
+            # 它仍是一条玩家行动：先「警告30秒」，或直接推进——推进照常生效，
+            # 未决定的复活和别的玩家行动一样立刻按超时（视为放弃）处理。
+            tasks.append(
+                {
+                    "id": "revive",
+                    "kind": "revive",
+                    "title": f"{revive_seat}号尚未决定当夜是否复活",
+                    "detail": f"推进即视为放弃这次复活；也可以先对{revive_seat}号发「警告」并等30秒。",
+                    "seats": [revive_seat],
+                    "action": "host.warn",
+                    "payload": {"seat_id": revive_seat},
+                    "blocking": True,
+                }
+            )
     if game["winner_candidate"]:
         tasks.append(
             {
@@ -319,6 +339,8 @@ def status_cards(game, own):
 
 
 SPEECH_WAIT_REASON = "顺序发言阶段，请等待你的发言顺序"
+# 傀儡席由控制者接管：原玩家只读旁观，公屏与私信都用同一句理由（app/views 引用）。
+PUPPET_SPECTATOR_REASON = "你当前是傀儡，由魔女梅露露代为行动"
 
 
 def seat_chat(game, own):
@@ -589,7 +611,7 @@ def game_view(game, actor):
         can_chat, reason = True, ""
     elif own:
         if view["self"].get("puppet_spectator"):
-            can_chat, reason = False, "你当前是傀儡，由魔女梅露露代为行动"
+            can_chat, reason = False, PUPPET_SPECTATOR_REASON
         else:
             can_chat, reason, _transient = seat_chat(game, own)
     view["can_chat"], view["chat_reason"] = can_chat, reason

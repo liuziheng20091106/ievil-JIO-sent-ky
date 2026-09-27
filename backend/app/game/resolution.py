@@ -19,6 +19,7 @@ from .state import (
     pending,
     present,
     protection_active,
+    release_puppet,
     require,
     role_card,
     seat,
@@ -108,6 +109,8 @@ def begin_night(game, events):
         "locked": False,
         "preview": None,
         "reactions": [],
+        # 本夜梅露露是否已经放弃复活：主持人推进或30秒警告到点时写入，入口随之关闭。
+        "revive_declined": False,
     }
     # 用 card_actionable：傀儡牌由控制它的梅露露代行，不能当「本夜无事可做」自动确认掉。
     sync_night_confirmations(game, events)
@@ -561,6 +564,9 @@ def eliminate_seat(game, events, seat, notice):
         if not card["alive"]:
             continue
         card["alive"] = False
+        # 整席出局没有「傀儡当前牌出局」的解除流程，状态必须在这里一并清掉：
+        # 留着 puppet/no_ability 会让这张牌被回溯或主持人复活后继续当别人的傀儡。
+        release_puppet(card)
         game["deaths"].append(
             {
                 "id": uid(),
@@ -778,9 +784,8 @@ def death_batch(game, events, preview):
                         else "你可以选择一次示人角色。"
                     )
                 notify(game, events, text, [s["id"]], "下层登场")
-        if card["states"].pop("puppet", None):
+        if release_puppet(card):
             # 傀儡当前牌出局：控制关系解除；该席下层牌仍存活则本人重新回到游戏。
-            card["states"].pop("no_ability", None)
             if current(game, s):
                 notify(
                     game,
@@ -815,6 +820,7 @@ def wipe_massacred_seats(game, events, killed):
             if not card["alive"]:
                 continue
             card["alive"] = False
+            release_puppet(card)
             log_event(game, "death", f"{s['id']}号的{ROLES[cid]['name']}被全场攻击一并打下场")
     return killed
 
@@ -857,6 +863,9 @@ def revoke_death(game, events, death):
                 item["text"] = item["title"]
     if game.get("witness") and game["witness"].get("death_id") == death["id"] and not keeps_witness:
         game["witness"] = None
+    # 这次死亡换来的「可留证物」随死亡一起撤销：否则被复活的活人还能给一场已经
+    # 不存在的出局留遗物（未隐藏死因的 13 水自动目击那条路径很容易踩到）。
+    game["cards"][cid]["states"].pop("evidence_allowed", None)
     if game["half_exits"].get(sid) == half_key(game):
         del game["half_exits"][sid]
     check_winner(game)
@@ -870,6 +879,10 @@ def revive(game, events, card_id, puppet=None):
     if puppet:
         card["states"]["puppet"] = puppet
         card["states"]["no_ability"] = True
+    else:
+        # 回溯或主持人复活的牌一律不是傀儡：留着旧的 puppet/no_ability 会让它带着
+        # 「继续被控制」或「永久无技能」的残留状态重新登场。
+        release_puppet(card)
     owner_seat = owner(game, card_id)
     now = current(game, owner_seat)
     if now:

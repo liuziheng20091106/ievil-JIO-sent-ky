@@ -13,7 +13,7 @@ from .game.state import (
     host_label,
     seat_eliminated,
 )
-from .game.views import SPEECH_WAIT_REASON, seat_chat
+from .game.views import PUPPET_SPECTATOR_REASON, SPEECH_WAIT_REASON, seat_chat
 from .storage import SPECTATOR_CHANNEL
 
 
@@ -21,6 +21,11 @@ from .storage import SPECTATOR_CHANNEL
 BLOCKING_PROMPTS = {
     "night": ("请完成本夜行动", "选择行动后确认；也可以放弃并确认。"),
     "night_coco": ("请完成最后的夜间行动", "其余人的夜间行动已锁定，只等你提交。"),
+    "night_results": (
+        "请决定当夜是否复活",
+        "复活当夜由你造成死亡的牌，它会成为无投票权、无技能的傀儡；"
+        "不用复活时等主持人推进，即视为放弃这次机会。",
+    ),
     "speech": ("轮到你顺序发言", "发言、打断，或点「本轮不发言」跳过你的顺序。"),
     "nomination": ("请提交提名或放弃", "同一人可以被多人提名；提交即生效。"),
     "voting": ("请投票", "严格超过有投票权存活玩家的一半才会处决。"),
@@ -702,7 +707,8 @@ def view(db, game, actor, online):
         )
     puppet_spectator = bool((result.get("self") or {}).get("puppet_spectator"))
     if puppet_spectator:
-        # 傀儡席由控制者代操作：原玩家只读旁观，连私信类行动也不下发。
+        # 傀儡席由控制者代操作：原玩家只读旁观。行动、频道动作与悬浮框一起收回，
+        # 否则界面上仍会出现「同意/拒绝私信」「发起私信」这类点了必然 422 的入口。
         result["actions"] = []
     if not puppet_spectator:
         prompt = action_prompt(game, actor, bool(active_private) and not host_capable(actor))
@@ -728,4 +734,17 @@ def view(db, game, actor, online):
         result["actions"] = []
     # 悬浮对话框：服务端决定「什么时候弹什么」，客户端只负责渲染与交互。
     result["dialogs"] = dialogs(game, actor, result)
+    if puppet_spectator:
+        # 「不能发言」包含私信：公屏原已由 can_chat 挡下，私信频道要在这里一并禁言，
+        # 否则被控制者接管的席位还能私下把主人的意图说给别人。发送接口读的正是
+        # 这份投影的 can_send（api.send_message），所以这里同时是授权判定。
+        for channel in result["channels"]:
+            channel["can_send"] = False
+            channel["blocked_transient"] = False
+            channel["actions"] = []
+            channel["reason"] = PUPPET_SPECTATOR_REASON
+        result["can_chat"] = False
+        result["chat_reason"] = PUPPET_SPECTATOR_REASON
+        result["dialogs"] = []
+        result.pop("action_prompt", None)
     return result

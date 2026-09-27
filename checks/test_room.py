@@ -791,7 +791,7 @@ class BackendFlow(unittest.TestCase):
             if player[1]["seat_id"] != controller_actor["seat_id"]
             and seats[player[1]["seat_id"]]["current_card_id"] != "hiro"
         )
-        stranger, _, _ = next(
+        stranger, stranger_actor, _ = next(
             player
             for player in players
             if player[1]["seat_id"] not in {controller_actor["seat_id"], victim_actor["seat_id"]}
@@ -855,10 +855,11 @@ class BackendFlow(unittest.TestCase):
             ).status_code,
             403,
         )
-        # 傀儡席原玩家：只能只读旁观，既没有行动也不能发言。
+        # 傀儡席原玩家：只能只读旁观，既没有行动也不能发言、不能接私信。
         victim_view = self.client.get(self.root + "/state", headers=victim).json()
         self.assertTrue(victim_view["self"]["puppet_spectator"])
         self.assertEqual(victim_view["actions"], [])
+        self.assertEqual(victim_view["dialogs"], [])
         self.assertFalse(victim_view["can_chat"])
         refused = self.client.post(
             self.root + "/messages",
@@ -891,12 +892,13 @@ class BackendFlow(unittest.TestCase):
         created = self.command(
             self.host,
             "channel.create",
-            {"name": "傀儡私信", "participant_ids": [victim_actor["id"]]},
+            {"name": "傀儡私信", "participant_ids": [victim_actor["id"], stranger_actor["id"]]},
         ).json()
         private = next(
             item
             for item in created["channels"]
-            if {member["id"] for member in item["members"]} == {victim_actor["id"], "host"}
+            if {member["id"] for member in item["members"]}
+            == {victim_actor["id"], stranger_actor["id"], "host"}
         )
         self.assertEqual(private["status"], "active")
         puppet_message = self.client.post(
@@ -919,6 +921,35 @@ class BackendFlow(unittest.TestCase):
         self.assertIn(
             puppet_message.json()["id"], [message["id"] for message in allowed.json()["messages"]]
         )
+        # 傀儡席原玩家连这条私信也不能回话：代操作期间它只读，投影里所有频道一并禁言。
+        blocked_private = self.client.post(
+            self.root + "/messages",
+            headers=victim,
+            json={"channel_id": private["id"], "text": "我自己说"},
+        )
+        self.assertEqual(blocked_private.status_code, 403, blocked_private.text)
+        self.assertIn("傀儡", blocked_private.text)
+        muted_view = self.client.get(self.root + "/state", headers=victim).json()
+        self.assertTrue(all(not channel["can_send"] for channel in muted_view["channels"]))
+        self.assertTrue(all(channel["actions"] == [] for channel in muted_view["channels"]))
+        # 频道里的回话要实时推给控制者：它不在成员名单里，只能靠受控傀儡席的身份代读。
+        with self.client.websocket_connect("/api/live", headers=controller) as socket:
+            self.assertEqual(socket.receive_json()["type"], "sync")
+            reply = self.client.post(
+                self.root + "/messages",
+                headers=stranger,
+                json={"channel_id": private["id"], "text": "回话"},
+            )
+            reply.raise_for_status()
+            delivered = False
+            for _ in range(20):
+                frame = socket.receive_json()
+                if frame["type"] != "message":
+                    continue
+                if frame["message"]["id"] == reply.json()["id"]:
+                    delivered = True
+                    break
+            self.assertTrue(delivered, "傀儡席私信里的回话必须实时推给控制者")
         # 主持人自行代操作仍走主持人授权路径。
         self.command(self.host, "host.state", {"card_id": puppet_card, "state": "injured", "value": True, "reason": "测试"})
         # 傀儡当前牌出局且该席下层仍存活：控制解除，原玩家收到恢复通知并能自己行动。

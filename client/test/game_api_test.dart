@@ -197,6 +197,17 @@ void main() {
     api.close();
   });
 
+  test('傀儡代读：读消息带 as_seat，自己的消息不带', () async {
+    routes['/api/games/g1/messages'] = {'messages': <dynamic>[], 'has_more': false};
+    final api = GameApi(endpoint, token: 'token-abc');
+    // 控制者代读受控席位所在频道的聊天：服务端只认 as_seat 这一条只读口径。
+    await api.messages('g1', asSeat: '2');
+    expect(calls.last, 'GET /api/games/g1/messages?scope=all&as_seat=2');
+    await api.messages('g1');
+    expect(calls.last, 'GET /api/games/g1/messages?scope=all');
+    api.close();
+  });
+
   test('online/invite/accept/reject hit the invite endpoints', () async {
     body = {
       'accounts': [

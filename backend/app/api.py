@@ -35,6 +35,7 @@ from .game.catalog import night_half
 from .game.state import (
     actor_eliminated,
     controlled_cards,
+    current,
     display_player_name,
     host_capable,
     host_label,
@@ -180,8 +181,8 @@ def poll_login(challenge_id, client_kind, host=False):
 
 @router.get("/health")
 async def health(request: Request):
-    # 客户端版本标签：按 UA 里的版本与平台匹配 data/updates.json 的区间（没有匹配
-    # 时退回 GAME_CLIENT_LATEST / GAME_CLIENT_MINIMUM）；确认有更新时另给 update 详情。
+    # 客户端版本标签：按 UA 里的版本与平台匹配 data/updates.json 的区间（唯一来源，
+    # 不读版本环境变量）；确认有更新、或请求方是 Windows 更新器时另给 update 详情。
     return {"ok": True, **client_release.health_payload(request.headers.get("user-agent"))}
 
 
@@ -1110,7 +1111,9 @@ async def command(game_id: str, body: schemas.Command, request: Request):
             if (
                 controller["kind"] != "host"
                 and not body.action.startswith("channel.")
-                and storage.active_private_channel(db, game, controller["id"])
+                # 私信占用按**被代行的席位**判定（与 views.py 的「傀儡席自身身份」同一口径）：
+                # 控制者自己在私聊里，不该拦住它替傀儡投票/夜行/提名。
+                and storage.active_private_channel(db, game, actor["id"])
             ):
                 raise HTTPException(403, "私信期间不能执行游戏行动")
             if puppet_seat:
@@ -1235,6 +1238,12 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 seat = seat_for(game, actor["seat_id"])
                 channels = views.puppet_channel_view(db, game, seat)
             else:
+                # 傀儡席的原玩家只读旁观：投影里所有频道的 can_send 都已关闭（见 views.view），
+                # 这里再按牌面兜一道，避免以后投影调整把私信漏回去。
+                own_seat = seat_for(game, actor["seat_id"]) if actor.get("seat_id") else None
+                own_card = current(game, own_seat) if own_seat else None
+                if own_card is not None and own_card["states"].get("puppet"):
+                    raise HTTPException(403, views.PUPPET_SPECTATOR_REASON)
                 channels = views.view(db, game, actor, realtime.online(game_id))["channels"]
             if actor.get("kind") == "spectator":
                 # 观战频道独享：观战者的发言一律落到观战频道，不信任前端传参；
