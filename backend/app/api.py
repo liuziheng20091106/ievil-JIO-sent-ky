@@ -23,7 +23,14 @@ from . import (
     storage,
     views,
 )
-from .game import CATALOG, DEFAULT_CODEX, apply_command, clear_seat_actions, create_game
+from .game import (
+    CATALOG,
+    DEFAULT_CODEX,
+    apply_command,
+    clear_seat_actions,
+    create_game,
+    touch_speech_timer,
+)
 from .game.catalog import night_half
 from .game.state import (
     actor_eliminated,
@@ -1276,7 +1283,14 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 text=body.text,
                 audience=audience,
             )
-        realtime.publish(game_id, [row], state=False)
+            # 顺序发言：本人发言后30秒倒计时重新开始。只改公开倒计时、不抬版本号，
+            # 但要把新状态推给全场，否则别人看到的还是旧截止时间（见 touch_speech_timer）。
+            retimed = False
+            if body_channel_id == "public" and actor.get("kind") == "player":
+                if touch_speech_timer(game, actor["seat_id"]):
+                    storage.save_game(db, game)
+                    retimed = True
+        realtime.publish(game_id, [row], state=retimed)
         return storage.message_view(row, controller)
 
 

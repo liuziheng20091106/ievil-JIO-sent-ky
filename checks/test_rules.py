@@ -621,6 +621,21 @@ class PhaseBannerRules(unittest.TestCase):
         self.assertEqual(self.prompt(game, "5")["title"], "当前轮到3号玩家发言")
         self.assertEqual(self.prompt(game, "5")["text"], "")
 
+    def test_the_speech_countdown_is_public_and_carries_its_length(self):
+        """30秒倒计时在横幅上对全场公开：发言人本人与旁观者拿到同一份截止时间。"""
+        game = staged_game(day=2, half="day", phase="speech")
+        game["public"]["speaker"] = "3"
+        game["public"]["speech_deadline"] = 1771234567.5
+        for seat_id in ("3", "5"):
+            prompt = self.prompt(game, seat_id)
+            self.assertEqual(prompt["speech_deadline"], 1771234567.5)
+            self.assertEqual(prompt["speech_seconds"], 30)
+        # 不在顺序发言阶段时没有任何倒计时字段。
+        game = staged_game(day=2, half="day", phase="discussion")
+        self.assertIsNone(self.prompt(game, "5"))
+        nominating = staged_game(day=2, half="day", phase="nomination")
+        self.assertNotIn("speech_deadline", self.prompt(nominating, "1"))
+
     def test_nomination_and_voting_list_who_is_still_expected(self):
         game = staged_game(day=2, half="day", phase="nomination")
         game["nomination_done"] = ["1", "2"]

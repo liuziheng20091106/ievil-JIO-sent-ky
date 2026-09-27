@@ -9,7 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from . import auth, storage, views
-from .game import expire_warnings, run_auto_advance
+from .game import expire_warnings, run_auto_advance, run_speech_timer, touch_speech_timer
 from .game.views import seat_chat
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,8 @@ async def handle_typing(peer, data):
 
     输入状态是纯内存瞬态：不落库、不进消息历史、不推状态帧。发送权判定与
     发消息一致（channel_send_reason），可见性判定与聊天消息一致（typing_visible）。
+    唯一的例外是顺序发言的30秒倒计时：当前发言人继续输入会把倒计时拨满，
+    这时才落库并推一次状态帧（不抬版本号，见 engine.touch_speech_timer）。
     """
     channel_id = data.get("channel_id")
     if not isinstance(channel_id, str) or not channel_id:
@@ -164,7 +166,8 @@ async def handle_typing(peer, data):
     if active and stamp - peer.last_typing < TYPING_RELAY_SECONDS:
         return
     async with lock:
-        with storage.connect() as db:
+        retimed = False
+        with storage.transaction() as db:
             game = storage.load_game(db, peer.game_id)
             if not game or game["status"] == "ended":
                 return
@@ -184,6 +187,11 @@ async def handle_typing(peer, data):
                 )
                 if seat is None or not seat_chat(game, seat)[0]:
                     return
+            if active and channel_id == "public" and actor.get("kind") == "player":
+                # 顺序发言：轮到的人继续打字就把30秒倒计时拨满，别人也能看到时间在走。
+                if touch_speech_timer(game, actor["seat_id"]):
+                    storage.save_game(db, game)
+                    retimed = True
             sender = typing_sender(game, actor)
             for other in list(connections):
                 if other.game_id != peer.game_id or other.participant_id == actor["id"]:
@@ -203,6 +211,9 @@ async def handle_typing(peer, data):
                         **sender,
                     },
                 )
+        if retimed:
+            # 倒计时被拨满：补推一次状态帧，让全场看到新的截止时间（版本号不变）。
+            publish(peer.game_id)
         peer.last_typing = stamp
 
 
@@ -301,6 +312,7 @@ async def clock():
                         game = storage.load_game(db, game_id)
                         previous = game["version"]
                         events = expire_warnings(game, time.time())
+                        events += run_speech_timer(game, time.time())
                         events += run_auto_advance(game, time.time())
                         changed = game["version"] != previous
                         if changed:

@@ -130,6 +130,10 @@ AUTO_PHASES = {
 }
 AUTO_ADVANCE_DELAY = 5
 
+# 顺序发言：轮到的席位有 30 秒公开倒计时，到点自动把发言权顺延到下一位；
+# 本人发言或继续输入会重新计时（见 engine.sync_speech_timer）。
+SPEECH_TURN_SECONDS = 30
+
 
 def night_half(game):
     """是否处于开局后的夜间：魔女化检测到夜间结果同属一夜。"""

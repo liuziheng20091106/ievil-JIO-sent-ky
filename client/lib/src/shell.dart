@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -2178,13 +2179,118 @@ class MessageBubble extends StatelessWidget {
 
 /// 「请求操作」红色大警告框：自己的行动卡住流程时由服务端下发，催促玩家完成。
 /// 玩家在私聊里时服务端会在 hint 里补一句「先结束私聊」。
-class _ActionPromptBox extends StatelessWidget {
+///
+/// 顺序发言时服务端还在横幅里带上 30 秒倒计时的截止时间：倒计时对全场公开，
+/// 本人发言或继续输入会重置，到点由服务端自动轮到下一位。
+class _ActionPromptBox extends StatefulWidget {
   const _ActionPromptBox({required this.prompt});
   final Map<String, dynamic> prompt;
 
   @override
+  State<_ActionPromptBox> createState() => _ActionPromptBoxState();
+}
+
+class _ActionPromptBoxState extends State<_ActionPromptBox> {
+  Timer? _ticker;
+
+  /// 顺序发言倒计时的截止时间（Unix 秒）；没有倒计时时为 null。
+  double? get _deadline {
+    final value = widget.prompt['speech_deadline'];
+    if (value is num) return value.toDouble();
+    return double.tryParse('$value');
+  }
+
+  double get _totalSeconds {
+    final value = widget.prompt['speech_seconds'];
+    final seconds = value is num ? value.toDouble() : double.tryParse('$value');
+    return seconds == null || seconds <= 0 ? 30 : seconds;
+  }
+
+  /// 剩余秒数：用 ceil 让「剩余 1 秒」真的走满最后一秒，到点显示 0。
+  /// 「现在」取自 package:clock，与 formatMessageTime 同一来源，测试可固定。
+  int get _remaining {
+    final deadline = _deadline;
+    if (deadline == null) return 0;
+    final left = deadline - clock.now().millisecondsSinceEpoch / 1000;
+    return left > 0 ? left.ceil() : 0;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncTicker();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ActionPromptBox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncTicker();
+  }
+
+  /// 倒计时靠本地 0.5 秒一跳刷新，不再要求服务端每秒推一次状态。
+  void _syncTicker() {
+    if (_deadline == null) {
+      _ticker?.cancel();
+      _ticker = null;
+      return;
+    }
+    _ticker ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  Widget _countdown(BuildContext context, int remaining, double total) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.timer_outlined, size: 15, color: context.palette.danger),
+              const SizedBox(width: 4),
+              Text(
+                remaining > 0 ? '剩余 $remaining 秒' : '时间到，正在轮到下一位…',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: context.palette.danger),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '发言或继续输入会重新计时',
+                  style: TextStyle(fontSize: 11, color: context.palette.textSecondary),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: (remaining / total).clamp(0.0, 1.0),
+              minHeight: 4,
+              backgroundColor: context.palette.surfaceStrong,
+              color: context.palette.danger,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final prompt = widget.prompt;
     final hint = prompt['hint']?.toString();
+    final deadline = _deadline;
     return Padding(
       padding:  EdgeInsets.fromLTRB(
           AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
@@ -2230,6 +2336,8 @@ class _ActionPromptBox extends StatelessWidget {
                             color: context.palette.text),
                       ),
                     ),
+                  if (deadline != null)
+                    _countdown(context, _remaining, _totalSeconds),
                   if (hint != null && hint.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),

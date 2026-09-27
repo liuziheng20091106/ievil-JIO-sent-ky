@@ -12,6 +12,8 @@ from backend.app.game import (
     create_game,
     game_view,
     run_auto_advance,
+    run_speech_timer,
+    touch_speech_timer,
 )
 from backend.app.game.actions import (
     actions_for,
@@ -52,6 +54,7 @@ from backend.app.game.state import (
     seat_choice,
 )
 from backend.app.game.views import host_tasks
+from backend.app.views import action_prompt
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
 PAIRS = [
@@ -2187,6 +2190,84 @@ class AutoAdvance(unittest.TestCase):
         self.assertIsNotNone(deadline)
         run_auto_advance(game, deadline + 1)
         self.assertEqual(game["phase"], "nomination")
+
+
+class SpeechTimer(unittest.TestCase):
+    """顺序发言的30秒公开倒计时：到点自动换人，本人发言或继续输入重新计时。
+
+    倒计时是公开字段（横幅显示还剩几秒），与主持人「警告」那套只私下通知的计时分离。
+    """
+
+    def opening(self):
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        return game
+
+    def test_the_first_speaker_gets_a_thirty_second_public_clock(self):
+        game = self.opening()
+        self.assertEqual(game["public"]["speaker"], "1")
+        self.assertEqual(game["public"]["speech_deadline_seat"], "1")
+        self.assertAlmostEqual(game["public"]["speech_deadline"], time() + 30, delta=2)
+        # 轮到的席位与旁观的席位在横幅上看到同一个截止时间，倒计时是公开的。
+        deadline = game["public"]["speech_deadline"]
+        for sid in ("1", "4"):
+            prompt = action_prompt(game, player(game, sid), False)
+            self.assertEqual(prompt["speech_deadline"], deadline)
+            self.assertEqual(prompt["speech_seconds"], 30)
+
+    def test_the_clock_expires_to_the_next_speaker_and_rearms(self):
+        game = self.opening()
+        deadline = game["public"]["speech_deadline"]
+        run_speech_timer(game, deadline - 1)
+        self.assertEqual(game["public"]["speaker"], "1")
+        run_speech_timer(game, deadline + 1)
+        self.assertEqual(game["public"]["speaker"], "2")
+        self.assertEqual(game["public"]["speech_deadline_seat"], "2")
+        self.assertAlmostEqual(game["public"]["speech_deadline"], deadline + 31, delta=0.01)
+
+    def test_speaking_and_typing_restart_the_clock_for_the_current_speaker_only(self):
+        game = self.opening()
+        deadline = game["public"]["speech_deadline"]
+        # 别人的发言或输入与这个计时器无关。
+        self.assertFalse(touch_speech_timer(game, "4", now=deadline))
+        self.assertEqual(game["public"]["speech_deadline"], deadline)
+        # 本人发言/继续输入：重新拨满30秒。
+        self.assertTrue(touch_speech_timer(game, "1", now=deadline))
+        self.assertEqual(game["public"]["speech_deadline"], deadline + 30)
+        self.assertEqual(game["public"]["speech_deadline_seat"], "1")
+
+    def test_entering_the_speaking_phase_starts_the_clock(self):
+        game = arranged_game("night_review", "night")
+        game["night"]["reactions"] = []
+        game["night"]["preview"] = damage_preview(game, [])
+        for card in game["cards"].values():
+            card["witch"] = False
+        command(game, HOST, "host.advance")
+        game["pending"] = []
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "speech")
+        self.assertEqual(game["public"]["speech_deadline_seat"], game["public"]["speaker"])
+        self.assertAlmostEqual(game["public"]["speech_deadline"], time() + 30, delta=2)
+
+    def test_the_clock_clears_when_the_speaking_phase_ends(self):
+        game = self.opening()
+        for sid in list(game["public"]["speech_order"]):
+            command(game, player(game, sid), "speech.done", {})
+        self.assertIsNone(game["public"]["speaker"])
+        self.assertNotIn("speech_deadline", game["public"])
+        self.assertNotIn("speech_deadline_seat", game["public"])
+        # 整轮结束后不留倒计时，时钟也不会给没有发言人的阶段凭空造一个。
+        run_speech_timer(game, time() + 600)
+        self.assertNotIn("speech_deadline", game["public"])
+
+    def test_a_rewind_never_restores_an_expired_clock(self):
+        """回溯点里的截止时间早已过期：恢复后必须重新计时，不能立刻顺延发言人。"""
+        game = self.opening()
+        snap = save_snapshot(game)
+        self.assertIn("speech_deadline", game["public"])
+        rewind(game, snap["id"], [], mode="witch")
+        self.assertNotIn("speech_deadline", game["public"])
+        self.assertNotIn("speech_deadline_seat", game["public"])
 
 
 class NominationFlow(unittest.TestCase):

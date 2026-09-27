@@ -769,6 +769,10 @@ def upgrade_game(game):
     public = game.setdefault("public", {})
     add(public, "declarations", [])
     add(public, "witch_destiny", None)
+    # 顺序发言的30秒倒计时是新加字段：旧局补齐为「还没有倒计时」，
+    # 下一次时钟检查（或轮到下一位）会按当前发言人重新建立。
+    add(public, "speech_deadline", None)
+    add(public, "speech_deadline_seat", None)
     for key, value in {
         "declarations": [],
         "half_exits": {},
@@ -955,6 +959,9 @@ def create_game(codex):
             "votes": {},
             "declarations": [],
             "rewinds": 0,
+            # 顺序发言的30秒公开倒计时（Unix 秒）与它归属的席位；不在发言阶段时为 None。
+            "speech_deadline": None,
+            "speech_deadline_seat": None,
         },
         "nominations": [],
         "speech_passed": [],
@@ -1112,6 +1119,10 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
             game["generated_witches"].append("hiro")
     game["warnings"] = {}
     game["deadline"] = None
+    # 顺序发言的倒计时不跟着快照回到过去：回溯点里的截止时间早已过期，留着它
+    # 会让恢复出来的发言人一秒钟内被自动顺延。丢掉后由引擎按恢复的发言人重新计时。
+    game["public"].pop("speech_deadline", None)
+    game["public"].pop("speech_deadline_seat", None)
     game["public"]["rewinds"] += 1
     # 日志是时间线的一部分：裁掉回溯点之后的条目，再记下这次回溯本身。
     if "log" in game and snap.get("log_index") is not None:

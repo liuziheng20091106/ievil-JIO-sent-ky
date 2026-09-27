@@ -25,6 +25,7 @@ from .catalog import (
     POISON_EFFECT_ABILITIES,
     PUBLIC_TARGET_ABILITIES,
     ROLES,
+    SPEECH_TURN_SECONDS,
 )
 from .resolution import (
     begin_night,
@@ -262,6 +263,11 @@ def apply_damage(game, events, preview, allow_reaction=True):
 
 def speech_done(game, events):
     public = game["public"]
+    # 发言权一换人，原发言人的30秒警告就作废：新发言人另有一份公开倒计时，
+    # 留着旧警告只会在30秒后给已经讲完的人补发一条「警告时间已到」的私信。
+    if public.get("speaker") in game["warnings"]:
+        game["warnings"].pop(public["speaker"], None)
+        game["deadline"] = min(game["warnings"].values(), default=None)
     if public.get("interrupted_speaker"):
         resumed = public.pop("interrupted_speaker")
         queued = game.get("speech_queued", {})
@@ -300,10 +306,71 @@ def sync_speaker(game, events):
     连续多个无人可操作的席位在一次调用里全部越过。
     """
     if game["phase"] != "speech":
+        # 离开顺序发言阶段：倒计时随阶段一起清除，不留到自由发言或第二天。
+        if sync_speech_timer(game):
+            game["version"] += 1
         return
     public = game["public"]
     while public.get("speaker") and not seat_operable(game, public["speaker"]):
         speech_done(game, events)
+    if sync_speech_timer(game):
+        game["version"] += 1
+
+
+def sync_speech_timer(game, now=None, reset=False):
+    """顺序发言的30秒公开倒计时：换人就重新计时，本人继续发言也能拨满。
+
+    倒计时挂在 ``public`` 里随状态下发，全场都看得到「还剩几秒」。返回值表示这次
+    调用是否改动了倒计时，调用方据此决定要不要抬版本号并落库。
+    """
+    public = game["public"]
+    speaker = public.get("speaker") if game["phase"] == "speech" else None
+    if not speaker:
+        changed = public.pop("speech_deadline", None) is not None
+        public.pop("speech_deadline_seat", None)
+        return changed
+    now = time() if now is None else now
+    if reset or public.get("speech_deadline_seat") != speaker or not public.get("speech_deadline"):
+        public["speech_deadline"] = now + SPEECH_TURN_SECONDS
+        public["speech_deadline_seat"] = speaker
+        return True
+    return False
+
+
+def touch_speech_timer(game, seat_id, now=None):
+    """当前发言人发言或继续输入：把倒计时重新拨满；返回是否改动了它。
+
+    只动公开倒计时，不抬版本号。输入状态是瞬态信号、每次输入都会刷新，若每次都抬
+    版本号，别人正在提交的行动会被频繁判成「状态已变化」；延长倒计时不影响任何人的
+    行动权限，所以调用方自己落库并推送状态即可。
+    """
+    if game["status"] != "playing" or game["phase"] != "speech":
+        return False
+    if not seat_id or game["public"].get("speaker") != seat_id:
+        return False
+    return sync_speech_timer(game, now=now, reset=True)
+
+
+def run_speech_timer(game, now=None):
+    """时钟每秒调用：维护倒计时；到点把发言权顺延到下一位并重新计时。
+
+    与主持人的「警告」是两套计时：警告只私下通知被警告的席位，这里到点就直接换人。
+    """
+    if game["status"] != "playing":
+        return []
+    now = time() if now is None else now
+    events = []
+    # 当前发言人若已无人可操作（出局、换牌），先按既有规则顺延；顺延会重建倒计时。
+    sync_speaker(game, events)
+    public = game["public"]
+    if game["phase"] != "speech" or not public.get("speaker"):
+        return events
+    if public["speech_deadline"] > now:
+        return events
+    speech_done(game, events)
+    sync_speech_timer(game, now)
+    game["version"] += 1
+    return events
 
 
 def speech_plan(game, dead_first):
@@ -598,6 +665,8 @@ def advance(game, events):
         return
     game["warnings"] = {}
     game["deadline"] = None
+    # 顺序发言的30秒倒计时随阶段进出：刚进入发言阶段就为第一位计时，离开即清除。
+    sync_speech_timer(game)
     save_snapshot(game)
     if game["status"] != "ended":
         # 阶段推进不再发系统消息：两端都有阶段标题与全屏阶段动画，只留主持人日志。

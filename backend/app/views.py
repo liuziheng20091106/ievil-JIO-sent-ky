@@ -5,7 +5,7 @@ import json
 from . import storage
 from .game import game_view
 from .game.actions import action, field, outstanding_seats
-from .game.catalog import AUTO_PHASES, night_half
+from .game.catalog import AUTO_PHASES, SPEECH_TURN_SECONDS, night_half
 from .game.state import (
     actor_eliminated,
     display_player_name,
@@ -87,6 +87,17 @@ def public_notice(game):
     return None
 
 
+def speech_deadline(game):
+    """顺序发言的30秒公开倒计时（Unix 秒）；不在发言阶段时为 None。
+
+    与主持人警告的 ``deadline`` 不同：这一份对全场公开，客户端据此在顶部横幅上
+    显示还剩几秒，到点由服务端自动把发言权顺延到下一位。
+    """
+    if game["status"] != "playing" or game["phase"] != "speech":
+        return None
+    return game["public"].get("speech_deadline")
+
+
 def action_prompt(game, actor, active_private):
     """客户端顶部常驻的横幅：先是卡在本人身上的操作，其次才是全场进度。
 
@@ -116,13 +127,19 @@ def action_prompt(game, actor, active_private):
             return None
         # 全场横幅只是通报进度，不提示「先结束私聊才能行动」。
         blocking, title, text = False, notice, ""
-    return {
+    prompt = {
         "title": title,
         "text": text,
         "hint": "你正在私聊中：先结束私聊，才能执行上面的操作。"
         if blocking and active_private
         else None,
     }
+    deadline = speech_deadline(game)
+    if deadline:
+        # 顺序发言的30秒倒计时对全场公开：谁发言都看得到还剩几秒、倒计时怎么重置。
+        prompt["speech_deadline"] = deadline
+        prompt["speech_seconds"] = SPEECH_TURN_SECONDS
+    return prompt
 
 
 def result_title(result):
