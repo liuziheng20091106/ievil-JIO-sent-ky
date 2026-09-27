@@ -510,6 +510,11 @@ def night_damage(game):
         elif ability in {"knife", "extra_kill"} and target:
             attacks.append({"target_card": target, "source_card": action["card_id"], "cause": ability})
         elif ability == "massacre":
+            if night.get("locked"):
+                # 用户裁定（2026-09-27）：清场夜＝对局结束——只要全场攻击在本夜正常结算
+                # （没被希罗回溯撤销），就直接判艾玛单独获胜。这里记下标记，胜负判定见
+                # state.emma_solo_win；回溯会把整个 night 还原回快照，标记随之消失。
+                night["massacre"] = action["card_id"]
             attacks.extend(
                 {"target_card": card["id"], "source_card": action["card_id"], "cause": ability}
                 for card in game["cards"].values()
@@ -787,8 +792,9 @@ def death_batch(game, events, preview):
     if game["half"] == "night":
         # 被魔女袭击指到却没出局的席位同样要有目击：目击看的是「被指到」。
         publish_survivor_witnesses(game, events, preview, killed)
-    if killed:
-        check_winner(game)
+    # 无人出局也要判一次胜负：魔女化艾玛的清场夜即使一个人都没打死（庇护/爱/替死全挡住）
+    # 同样直接判她单独获胜，见 state.emma_solo_win。check_winner 是幂等的。
+    check_winner(game)
     return killed
 
 

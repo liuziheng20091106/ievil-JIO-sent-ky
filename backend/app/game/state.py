@@ -1146,22 +1146,17 @@ def witch_seats(game):
 
 
 def emma_solo_win(game):
-    """魔女化艾玛单独获胜：她这一夜的全场攻击把其他每个席位的当前牌都打下场了。
+    """魔女化艾玛单独获胜：她展开全场攻击的那一夜就是终局。
 
-    全场攻击在引擎里每个席位只打掉「当前牌」（同一半天最多出一张牌，下层牌默认不吃
-    这批伤害），所以判据不是「所有牌都出局」，而是「这一夜其他每个席位都失去了一张牌」。
-    庇护、玛格的爱、米莉亚替死与希罗回溯照常可以先挡下某张牌——只要还有人没被打下场，
-    艾玛就没有杀光全场，不判单独获胜。
+    用户裁定（2026-09-27）：清场夜＝对局结束——只要全场攻击在本夜正常结算就直接判她
+    单独获胜。每个席位仍然只掉当前牌（半天一牌不变），庇护、玛格的爱与米莉亚替死只
+    决定谁掉牌，不再阻止胜负；唯一的结构性反制是希罗回溯——回溯会把整个 night 连同
+    这里的标记一起还原回快照（见 `resolution.night_damage`）。
     """
     emma = role_card(game, "emma")
     if not (emma["witch"] and emma["alive"]) or game["half"] != "night":
         return False
-    emma_seat = owner(game, "emma")["id"]
-    others = [s for s in game["seats"] if s["id"] != emma_seat]
-    if not others:
-        return False
-    key = half_key(game)
-    return all(game["half_exits"].get(s["id"]) == key for s in others)
+    return bool((game.get("night") or {}).get("massacre"))
 
 
 def check_winner(game):

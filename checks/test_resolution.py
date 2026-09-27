@@ -1860,7 +1860,7 @@ class WitchEmmaMassacre(unittest.TestCase):
         )
 
     def test_witch_emma_massacre_is_an_emma_only_win(self):
-        """全场攻击打下其他每一席的当前牌：艾玛单独获胜，其余玩家均落败。"""
+        """清场夜＝对局结束：全场攻击正常结算后艾玛单独获胜，其余玩家均落败。"""
         game = self.witch_emma_night()
         # 希罗先出局：否则这一夜的死讯会先触发他的时间回溯，与本用例无关。
         game["cards"]["hiro"]["alive"] = False
@@ -1869,11 +1869,36 @@ class WitchEmmaMassacre(unittest.TestCase):
         command(game, HOST, "host.advance")  # 锁夜 + 预结算
         command(game, HOST, "host.advance")  # 发布夜间结果
         self.assertEqual(game["phase"], "night_results")
+        self.assertEqual(game["night"].get("massacre"), "emma")
         self.assertEqual(game["winner_candidate"]["winner"], "emma")
         self.assertEqual(
             game["winner_candidate"]["reason"],
             "魔女化艾玛杀死所有其他角色，单独获胜，其余玩家均落败",
         )
+
+    def test_massacre_wins_even_if_a_seat_was_already_eliminated(self):
+        """已整席出局的席位不该挡住单独获胜（真实对局里 6 号两张牌早就出局）。"""
+        game = self.witch_emma_night()
+        # 2 号（希罗 + 可可）整席出局：既压掉希罗回溯，又留下一个「早就出局」的席位。
+        for cid in next(s for s in game["seats"] if s["id"] == "2")["cards"]:
+            game["cards"][cid]["alive"] = False
+        command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+        command(game, player(game, "1"), "night.confirm", {})
+        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        command(game, HOST, "host.advance")  # 发布夜间结果
+        self.assertEqual(game["winner_candidate"]["winner"], "emma")
+
+    def test_massacre_ends_the_night_even_if_nothing_dies(self):
+        """一个人都没打死（全被庇护/爱/替死挡住）也判艾玛单独获胜。"""
+        game = self.witch_emma_night()
+        game["cards"]["hiro"]["alive"] = False
+        command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+        command(game, player(game, "1"), "night.confirm", {})
+        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        # 清空预结算，模拟全场都被挡住、这一夜无人出局。
+        game["night"]["preview"] = {"deaths": [], "injured": {}, "witch_targets": []}
+        command(game, HOST, "host.advance")  # 发布夜间结果
+        self.assertEqual(game["winner_candidate"]["winner"], "emma")
 
 
 class SpeechOrder(unittest.TestCase):
@@ -2657,6 +2682,58 @@ class ForceAdvance(unittest.TestCase):
         self.assertEqual(game["witness"]["seat_id"], "1")
         self.assertIn("穗乃香", game["witness"]["text"])
         self.assertEqual(game["phase"], "speech")
+
+
+class EvidenceAnnouncement(unittest.TestCase):
+    """证物公示：默认正文带「N号留下遗物」前缀，主持人可以在表单里改写。"""
+
+    def pending_evidence(self, game, text="一句话", image_id=None):
+        return pending(
+            game,
+            "evidence",
+            "1号遗留证物：裁定内容与公开范围",
+            seat_id="1",
+            text=text,
+            image_id=image_id,
+        )
+
+    def ruling_form(self, game, item):
+        return next(
+            action
+            for action in game_view(game, HOST)["actions"]
+            if action["id"] == "host.resolve"
+            and action["payload"]["pending_id"] == item["id"]
+        )
+
+    def publish(self, game, item, **overrides):
+        """按表单默认值裁定发布，模拟主持人直接点提交。"""
+        defaults = {
+            entry["name"]: entry.get("default")
+            for entry in self.ruling_form(game, item)["fields"]
+            if entry["type"] != "checkbox"
+        }
+        payload = {"pending_id": item["id"], "allow": True, "public": True, **defaults, **overrides}
+        events = command(game, HOST, "host.resolve", payload)
+        return [event["text"] for event in events if event.get("title") == "遗留证物"]
+
+    def test_the_default_public_text_carries_the_seat_prefix(self):
+        game = arranged_game("discussion")
+        item = self.pending_evidence(game)
+        self.assertEqual(self.publish(game, item), ["1号留下遗物一句话"])
+
+    def test_an_image_only_evidence_still_names_the_seat(self):
+        # 只传图不写字：前缀照旧发出去，否则全场看不出是谁留下的。
+        game = arranged_game("discussion")
+        item = self.pending_evidence(game, text="", image_id="ev-1")
+        self.assertEqual(self.publish(game, item), ["1号留下遗物"])
+
+    def test_the_host_can_rewrite_the_public_text(self):
+        game = arranged_game("discussion")
+        item = self.pending_evidence(game)
+        self.assertEqual(
+            self.publish(game, item, text="1号留下遗物：一把沾血的刀"),
+            ["1号留下遗物：一把沾血的刀"],
+        )
 
 
 class ActionDescriptions(unittest.TestCase):
