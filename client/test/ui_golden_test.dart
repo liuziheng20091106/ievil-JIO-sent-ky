@@ -632,6 +632,36 @@ void main() {
     });
   });
 
+  testWidgets('主持人待办的处理按钮照动作 payload 找行动：警告类待办不再误报已变化', (tester) async {
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore(host: true);
+      store.hostAdminEntered = true;
+      await pumpAt(tester, store, const Size(480, 1400));
+      await tester.tap(find.text('管理'));
+      await tester.pump(const Duration(milliseconds: 600));
+
+      // 「4号尚未确认夜间行动」这条待办的动作是 host.warn，而 host.warn 的 payload
+      // 是空的、待办带 seat_id：匹配方向写成「待办 payload 的键都要在动作 payload
+      // 里取到」就永远匹配不上，所有警告类待办的「处理」都会弹「该待办已变化」。
+      final card = find
+          .ancestor(
+            of: find.text('4号尚未确认夜间行动'),
+            matching: find.byType(Card),
+          )
+          .first;
+      await tester.ensureVisible(card);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.descendant(of: card, matching: find.text('处理')));
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(find.text('该待办已变化，请刷新状态后重试'), findsNothing);
+      expect(find.byType(ActionFormSheet), findsOneWidget);
+      // 弹的是这条待办对应的警告表单（说明文字只有表单里才有）。
+      expect(find.textContaining('这是完整说明文字'), findsOneWidget);
+      expect(find.text('确认提交'), findsOneWidget);
+    });
+  });
+
   testWidgets('主持人进管理界面前先确认', (tester) async {
     await withClock(Clock.fixed(fixedNow), () async {
       // 服务端说这个账号还没确认进入本局：客户端显示确认页。

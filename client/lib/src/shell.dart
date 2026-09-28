@@ -4104,6 +4104,11 @@ class _HostManagementPageState extends State<HostManagementPage> {
   /// 主持人待办可能同时存在多条同动作条目（多份 host.resolve 裁定并存）。
   /// 必须按待办自带的 payload 匹配动作描述：只按 id 兜底到第一个会把
   /// A 待办的表单提交成 B 待办的裁定；找不到匹配说明视图已过期，禁止兜底。
+  ///
+  /// 匹配方向是「**动作的 payload 键**都要在待办 payload 里取到同一个值」：
+  /// 区分 host.resolve 的正是动作侧那个 `pending_id`。反过来（待办 payload 的键
+  /// 都要能在动作 payload 里取到）会让 payload 为空的行动永远匹配不上——
+  /// `host.warn` 就是这种，于是所有警告类待办被误判成「该待办已变化」。
   Future<void> _runTask(String actionId, Map<String, dynamic> payload) async {
     final candidates = (widget.store.view?.allActions ??
             const <ActionDescriptor>[])
@@ -4111,8 +4116,8 @@ class _HostManagementPageState extends State<HostManagementPage> {
         .toList();
     ActionDescriptor? matched;
     for (final action in candidates) {
-      final matches = payload.entries.every(
-        (entry) => action.payload[entry.key] == entry.value,
+      final matches = action.payload.entries.every(
+        (entry) => payload[entry.key] == entry.value,
       );
       if (matches) {
         matched = action;
