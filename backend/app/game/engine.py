@@ -275,6 +275,13 @@ def speech_done(game, events):
     if public.get("speaker") in game["warnings"]:
         game["warnings"].pop(public["speaker"], None)
         game["deadline"] = min(game["warnings"].values(), default=None)
+    finished = public.get("speaker")
+    if finished:
+        # 轮次结束就记进 speech_passed，作为「本轮已处理」的统一口径：发言权顺延后
+        # 他既拿不到「本轮不发言／提前写发言」这两个预提交入口，也不能借旧表单再提交一次。
+        passed = game.setdefault("speech_passed", [])
+        if finished not in passed:
+            passed.append(finished)
     if public.get("interrupted_speaker"):
         resumed = public.pop("interrupted_speaker")
         queued = game.get("speech_queued", {})
@@ -1593,18 +1600,17 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             # 预提交「本轮不发言」不再发系统消息：轮到时自动跳过即可。
             game.setdefault("speech_passed", []).append(sid)
     elif action == "speech.speak":
+        # 只服务「还没轮到自己」的席位：当前发言人的「提前写发言」入口已经下线
+        # （行动表里没有这个动作，validate_command 先一步拒绝），本人直接写在公屏再点
+        # 「结束本次发言」即可；已经讲完的席位则在 speech_done 时就记进了 speech_passed。
         require(sid in game["public"]["speech_order"], "你不在本次发言顺序里")
         require(sid not in game.get("speech_passed", []), "你已经处理过本次发言")
+        require(sid != game["public"]["speaker"], "轮到你时请直接在公屏发言")
         text = data["text"].strip()
         require(text, "请先写下发言内容")
-        if sid == game["public"]["speaker"]:
-            chat_event(game, events, sid, text)
-            game.setdefault("speech_passed", []).append(sid)
-            speech_done(game, events)
-        else:
-            # 提前写好发言同样不再发系统消息，轮到时自动公开。
-            game.setdefault("speech_queued", {})[sid] = text
-            game.setdefault("speech_passed", []).append(sid)
+        # 提前写好发言不再发系统消息，轮到时自动以本人身份公开。
+        game.setdefault("speech_queued", {})[sid] = text
+        game.setdefault("speech_passed", []).append(sid)
     elif action == "discussion.request_end":
         require(game["phase"] == "discussion", "当前不在自由发言阶段")
         require(card_actionable(game, card), "当前角色不能行动")

@@ -40,6 +40,7 @@ from backend.app.game.resolution import (
 )
 from backend.app.game.state import (
     ballot_complete,
+    chat_event,
     check_winner,
     current,
     effect_effective,
@@ -2229,12 +2230,16 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(published["channel_id"], "public")
         self.assertIsNone(published["audience"])
 
-    def test_the_current_speaker_can_publish_its_speech_text_and_move_on(self):
+    def test_the_current_speaker_no_longer_gets_the_pre_submit_form(self):
+        """当前发言人自己用公屏发言后，不该再看到「提前写发言（轮到你时公开）」。"""
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
-        events = command(game, player(game, "1"), "speech.speak", {"text": "我先讲"})
-        chat = next(item for item in events if item["kind"] == "chat")
-        self.assertEqual(chat["text"], "我先讲")
+        with self.assertRaises(GameError):
+            command(game, player(game, "1"), "speech.speak", {"text": "我先讲"})
+        self.assertEqual(game["public"]["speaker"], "1")
+        self.assertEqual(game.get("speech_queued", {}), {})
+        # 发言人仍照常收尾：先公屏发言，再点「结束本次发言」顺延。
+        command(game, player(game, "1"), "speech.done", {})
         self.assertEqual(game["public"]["speaker"], "2")
 
     def test_a_fully_pre_submitted_speech_phase_counts_as_finished(self):
@@ -2251,6 +2256,48 @@ class SpeechOrder(unittest.TestCase):
         self.assertNotIn(
             "speech.done", [item["id"] for item in actions_for(game, player(game, "1"))]
         )
+
+    def test_pre_submit_options_are_only_offered_before_ones_turn(self):
+        """当前发言人只有「结束本次发言」；讲完的席位不再有预提交入口，也不能再补交。"""
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+
+        def speech_actions(sid):
+            return sorted(
+                item["id"]
+                for item in actions_for(game, player(game, sid))
+                if item["id"].startswith("speech.")
+            )
+
+        self.assertEqual(speech_actions("1"), ["speech.done"])
+        self.assertEqual(speech_actions("3"), ["speech.done", "speech.speak"])
+        command(game, player(game, "1"), "speech.done", {})
+        self.assertEqual(game["public"]["speaker"], "2")
+        # 1号已经讲完：两个入口都不再显示，残留的旧表单也会被服务端拒绝。
+        self.assertIn("1", game["speech_passed"])
+        self.assertEqual(speech_actions("1"), [])
+        with self.assertRaises(GameError):
+            command(game, player(game, "1"), "speech.speak", {"text": "再补一句"})
+        with self.assertRaises(GameError):
+            command(game, player(game, "1"), "speech.done", {})
+        # 当前发言人换人后，预提交入口跟着换到还没轮到的人身上。
+        self.assertEqual(speech_actions("2"), ["speech.done"])
+        self.assertEqual(speech_actions("4"), ["speech.done", "speech.speak"])
+
+    def test_a_channel_message_from_the_speaker_does_not_reopen_the_pre_submit_form(self):
+        """发言人在公屏发言后仍只有「结束本次发言」，不会又冒出「提前写发言」。"""
+        game = arranged_game("speech")
+        command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
+        chat_event(game, [], "1", "我先讲")
+        self.assertEqual(game["public"]["speaker"], "1")
+        ids = [
+            item["id"]
+            for item in actions_for(game, player(game, "1"))
+            if item["id"].startswith("speech.")
+        ]
+        self.assertEqual(ids, ["speech.done"])
+        command(game, player(game, "1"), "speech.done", {})
+        self.assertEqual(game["public"]["speaker"], "2")
 
     def test_pre_submitted_speeches_reset_at_the_day_boundary(self):
         game = arranged_game("speech")

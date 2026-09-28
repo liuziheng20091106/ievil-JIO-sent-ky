@@ -1285,12 +1285,14 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                         danger=True,
                     )
                 )
-    if phase == "speech" and game["public"]["speaker"] == sid:
+    speaker = game["public"].get("speaker")
+    if phase == "speech" and speaker == sid:
         result.append(
             action("speech.done", "结束本次发言", group="流程", blocking=True)
         )
     elif (
         phase == "speech"
+        and speaker
         and sid in game["public"]["speech_order"]
         and sid not in game.get("speech_passed", [])
     ):
@@ -1298,7 +1300,11 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             action("speech.done", "本轮不发言（跳过我的顺序）", group="流程")
         )
     if (
+        # 「提前写发言」只给顺序还没轮到的席位：当前发言人直接在公屏发言、再用
+        # 「结束本次发言」顺延；已经讲完的席位在轮次结束时记进了 speech_passed。
         phase == "speech"
+        and speaker
+        and speaker != sid
         and sid in game["public"]["speech_order"]
         and sid not in game.get("speech_passed", [])
     ):
