@@ -2984,17 +2984,36 @@ class ActionDescriptions(unittest.TestCase):
         self.assertIn("至少4票", action["description"])
         self.assertTrue(2 <= len(action["short_label"]) <= 4)
 
-    def test_a_disguised_skill_says_it_can_be_challenged(self):
-        game = arranged_game()
-        game["seats"][6]["cards"] = ["honoka", "nanoka"]
-        game["cards"]["honoka"]["states"]["disguise"] = "marg"
-        fake = next(
-            item
-            for item in actions_for(game, player(game, "7"))
-            if item["id"] == "day.skill"
-        )
-        self.assertIn("伪装声明", fake["description"])
-        self.assertIn("可质疑", fake["description"])
+    def test_a_disguised_skill_describes_what_really_happens(self):
+        """伪装说明必须与 engine.execute_declaration 一致：只有假照片、假爱无事发生。
+
+        旧文案对五种技能统一写「不产生技能效果，其他人可质疑」，两头都错：假打断、
+        假决斗、假洗脑会真实生效；而照片与爱本来就不可质疑。这里逐个示人身份核对。
+        """
+        cases = {
+            # 示人身份 -> (可声称的技能, 说明里必须出现、且不得出现于其他技能的字样)
+            "marg": ("love", ["不写入爱人状态", "本来就不可质疑"]),
+            "coco": ("photo", ["不产生效果", "本来就不可质疑"]),
+            "emma": ("interrupt", ["会真实生效", "真的打断", "其他人可质疑"]),
+            "leia": ("duel", ["会真实生效", "真的开启当天决斗", "其他人可质疑"]),
+            "annan": ("mass_brainwash", ["会真实生效", "处决名单", "其他人可质疑"]),
+        }
+        for shown, (ability, notes) in cases.items():
+            with self.subTest(shown=shown):
+                game = arranged_game()
+                game["seats"][6]["cards"] = ["honoka", "nanoka"]
+                game["cards"]["honoka"]["states"]["disguise"] = shown
+                tile = next(
+                    item
+                    for item in actions_for(game, player(game, "7"))
+                    if item["id"] == "day.skill"
+                    and item["payload"].get("ability") == ability
+                )
+                text = tile["description"]
+                self.assertIn("伪装声明", text)
+                for note in notes:
+                    self.assertIn(note, text)
+                self.assertNotIn("不产生技能效果", text)
 
 
 class RuleRevisions(unittest.TestCase):
