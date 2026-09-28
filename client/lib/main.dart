@@ -87,21 +87,31 @@ class AppGate extends StatelessWidget {
   // 测试与预览不传：没有发布监控时直接渲染页面本身。
   final ReleaseMonitor? release;
 
-  /// 版本与保活提示只在大厅出现：这两种横幅都挂在标题栏之上，对局中会挤占消息
-  /// 与输入区（软键盘打开时尤其明显），也不该在牌局中间打断玩家。
-  static bool showsNotices(GameStore store) =>
+  /// 更新提示出现在「已连上服务器、还没进对局」的所有页面：协议门、登录页与大厅。
+  /// 登录页是最该提示的位置——版本过旧时用户第一眼就该看到，而不是等登录进大厅
+  /// 才知道；强制更新只是不能以玩家身份入局，登录本身不受限。
+  /// 进入对局后一律不提示：横幅挂在标题栏之上，会挤占消息与输入区。
+  static bool showsUpdateNotices(GameStore store) =>
+      store.endpoint != null && store.gameId == null;
+
+  /// 保活（忽略电池优化）提示只在大厅出现：它针对对局中的后台断连，
+  /// 登录页提示没有意义。
+  static bool showsBatteryNotice(GameStore store) =>
       store.actor != null && store.gameId == null;
 
   @override
   Widget build(BuildContext context) {
     final page = _page(context);
     final release = this.release;
-    if (release == null || !showsNotices(store)) return page;
+    if (release == null) return page;
+    final showUpdate = showsUpdateNotices(store);
+    final showBattery = showsBatteryNotice(store);
+    if (!showUpdate && !showBattery) return page;
     return AnimatedBuilder(
       animation: release,
       builder: (context, _) {
         final banners = <Widget>[
-          if (release.updateRequired)
+          if (showUpdate && release.updateRequired)
             MaterialBanner(
               backgroundColor: context.palette.danger,
               content: Text(
@@ -122,7 +132,7 @@ class AppGate extends StatelessWidget {
                 ),
               ],
             )
-          else if (release.updateNoticeVisible)
+          else if (showUpdate && release.updateNoticeVisible)
             MaterialBanner(
               content: const Text('有新版本可用，可直接在应用内更新。'),
               actions: [
@@ -142,7 +152,7 @@ class AppGate extends StatelessWidget {
                 ),
               ],
             ),
-          if (release.batteryNoticeVisible)
+          if (showBattery && release.batteryNoticeVisible)
             MaterialBanner(
               content: const Text('为避免后台断连，建议允许应用忽略电池优化。'),
               actions: [
