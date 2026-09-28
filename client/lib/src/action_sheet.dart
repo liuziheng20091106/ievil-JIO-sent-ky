@@ -86,7 +86,7 @@ Future<void> showActionPreview(BuildContext context, ActionDescriptor action) =>
             ),
              SizedBox(height: AppSpacing.lg),
             Text(
-              action.description.isEmpty ? '此行动没有补充说明。' : action.description,
+              action.description.isEmpty ? action.label : action.description,
               style:  TextStyle(
                 fontSize: 14,
                 height: 1.6,

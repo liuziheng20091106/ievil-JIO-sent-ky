@@ -15,6 +15,11 @@ import 'store.dart';
 
 /// 技能播报：[角色头像] 3号 kiwi · 使用技能 爱上/移情 → 5号 庭雨。
 /// 整卡可点，点开技能详细（技能说明 + 使用者 + 可见时显示目标）。
+///
+/// 被动技能（处决幻视、时间回溯、替死、爱人庇护……）复用同一张卡，只换边框颜色
+/// （被动＝绿、主动＝紫）与措辞（「被动技能」＋本次结算结果），一眼能区分。
+/// 卡片内容完全由服务端载荷决定：不会看到不该看到的玩家才看得到这条消息，
+/// 载荷里也只带该收件人有权知道的字段（见 storage.project_message_payload）。
 class SkillCastCard extends StatelessWidget {
   const SkillCastCard({super.key, required this.message, this.store});
 
@@ -36,6 +41,11 @@ class SkillCastCard extends StatelessWidget {
     final targetSeat = target is Map ? target['seat_id']?.toString() : null;
     final fake = payload['fake'] == true;
     final challengeable = payload['challengeable'] != false;
+    // 被动技能：自动生效、不可声明也不可质疑，样式与主动技能区分开。
+    final passive = payload['mode']?.toString() == 'passive';
+    final effect = payload['effect']?.toString() ?? '';
+    final tint = passive ? palette.success : palette.accent;
+    final soft = passive ? palette.successSoft : palette.accentSoft;
     final store = this.store;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -54,7 +64,7 @@ class SkillCastCard extends StatelessWidget {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(AppRadius.card),
                   border: Border.all(
-                    color: palette.accent.withValues(alpha: .45),
+                    color: tint.withValues(alpha: .45),
                     width: 1.2,
                   ),
                 ),
@@ -91,6 +101,14 @@ class SkillCastCard extends StatelessWidget {
                                       ),
                                     ),
                                   ),
+                                  if (passive) ...[
+                                    const SizedBox(width: AppSpacing.xs),
+                                    Tag(
+                                      '被动',
+                                      color: palette.success,
+                                      background: palette.successSoft,
+                                    ),
+                                  ],
                                   if (fake) ...[
                                     const SizedBox(width: AppSpacing.xs),
                                     Tag(
@@ -107,7 +125,7 @@ class SkillCastCard extends StatelessWidget {
                                 textBaseline: TextBaseline.alphabetic,
                                 children: [
                                   Text(
-                                    '使用技能',
+                                    passive ? '被动技能' : '使用技能',
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: palette.textSecondary,
@@ -121,7 +139,7 @@ class SkillCastCard extends StatelessWidget {
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w600,
-                                        color: palette.accent,
+                                        color: tint,
                                       ),
                                     ),
                                   ),
@@ -143,19 +161,48 @@ class SkillCastCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    // 被动技能没有「声明」这一步，卡片补一行本次自动结算的结果。
+                    if (passive && effect.isNotEmpty) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.sm,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: soft,
+                          borderRadius: BorderRadius.circular(AppRadius.field),
+                        ),
+                        child: Text(
+                          effect,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.45,
+                            color: palette.text,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: AppSpacing.xs),
                     Row(
                       children: [
                         Icon(
-                          challengeable
-                              ? Icons.help_outline
-                              : Icons.verified_outlined,
+                          passive
+                              ? Icons.bolt_outlined
+                              : challengeable
+                                  ? Icons.help_outline
+                                  : Icons.verified_outlined,
                           size: 13,
                           color: palette.textTertiary,
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          challengeable ? '其他玩家可质疑' : '该技能不可质疑',
+                          passive
+                              ? '自动生效 · 不必也不能声明'
+                              : challengeable
+                                  ? '其他玩家可质疑'
+                                  : '该技能不可质疑',
                           style: TextStyle(
                             fontSize: 11,
                             color: palette.textTertiary,
@@ -167,7 +214,7 @@ class SkillCastCard extends StatelessWidget {
                             '点击查看技能详细',
                             style: TextStyle(
                               fontSize: 11,
-                              color: palette.accent,
+                              color: tint,
                             ),
                           ),
                       ],
@@ -175,6 +222,139 @@ class SkillCastCard extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 角色卡死亡卡片：[头像] N号 昵称 · 角色名，一张角色牌出局。
+///
+/// 夜间出局与天亮汇总同一条消息，一夜多人都出局时合并成一张卡（与「天亮只发一条
+/// 死亡汇总」同一口径）。载荷里只有公开信息：席位、展示名、死亡时的**公开头像**与
+/// 是否13水毒杀——真实牌、死因、殉情与替死都不在这里，也不该在这里。
+class DeathCastCard extends StatelessWidget {
+  const DeathCastCard({super.key, required this.message});
+
+  final GameMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final payload = message.payload ?? const <String, dynamic>{};
+    final deaths = (payload['deaths'] as List?)
+            ?.whereType<Map>()
+            .map((item) => item.map((key, value) => MapEntry(key.toString(), value)))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    if (deaths.isEmpty) return const SizedBox.shrink();
+    final night = payload['half']?.toString() == 'night';
+    final day = payload['day']?.toString() ?? '';
+    final title = night && day.isNotEmpty ? '第$day夜 · 出局公告' : '出局公告';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Container(
+            decoration: BoxDecoration(
+              color: palette.dangerSoft,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              border: Border.all(
+                color: palette.danger.withValues(alpha: .55),
+                width: 1.2,
+              ),
+            ),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.sm,
+              AppSpacing.md,
+              AppSpacing.md,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.style_outlined,
+                      size: 14,
+                      color: palette.danger,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: palette.danger,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                for (final entry in deaths)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: entry == deaths.last ? 0 : AppSpacing.sm,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        RoleAvatar(
+                          roleId: entry['avatar_role_id']?.toString(),
+                          size: 36,
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      '${entry['seat_id'] ?? ''}号'
+                                      ' ${entry['player_name'] ?? ''}'.trimRight(),
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: palette.textTertiary,
+                                      ),
+                                    ),
+                                  ),
+                                  if ((entry['role_name']?.toString() ?? '')
+                                      .isNotEmpty) ...[
+                                    const SizedBox(width: AppSpacing.xs),
+                                    Tag(
+                                      entry['role_name'].toString(),
+                                      color: palette.danger,
+                                      background: palette.dangerSoft,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                entry['water'] == true
+                                    ? '这张角色牌被13水毒杀。'
+                                    : '这张角色牌出局。',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: palette.text,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
         ),

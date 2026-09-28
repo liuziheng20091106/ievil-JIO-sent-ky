@@ -69,6 +69,10 @@ class Chat(Input):
     as_seat: str | None = Field(default=None, max_length=4)
 
 
+class ChatRetract(Input):
+    as_seat: str | None = Field(default=None, max_length=4)
+
+
 class Evidence(Input):
     text: str = Field(default="", max_length=4000)
     image: str | None = Field(default=None, max_length=2_800_000)

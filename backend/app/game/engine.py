@@ -39,6 +39,8 @@ from .resolution import (
     lock_night,
     millia_substitute,
     prepare_night_preview,
+    publish_day_passives,
+    publish_night_passives,
     publish_witness,
     revive,
     revoke_death,
@@ -61,6 +63,7 @@ from .state import (
     host_view_actor,
     current,
     deal_cards,
+    death_card_payload,
     debunked_abilities,
     display_player_name,
     duel_cards,
@@ -81,6 +84,7 @@ from .state import (
     pending_revive,
     notify,
     owner,
+    passive_card_payload,
     pending,
     player_seat,
     present,
@@ -264,7 +268,14 @@ def apply_damage(game, events, preview, allow_reaction=True):
     if hiro_triggered:
         if hiro_rewind(game, events, half):
             return True
+    if game["half"] == "night":
+        # 夜间的被动播报一律压到天亮（见 publish_night_passives），这里只把事实记在
+        # 本夜的预结算结果上；night 属于对局状态，希罗回溯会连同它一起还原。
+        game.setdefault("night", {})["love_blocked"] = list(preview.get("love_blocked") or [])
     death_batch(game, events, preview)
+    if game["half"] != "night":
+        # 白天出局当场公示，被动技能的播报卡片与死亡公告同一时刻发。
+        publish_day_passives(game, events, preview)
     return False
 
 
@@ -473,6 +484,7 @@ def auto_gaze(game, events):
         "处决幻视",
         f"本日处决名单{'含有' if truth else '不含'}魔女。",
         f"本日处决名单{'不含' if truth else '含有'}魔女。",
+        payload=passive_card_payload(game, "gaze", ""),
     )
 
 
@@ -609,15 +621,24 @@ def advance(game, events):
             else None
         )
         # 天亮只发一条汇总：逐条死讯与夜终总结合并，同一批死讯不再刷两遍。
+        # 角色卡死亡卡片与这句话同一条消息：一夜多人都出局时合并成一张卡。
+        queued_deaths = game.get("queued_deaths") or []
         if game["queued_notices"]:
             notify(
                 game,
                 events,
                 f"第{game['day']}夜：" + "".join(game["queued_notices"]),
                 alert=True,
+                # half 显式写成 night：这句话在天亮时说，但公布的是昨夜出局。
+                payload=death_card_payload(game, queued_deaths, half="night")
+                if queued_deaths
+                else None,
             )
         else:
             notify(game, events, f"第{game['day']}夜是平安夜。", alert=True)
+        # 夜间的被动技能播报也在这一刻补发（替死 / 爱人庇护 / 转爱自己）：
+        # 死亡公告之前发会提前泄露夜里的结算，所以统一压到天亮。
+        publish_night_passives(game, events)
         dead_first = [
             d["seat_id"] for d in game["deaths"] if d["day"] == game["day"] and d["half"] == "night"
         ]
@@ -626,6 +647,7 @@ def advance(game, events):
         game["public"]["speaker"] = next_speaker(game, None, events)
         game["queued_notices"] = []
         game["queued_reveals"] = []
+        game["queued_deaths"] = []
         game["nominations"] = []
         game["nomination_done"] = []
         game["ballots"] = {}
@@ -692,6 +714,9 @@ def advance(game, events):
                 "你与汉娜已共同度过完整白天，绑定生效。",
                 [owner(game, "sherry")["id"]],
                 "雪莉绑定",
+                payload=passive_card_payload(
+                    game, "bind", "你与汉娜已共同度过完整白天，绑定生效。"
+                ),
             )
         game["day"] += 1
         game["half"] = "night"
@@ -1009,6 +1034,11 @@ def host_command(game, events, action, data):
                 "你与汉娜均为上层，绑定自开局生效：胜负跟随汉娜，不能同意处决汉娜。",
                 [owner(game, "sherry")["id"]],
                 "雪莉绑定",
+                payload=passive_card_payload(
+                    game,
+                    "bind",
+                    "你与汉娜均为上层，绑定自开局生效：胜负跟随汉娜，不能同意处决汉娜。",
+                ),
             )
         sid = honoka_seat["id"]
         # 穗乃香的「开局前获知上层牌」是普通技能，不吃中毒/信息骰：这里恒发真表。

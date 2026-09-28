@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:seven_double_client/src/history_pages.dart';
@@ -8,9 +9,22 @@ import 'golden_harness.dart';
 
 /// 历史对局界面的 golden：列表与单局详情是本轮新增的界面，渲染出来便于核对观感。
 
+/// 夹具时间基准：固定「现在」，让时间文本与 golden 都不随运行日期变化。
+///
+/// 时间文本对当天只显示 HH:mm、跨天才补日期，所以夹具时间必须与「现在」一起钉死，
+/// 否则 golden 只在生成当天通过。基准取 UTC 正午；列表里那条「已中止」的对局故意
+/// 取前一天，用来覆盖跨天时补日期的分支。
+final fixedNow = DateTime.utc(2026, 9, 15, 12, 0);
+
+String stampAgo(int minutes) =>
+    fixedNow.subtract(Duration(minutes: minutes)).toIso8601String();
+
+String stampDaysAgo(int days) =>
+    fixedNow.subtract(Duration(days: days)).toIso8601String();
+
 Map<String, dynamic> matchJson() => {
       'id': 'game-1',
-      'ended_at': '2026-09-26T02:00:00+00:00',
+      'ended_at': stampAgo(0),
       'day': 3,
       'winner': 'good',
       'reason': '魔女阵营A、B两席出局',
@@ -47,7 +61,7 @@ Map<String, dynamic> abortedJson() => {
       'winner': '',
       'source': 'aborted',
       'reason': '',
-      'ended_at': '2026-09-25T12:00:00+00:00',
+      'ended_at': stampDaysAgo(1),
     };
 
 Map<String, dynamic> viewJson() => {
@@ -90,67 +104,73 @@ void main() {
   setUpAll(loadBundledFonts);
 
   testWidgets('历史对局列表渲染', (tester) async {
-    final store = await previewStore();
-    await pumpPhone(
-      tester,
-      MatchHistoryPage(
-        store: store,
-        loader: ({String? before, int limit = 20}) async => (
-          matches: [
-            MatchSummary.fromJson(matchJson()),
-            MatchSummary.fromJson(abortedJson()),
-          ],
-          hasMore: false,
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore();
+      await pumpPhone(
+        tester,
+        MatchHistoryPage(
+          store: store,
+          loader: ({String? before, int limit = 20}) async => (
+            matches: [
+              MatchSummary.fromJson(matchJson()),
+              MatchSummary.fromJson(abortedJson()),
+            ],
+            hasMore: false,
+          ),
         ),
-      ),
-    );
-    expect(find.text('第 3 日 · 好人获胜'), findsOneWidget);
-    await expectLater(
-      find.byType(MatchHistoryPage),
-      matchesGoldenFile('goldens/history_list.png'),
-    );
+      );
+      expect(find.text('第 3 日 · 好人获胜'), findsOneWidget);
+      await expectLater(
+        find.byType(MatchHistoryPage),
+        matchesGoldenFile('goldens/history_list.png'),
+      );
+      expectClockPinned(fixedNow);
+    });
   });
 
   testWidgets('历史对局详情渲染', (tester) async {
-    final store = await previewStore();
-    await pumpPhone(
-      tester,
-      MatchDetailPage(
-        store: store,
-        matchId: 'game-1',
-        loader: (matchId) async => MatchDetail.fromJson({
-          ...matchJson(),
-          'events': [
-            {
-              'seq': 0,
-              'kind': 'notice',
-              'sender_name': '主持人',
-              'text': '新对局已创建，等待主持人开放参局',
-              'created_at': '2026-09-26T01:00:00+00:00',
-            },
-            {
-              'seq': 1,
-              'kind': 'chat',
-              'sender_name': 'kiwi',
-              'avatar_role_id': 'marg',
-              'text': '我这边没有可以证明的信息，先听大家说。',
-              'created_at': '2026-09-26T01:30:00+00:00',
-            },
-            {
-              'seq': 2,
-              'kind': 'alert',
-              'sender_name': '主持人',
-              'text': '3号玩家一张角色牌出局。',
-              'created_at': '2026-09-26T01:40:00+00:00',
-            },
-          ],
-        }),
-      ),
-    );
-    expect(find.text('公开时间线'), findsOneWidget);
-    await expectLater(
-      find.byType(MatchDetailPage),
-      matchesGoldenFile('goldens/history_detail.png'),
-    );
+    await withClock(Clock.fixed(fixedNow), () async {
+      final store = await previewStore();
+      await pumpPhone(
+        tester,
+        MatchDetailPage(
+          store: store,
+          matchId: 'game-1',
+          loader: (matchId) async => MatchDetail.fromJson({
+            ...matchJson(),
+            'events': [
+              {
+                'seq': 0,
+                'kind': 'notice',
+                'sender_name': '主持人',
+                'text': '新对局已创建，等待主持人开放参局',
+                'created_at': stampAgo(60),
+              },
+              {
+                'seq': 1,
+                'kind': 'chat',
+                'sender_name': 'kiwi',
+                'avatar_role_id': 'marg',
+                'text': '我这边没有可以证明的信息，先听大家说。',
+                'created_at': stampAgo(30),
+              },
+              {
+                'seq': 2,
+                'kind': 'alert',
+                'sender_name': '主持人',
+                'text': '2号 · 希罗一张角色牌出局。',
+                'created_at': stampAgo(20),
+              },
+            ],
+          }),
+        ),
+      );
+      expect(find.text('公开时间线'), findsOneWidget);
+      await expectLater(
+        find.byType(MatchDetailPage),
+        matchesGoldenFile('goldens/history_detail.png'),
+      );
+      expectClockPinned(fixedNow);
+    });
   });
 }

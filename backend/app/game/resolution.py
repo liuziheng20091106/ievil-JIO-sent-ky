@@ -7,6 +7,8 @@ from .catalog import NIGHT_ABILITIES, ROLES
 from .state import (
     apply_honoka_disguise,
     card_actionable,
+    death_card_entry,
+    death_card_payload,
     fallen_upper_role,
     check_winner,
     current,
@@ -16,6 +18,7 @@ from .state import (
     log_event,
     notify,
     owner,
+    passive_card_payload,
     pending,
     present,
     protection_active,
@@ -27,15 +30,16 @@ from .state import (
 )
 
 
-def information(game, events, card, title, truth, false_text, image_id=None):
+def information(game, events, card, title, truth, false_text, image_id=None, payload=None):
     sid = owner(game, card["id"])["id"]
     # 中毒只影响这条信息是真是假，不告诉本人掷骰结果（主持人日志里仍有中毒骰）。
-    text = (
-        truth
-        if effect_effective(game, card, f"信息：{title}")
-        else false_text
-    )
-    notify(game, events, text, [sid], title, image_id)
+    # payload 只给被动技能的播报卡片用：调用方负责把结果写进载荷（必须与 text 同源，
+    # 否则卡片与文本会一个真一个假），收件人仍由这里的 [sid] 决定。
+    effective = effect_effective(game, card, f"信息：{title}")
+    text = truth if effective else false_text
+    if payload is not None:
+        payload = {**payload, "effect": text}
+    notify(game, events, text, [sid], title, image_id, payload=payload)
 
 def witch_information(game, events):
     if present(game, "coco") and role_card(game, "coco")["witch"]:
@@ -311,6 +315,9 @@ def damage_preview(game, attacks, protection=()):
     dead = {}
     guarded_seats = {sid for sid, key in game["half_exits"].items() if key == half_key(game)}
     loved = loved_card_id(game)
+    # 被玛格的爱挡下来的攻击：这里只记事实，真正的播报在天亮时发
+    # （见 publish_night_passives），预结算期间不发消息——夜里出局一律压到天亮公示。
+    love_blocked = []
     for index, attack in enumerate(attacks):
         cid = attack["target_card"]
         if cid not in game["cards"] or not game["cards"][cid]["alive"]:
@@ -322,6 +329,7 @@ def damage_preview(game, attacks, protection=()):
             # 玛格的爱优先级最高：爱人免疫魔女刀、13水、全场攻击、处决等其他一切死亡与负伤。
             # 玛格自己每夜那一发（cause="love"）不在这里短路，落到下面的负伤判定：
             # 第一次只负伤，已有负伤时再次负伤即无条件死亡（规则「免疫所有死亡和其他负伤」）。
+            love_blocked.append(cid)
             continue
         if current(game, sid)["id"] != cid and not attack.get("allow_lower"):
             continue
@@ -356,7 +364,12 @@ def damage_preview(game, attacks, protection=()):
                 "source_card": "hanna",
                 "unconditional": True,
             }
-    return {"deaths": list(dead.values()), "injured": injured, "attacks": deepcopy(attacks)}
+    return {
+        "deaths": list(dead.values()),
+        "injured": injured,
+        "attacks": deepcopy(attacks),
+        "love_blocked": love_blocked,
+    }
 
 
 def millia_swap_effective(game):
@@ -407,7 +420,7 @@ def millia_substitute(game, attacks, protection=()):
         for key, value in rewritten[index].items()
         if key not in {"injury", "once_injury"}
     }
-    rewritten[index] = {**lethal, "target_card": "millia"}
+    rewritten[index] = {**lethal, "target_card": "millia", "substituted_from": target["id"]}
     if at_night:
         night["reactions"].append("millia")
     return rewritten
@@ -708,10 +721,14 @@ def death_batch(game, events, preview):
                     )
         hidden = bool(death.get("hide_cause"))
         suffixed = death.get("cause") == "water" and not hidden
+        # 公告里的角色名取**公开头像**，不取真实牌：示人的穗乃香出局时不能顺着真实牌
+        # 把她的示人身份说破，与同一时刻下发的死亡卡片（state.death_card_entry）同一口径。
+        shown_role = before["avatar_role_id"] or cid
+        shown_name = ROLES.get(shown_role, {}).get("name", shown_role)
         notice = (
-            f"{s['id']}号玩家被13水毒杀。"
+            f"{s['id']}号 · {shown_name}被13水毒杀。"
             if suffixed
-            else f"{s['id']}号玩家一张角色牌出局。"
+            else f"{s['id']}号 · {shown_name}一张角色牌出局。"
         )
         record["notice"] = notice
         # 非夜间技能造成的死亡（处决、质疑、傀儡随主人出局等）没有技能名，按死因备注。
@@ -722,10 +739,14 @@ def death_batch(game, events, preview):
         src_label = ROLES.get(src, {}).get("name", src) if src else ""
         detail = f"（{cause_label}" + (f"·{src_label}" if src_label else "") + ")" if cause_label else ""
         log_event(game, "death", f"{s['id']}号的{ROLES[cid]['name']}出局{detail}")
+        # 角色卡死亡卡片的一条：只带已经公开的信息（公开头像、展示名、是否13水），
+        # 真实牌 id 与死因都不进载荷（见 state.death_card_entry）。
+        entry = death_card_entry(game, s, before, suffixed)
         if game["half"] == "night":
             # 夜间出局连同头像一起压到第二天白天再公示，夜间阶段不泄露
             game["queued_notices"].append(notice)
             game["queued_reveals"].append(before)
+            game.setdefault("queued_deaths", []).append(entry)
             if suffixed:
                 # 未隐藏的13水死亡：直接构造并随机排序疑凶目击，无需主持人待办。
                 # 替罪凶手与主持人填写路径口径一致：名单按「显示凶手」取名单位。
@@ -776,7 +797,13 @@ def death_batch(game, events, preview):
                     truthful=witness_truthful,
                 )
         else:
-            notify(game, events, notice, alert=True)
+            notify(
+                game,
+                events,
+                notice,
+                alert=True,
+                payload=death_card_payload(game, [entry]),
+            )
             # 白天死亡当场公示，下层牌立即登场并取得本阶段的行动。
             lower = current(game, s)
             if lower:
@@ -831,6 +858,121 @@ def wipe_massacred_seats(game, events, killed):
     return killed
 
 
+def passive_seat_label(game, card_id):
+    row = owner(game, card_id) if card_id in game["cards"] else None
+    return f"{row['id']}号" if row else ""
+
+
+def love_left_target(game):
+    """被爱的那张牌是否已经出局（即玛格是否已经转爱自己）。
+
+    与 :func:`love_is_self` 同源，但**不看**「爱是否已经进入生效期」：声明当天那张牌
+    就出局时也要告诉她。``active_love`` 的当天限制是给伤害结算用的，不是给通知用的。
+    """
+    love = game.get("marg_love")
+    if not love:
+        return False
+    cid = love.get("card_id")
+    if not cid:
+        return current(game, seat(game, love["seat_id"])) is None
+    card = game["cards"].get(cid)
+    return card is None or not card["alive"]
+
+
+def publish_love_self(game, events):
+    """被爱的那张牌出局后玛格转爱自己：只发一次，私密发给玛格本人。
+
+    ``marg_love`` 属于对局状态，希罗回溯会把它一起还原，所以「已经通知过」的标记
+    也跟着时间线走：回溯撤销那次死亡时，转爱自己的提示自然也不再成立；本人重新宣布
+    爱人时会整份覆盖 ``marg_love``，标记随之清空。
+    """
+    love = game.get("marg_love")
+    if not love or love.get("self_notified") or not present(game, "marg"):
+        return
+    if not love_left_target(game):
+        return
+    love["self_notified"] = True
+    effect = "被爱的那张牌已经出局，你转爱自己：此后由你自己享受这份庇护。"
+    notify(
+        game,
+        events,
+        effect,
+        [owner(game, "marg")["id"]],
+        "转爱自己",
+        payload=passive_card_payload(game, "love_self", effect),
+    )
+
+
+def publish_substitute(game, events, source_card):
+    """米莉亚替死生效：只告诉米莉亚本人「本应出局的是谁」。
+
+    换血对象是私密情报（views 里只给本人一条状态），所以这条卡片绝不能公开发；
+    公开层面已经有一条死亡公告说她的牌出局了，两边不重复也不冲突。
+    """
+    if not source_card or "millia" not in game["cards"]:
+        return
+    target = passive_seat_label(game, source_card)
+    if not target:
+        return
+    effect = f"你换血的{target}本应出局，已由你代替出局。"
+    notify(
+        game,
+        events,
+        effect,
+        [owner(game, "millia")["id"]],
+        "米莉亚替死",
+        payload=passive_card_payload(game, "substitute", effect),
+    )
+
+
+def publish_night_passives(game, events):
+    """天亮时补发夜间被动技能的播报卡片。
+
+    替死与爱人庇护都发生在夜间预结算里，但公开口径是「夜间出局一律压到天亮公示」，
+    所以这里等天亮、死亡公告一起发，夜间阶段不发任何提示。被梅露露复活的死亡已经
+    不在 ``game["deaths"]`` 里，因此按最终状态推导即可，撤销过的一次自然不会补发。
+    """
+    for death in game["deaths"]:
+        if death.get("day") != game["day"] or death.get("half") != "night":
+            continue
+        publish_substitute(game, events, death.get("substituted_from"))
+    publish_love_blocked(game, events, (game.get("night") or {}).get("love_blocked"))
+    publish_love_self(game, events)
+
+
+def publish_love_blocked(game, events, card_ids):
+    """爱人庇护挡住了攻击：只告诉玛格本人「爱人被袭击但没有出局」。
+
+    被爱的牌是私密情报（爱人与移情的对象不在 PUBLIC_TARGET_ABILITIES 里），
+    因此这条卡片只发给玛格与主持人；其他玩家只看得到「没有人出局」。
+    """
+    blocked = sorted(set(card_ids or []))
+    names = [name for name in (passive_seat_label(game, cid) for cid in blocked) if name]
+    if not names or not present(game, "marg"):
+        return
+    effect = f"你的爱人（{'、'.join(names)}）被袭击，庇护已生效，没有出局。"
+    notify(
+        game,
+        events,
+        effect,
+        [owner(game, "marg")["id"]],
+        "爱人庇护",
+        payload=passive_card_payload(game, "love", effect),
+    )
+
+
+def publish_day_passives(game, events, preview):
+    """白天伤害结算后立即补发被动技能的播报卡片。
+
+    白天出局当场公示，所以替死与爱人庇护不需要再压时间；这里读的是刚刚结算过的
+    那一份 preview，与死亡公告同一时刻、同一份事实。
+    """
+    for death in preview.get("deaths") or []:
+        publish_substitute(game, events, death.get("substituted_from"))
+    publish_love_blocked(game, events, preview.get("love_blocked"))
+    publish_love_self(game, events)
+
+
 def revoke_death(game, events, death):
     """梅露露复活：撤销该次死亡在公共记录、待办与已发目击里的痕迹。
 
@@ -845,6 +987,11 @@ def revoke_death(game, events, death):
         notice for notice in game["queued_notices"] if notice != death.get("notice")
     ]
     game["queued_reveals"] = [item for item in game["queued_reveals"] if item["seat_id"] != sid]
+    # 同一条死亡的卡片条目一起撤掉：一个席位半天只出一张牌，按席位过滤与
+    # queued_reveals 同一口径（公告文本按 notice 过滤也保持一致）。
+    game["queued_deaths"] = [
+        item for item in game.get("queued_deaths", []) if item["seat_id"] != sid
+    ]
     game["pending"] = [
         item
         for item in game["pending"]

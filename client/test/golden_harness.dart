@@ -6,10 +6,25 @@ library;
 
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:seven_double_client/src/design.dart';
+
+/// 自检：golden 用例必须跑在 `withClock(Clock.fixed(夹具基准))` 里。
+///
+/// 界面里的时间文本对当天只显示 HH:mm、跨天才补日期，所以夹具时间必须与「现在」
+/// 一起钉死；只要有人把 withClock 去掉，真实「现在」与夹具基准就不是同一天，
+/// 这里立刻失败——而不是留下一张只在生成当天通过的图，等第二天由别人发现对不上。
+void expectClockPinned(DateTime fixedNow) {
+  expect(
+    clock.now(),
+    fixedNow,
+    reason: 'golden 必须跑在 withClock(Clock.fixed(fixedNow)) 里，'
+        '否则时间文本随真实日期漂移、图只在生成当天通过',
+  );
+}
 
 Future<void> loadBundledFonts() async {
   TestWidgetsFlutterBinding.ensureInitialized();

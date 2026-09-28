@@ -265,6 +265,13 @@ class GameApi {
         },
       ));
 
+  Future<GameMessage> retractMessage(String gameId, int messageId, {String? asSeat}) async =>
+      GameMessage.fromJson(await _request(
+        'POST',
+        '/api/games/${Uri.encodeComponent(gameId)}/messages/$messageId/retract',
+        body: {if (asSeat != null) 'as_seat': asSeat},
+      ));
+
   Future<String> uploadEvidence(String gameId,
       {String text = '', String? image}) async {
     final body = jsonObject(await _request(

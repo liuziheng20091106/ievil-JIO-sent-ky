@@ -385,6 +385,10 @@ class GameMessage {
     senderName = raw['sender_name']?.toString();
     avatarRoleId = raw['avatar_role_id']?.toString();
     createdAt = raw['created_at']?.toString() ?? '';
+    recalled = raw['recalled'] == true;
+    mentionIds = raw['mention_ids'] is List
+        ? (raw['mention_ids'] as List).map((id) => id.toString()).toList()
+        : const [];
     payload = raw['payload'] == null
         ? null
         : jsonObject(raw['payload'], 'message.payload');
@@ -399,6 +403,8 @@ class GameMessage {
   late final String? senderName;
   late final String? avatarRoleId;
   late final String createdAt;
+  late final bool recalled;
+  late final List<String> mentionIds;
 
   /// 结构化播报载荷（例如技能声明的技能名、介绍与目标）。
   /// 服务端已按收件人的可见范围裁剪过：私密目标与伪装标记不会出现在这里。

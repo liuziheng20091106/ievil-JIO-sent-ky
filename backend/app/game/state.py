@@ -300,6 +300,118 @@ def audience(game, seats):
     return [s["occupant_id"] for s in game["seats"] if s["id"] in seats and s["occupant_id"]]
 
 
+# 被动技能的播报卡片：与白天技能播报同款，只换样式区分（客户端按 mode 判定）。
+# 元组是（角色牌 id、技能名、公开介绍），介绍逐句取自 CATALOG 里已公开的角色说明。
+PASSIVE_CARDS = {
+    "gaze": (
+        "nanoka",
+        "处决幻视",
+        "处决名单一定下来就自动幻视本日名单是否含魔女，结果只发给你；"
+        "这是被动技能，不必也不能声明发动。",
+    ),
+    "rewind": (
+        "hiro",
+        "时间回溯",
+        "即将出局时自动回溯一次（本局该身份一次）：回到前一天并保留记忆与普通技能，"
+        "精神系效果不恢复。",
+    ),
+    "bind": (
+        "sherry",
+        "雪莉绑定",
+        "与汉娜绑定：胜负跟随汉娜，不能同意处决汉娜；汉娜被处刑时殉情。",
+    ),
+    "substitute": (
+        "millia",
+        "米莉亚替死",
+        "被换血的目标真的会出局时，不再需要你确认，由你代替其出局。",
+    ),
+    "love": (
+        "marg",
+        "爱人庇护",
+        "爱人免疫处决、临刑开枪、魔女刀与13水等一切死亡和其他负伤。",
+    ),
+    "love_self": (
+        "marg",
+        "转爱自己",
+        "被爱的那张牌出局后，你转爱自己，庇护随之落到自己身上。",
+    ),
+}
+
+
+def passive_card_payload(game, key, effect, seat_id=None, public=False):
+    """被动技能生效的播报载荷：``effect`` 是这一次自动结算的具体内容。
+
+    卡片本身不判断可见性——载荷里的结果多半属于私密情报（处决幻视的结果、被换血的
+    对象、被爱的牌），所以调用方必须只把这条消息发给技能本人：``notify(..., seats=[sid])``
+    决定收件人，主持人照旧由 storage.visible_message 的主持人旁路看到全文，
+    其余玩家根本收不到这条消息。``effect`` 的下发另外由 ``public`` 控制：只有整局
+    都看得见的结果（例如时间回溯）才置 True，storage.project_message_payload 会据此
+    决定是否把结果文本下发给非本人。
+    """
+    role_id, ability_name, intro = PASSIVE_CARDS[key]
+    card = game["cards"].get(role_id)
+    if card is None:
+        return None
+    sid = seat_id or owner(game, card["id"])["id"]
+    row = seat(game, sid)
+    return {
+        "type": "skill",
+        "mode": "passive",
+        "ability": key,
+        "ability_name": ability_name,
+        "role_id": role_id,
+        "role_name": ROLES.get(role_id, {}).get("name", role_id),
+        "intro": intro,
+        "effect": effect,
+        "effect_public": bool(public),
+        "seat_id": sid,
+        "actor_participant_id": row["occupant_id"] if row else None,
+        "actor_name": display_player_name(row["name"] if row else ""),
+        # 被动技能不可质疑、不可伪装，也没有目标：字段补齐只为复用同一张卡片。
+        "challengeable": False,
+        "target_public": False,
+        "target": None,
+        "fake": False,
+        "card_id": card["id"],
+    }
+
+
+def death_card_entry(game, row, before, water=False):
+    """角色卡死亡卡片的一条。
+
+    只放已经公开的信息：席位号、展示名、死亡时的公开头像与「是否被13水毒杀」。
+    真实牌 id 与死因一律不进载荷——13 水的隐藏死因、穗乃香的示人身份、殉情与替死
+    都不该由这张卡片泄露；需要死因的是主持人视图，那里另有完整记录。
+    角色名按**公开头像**取，不按真实牌：示人的穗乃香出局时卡片必须继续显示她示人的角色。
+    """
+    public_role = before.get("avatar_role_id")
+    return {
+        "seat_id": row["id"],
+        "player_name": display_player_name(row.get("name", "")),
+        "avatar_role_id": public_role,
+        "role_name": ROLES.get(public_role or "", {}).get("name", public_role or ""),
+        "water": bool(water),
+    }
+
+
+# 死亡卡片允许下发的字段：白名单而不是黑名单，将来往条目里加内部字段（例如 death_id）
+# 也不会顺着载荷漏给玩家。
+DEATH_CARD_KEYS = ("seat_id", "player_name", "avatar_role_id", "role_name", "water")
+
+
+def death_card_payload(game, entries, half=None, day=None):
+    """死亡卡片载荷：一夜的出局合并成一张卡，与「天亮只发一条汇总」同一口径。"""
+    return {
+        "type": "death",
+        "day": day if day is not None else game["day"],
+        "half": half if half is not None else game["half"],
+        "deaths": [
+            {key: entry[key] for key in DEATH_CARD_KEYS if key in entry}
+            for entry in entries
+        ],
+    }
+
+
 def notify(game, events, text, seats=None, title="游戏信息", image_id=None, alert=False, payload=None):
     recipients = None if seats is None else audience(game, seats)
     event = {
@@ -843,6 +955,7 @@ def upgrade_game(game):
     # 主持人身份快照与「已确认进入管理界面」的主持账号：旧局补齐为「没有记录」。
     add(game, "host", None)
     add(game, "host_entries", [])
+    add(game, "queued_deaths", [])
     # 旧字段名只是同一份记录的前身（当时只用来给通告去重），合并后丢掉。
     legacy_entries = game.pop("host_entry_notices", None)
     if legacy_entries:
@@ -1079,6 +1192,9 @@ def create_game(codex):
         "speech_queued": {},
         "queued_notices": [],
         "queued_reveals": [],
+        # 夜间死亡卡片的载荷：与 queued_notices 一一对应，天亮时随汇总公告一起下发；
+        # 被梅露露复活的死亡由 revoke_death 一并删掉。
+        "queued_deaths": [],
         # 今天的选票：{席位: {角色牌: 同意/不同意/弃票}}。提名自动同意票不写进来，
         # 由 state.seat_choice 按规则实时推导；计票表（旧字段 votes）已删除。
         "ballots": {},
@@ -1245,7 +1361,14 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
     if "log" in game and snap.get("log_index") is not None:
         del game["log"][snap["log_index"] :]
     log_event(game, "system", f"时间回溯到「{snap['label']}」，之后的时间线作废。")
-    notify(game, events, "游戏时间已回溯；已经获得的信息与聊天记忆保留。")
+    # 希罗的自动回溯是公开事件（整局时间线当面回退），公告本来就不区分是否本人：
+    # 这里给同一句话补一张被动技能卡，让被动技能也有和白天技能一样的展示框。
+    # 主持人手动回溯（mode 为空）没有对应技能，仍只发原来的文本公告。
+    notice = "游戏时间已回溯；已经获得的信息与聊天记忆保留。"
+    payload = None
+    if mode:
+        payload = passive_card_payload(game, "rewind", notice, public=True)
+    notify(game, events, notice, payload=payload)
 
 
 def witch_seats(game):

@@ -278,8 +278,16 @@ class GameStore extends ChangeNotifier {
   int warningCount = 0;
   int privateStateCount = 0;
   int unreadMessageCount = 0;
+  int unreadMentionCount = 0;
+  final Set<int> _mentionedMessageIds = {};
+  final Set<int> _seenMentionMessages = {};
 
   Set<String>? _actionBaseline;
+  Set<String>? _tutorialBaseline;
+  final List<ActionDescriptor> _pendingActionTutorials = [];
+
+  ActionDescriptor? takeActionTutorial() =>
+      _pendingActionTutorials.isEmpty ? null : _pendingActionTutorials.removeAt(0);
   String? _privateStateBaseline;
   String? _loadedPhaseKey;
   String? _ownCardBaseline;
@@ -1094,10 +1102,15 @@ class GameStore extends ChangeNotifier {
     warningCount = 0;
     privateStateCount = 0;
     unreadMessageCount = 0;
+    unreadMentionCount = 0;
+    _mentionedMessageIds.clear();
+    _seenMentionMessages.clear();
     pendingPhaseKey = null;
     pendingPrivateInfo = null;
     _privateInfoCursor = null;
     _actionBaseline = null;
+    _tutorialBaseline = null;
+    _pendingActionTutorials.clear();
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
     pendingRoleId = null;
@@ -1177,7 +1190,7 @@ class GameStore extends ChangeNotifier {
           // 换局窗口期旧连接的事件可能晚于新局的首次同步到达：
           // 不属于当前对局的状态与消息一律丢弃，避免旧局覆盖新局状态。
           if (incoming.id != gameId) return;
-          _applyView(incoming);
+          _applyView(incoming, recovering: true);
           final messages = jsonArray(event['messages'], 'sync.messages')
               .map(GameMessage.fromJson);
           _mergeMessages(messages);
@@ -1187,15 +1200,25 @@ class GameStore extends ChangeNotifier {
           _applyView(incoming);
         case 'message':
           final message = GameMessage.fromJson(event['message']);
+          // 自己的发言本地已合并且已读，不该再加未读角标。
+          if (message.recalled) {
+            if (_mentionedMessageIds.remove(message.id)) unreadMentionCount--;
+          } else if (_seenMentionMessages.add(message.id)) {
+            if (message.id > _readCursor && message.senderId != actor?.id) {
+              unreadMessageCount++;
+            }
+            if (message.kind == 'chat' && message.senderId != actor?.id &&
+                message.mentionIds.contains(actor?.id) &&
+                message.id > _readCursor) {
+              _mentionedMessageIds.add(message.id);
+              unreadMentionCount++;
+            }
+          }
           if (_matchesScope(message, messageScope)) {
             _mergeMessages([message]);
           } else {
             // 私密信息与夜终公告都不随筛选范围丢弃：玩家停在公屏时也要收到。
             _noteIncoming([message]);
-          }
-          // 自己的发言本地已合并且已读，不该再加未读角标。
-          if (message.id > _readCursor && message.senderId != actor?.id) {
-            unreadMessageCount++;
           }
           // 发出消息即输入结束：这条消息的发送者从「正在输入」里移除。
           if (message.kind == 'chat' && message.senderId != null) {
@@ -1217,12 +1240,14 @@ class GameStore extends ChangeNotifier {
   /// 把一条实时事件喂给事件处理：供回归检查使用（typing / message 等）。
   void applyLiveEvent(Map<String, dynamic> event) => _onLiveEvent(event);
 
-  void _applyView(GameView next) {
+  void _applyView(GameView next, {bool recovering = false}) {
     // 换局（或本进程第一次看到这一局）：上一局「稍后」掉的对话框不该压住新局的内容。
     if (view != null && view!.id != next.id) {
       _dismissedDialogs.clear();
       // 输入状态属于上一局的频道，换局即清空，别把旧局的「正在输入」带进新局。
       _clearTyping();
+      _tutorialBaseline = null;
+      _pendingActionTutorials.clear();
     }
     // 「确认进入管理界面」一律以服务端为准：本局这个账号只要确认过一次
     // （换令牌、重新登录、重开应用都算），服务端就不再要求确认，客户端直接展开
@@ -1239,6 +1264,19 @@ class GameStore extends ChangeNotifier {
       unawaited(_reconcileActor());
     }
     final actionKeys = next.allActions.map((item) => item.protocolKey).toSet();
+    if (recovering || _tutorialBaseline == null || next.status == 'ended') {
+      _pendingActionTutorials.clear();
+    } else {
+      final seen = preferences.getStringList(_preferenceKey('actions_seen'))?.toSet() ?? <String>{};
+      for (final action in next.allActions) {
+        if (!_tutorialBaseline!.contains(action.protocolKey) &&
+            !seen.contains(action.protocolKey) &&
+            !_pendingActionTutorials.any((item) => item.protocolKey == action.protocolKey)) {
+          _pendingActionTutorials.add(action);
+        }
+      }
+    }
+    _tutorialBaseline = actionKeys;
     final actionPreference = _preferenceKey('actions_seen');
     if (_actionBaseline == null) {
       final saved = preferences.getStringList(actionPreference);
@@ -1476,6 +1514,7 @@ class GameStore extends ChangeNotifier {
       messages = page.messages;
       hasMoreMessages = page.hasMore;
       error = null;
+      _seenMentionMessages.addAll(page.messages.map((item) => item.id));
       // 首批历史只用来定私密信息的基线：登录、刷新、切筛选都不该弹横幅。
       _noteIncoming(page.messages);
     } on ApiException catch (failure) {
@@ -1552,6 +1591,7 @@ class GameStore extends ChangeNotifier {
   void _mergeMessages(Iterable<GameMessage> incoming) {
     final indexed = {for (final item in messages) item.id: item};
     for (final item in incoming) {
+      _seenMentionMessages.add(item.id);
       if (_matchesScope(item, messageScope)) indexed[item.id] = item;
     }
     messages = _hideStalePresence(indexed.values.toList())
@@ -1626,6 +1666,8 @@ class GameStore extends ChangeNotifier {
           _preferenceKey('messages_read_$messageScope'), messages.last.id);
     }
     unreadMessageCount = 0;
+    unreadMentionCount = 0;
+    _mentionedMessageIds.clear();
     notifyListeners();
   }
 
@@ -1786,6 +1828,27 @@ class GameStore extends ChangeNotifier {
     } on FormatException catch (failure) {
       error = '服务器返回了无法解析的消息：${failure.message}';
       await _reconcileAfterWriteFailure();
+      rethrow;
+    } finally {
+      writeBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> retractMessage(GameMessage message) async {
+    final id = gameId;
+    if (api == null || id == null || writeBusy) return;
+    writeBusy = true;
+    error = null;
+    notifyListeners();
+    try {
+      final updated = await api!.retractMessage(id, message.id, asSeat: activeAsSeat);
+      _mergeMessages([updated]);
+    } on ApiException catch (failure) {
+      error = failure.message;
+      rethrow;
+    } on FormatException catch (failure) {
+      error = '服务器返回了无法解析的消息：${failure.message}';
       rethrow;
     } finally {
       writeBusy = false;
@@ -2018,6 +2081,8 @@ class GameStore extends ChangeNotifier {
     messages = [];
     challengeInfo = null;
     _actionBaseline = null;
+    _tutorialBaseline = null;
+    _pendingActionTutorials.clear();
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
     pendingRoleId = null;
@@ -2034,6 +2099,9 @@ class GameStore extends ChangeNotifier {
     warningCount = 0;
     privateStateCount = 0;
     unreadMessageCount = 0;
+    unreadMentionCount = 0;
+    _mentionedMessageIds.clear();
+    _seenMentionMessages.clear();
     hasMoreMessages = false;
     messageScope = 'all';
     selectedChannelId = 'public';

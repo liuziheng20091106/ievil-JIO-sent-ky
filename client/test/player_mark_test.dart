@@ -22,7 +22,7 @@ const playerNames = ['阿雪', 'kiwi', '小满', '庭雨', '青岚', '临', '星
 
 /// 服务端天亮时的两种夜终公告，与 backend/app/game/engine.py 的文案一致。
 const peacefulNightNotice = '第1夜是平安夜。';
-const deadlyNightNotice = '第1夜：2号玩家一张角色牌出局。';
+const deadlyNightNotice = '第1夜：2号 · 艾玛一张角色牌出局。';
 
 List<Map<String, dynamic>> seatsJson({
   Set<String> dead = const {},
@@ -277,7 +277,7 @@ void main() {
     expect(store.pendingMarksTutorial, isTrue);
     expect(store.takeMarksTutorial(), isTrue);
     expect(store.marksTutorialShown, isTrue);
-    store.mergeMessagesForTest([alertMessage(3, '第2夜：5号玩家一张角色牌出局。')]);
+    store.mergeMessagesForTest([alertMessage(3, '第2夜：5号 · 艾玛一张角色牌出局。')]);
     expect(store.pendingMarksTutorial, isFalse);
   });
 
@@ -286,7 +286,7 @@ void main() {
     // 席位状态上看不出任何变化（2 号还活着），但服务端的公告已经把它算作出局；
     // 教程只听公告，所以这种夜晚也要弹。
     store.mergeMessagesForTest([
-      alertMessage(1, '第1夜：2号玩家一张角色牌出局。'),
+      alertMessage(1, '第1夜：2号 · 艾玛一张角色牌出局。'),
     ]);
     expect(store.pendingMarksTutorial, isTrue);
   });
@@ -295,7 +295,7 @@ void main() {
     final store = await markStore();
     store.mergeMessagesForTest([chatMessage('p2', 'kiwi', id: 1)]);
     store.mergeMessagesForTest([
-      privateInfoMessage(2, '第1夜：2号玩家一张角色牌出局。'),
+      privateInfoMessage(2, '第1夜：2号 · 艾玛一张角色牌出局。'),
     ]);
     // 主持人自己打的、恰好长得像公告的聊天也要排除。
     store.mergeMessagesForTest([
@@ -305,7 +305,7 @@ void main() {
         'sender_id': 'p2',
         'sender_name': 'kiwi',
         'channel_id': 'public',
-        'text': '第1夜：2号玩家一张角色牌出局。',
+        'text': '第1夜：2号 · 艾玛一张角色牌出局。',
         'created_at': '2026-09-25T10:00:00',
       }),
     ]);
@@ -332,7 +332,7 @@ void main() {
 
     // 换到新的一局：标记与教程状态都重来。
     store.applyView(GameView.fromJson({...viewJson(), 'id': 'game-next'}));
-    store.mergeMessagesForTest([alertMessage(2, '第3夜：4号玩家一张角色牌出局。')]);
+    store.mergeMessagesForTest([alertMessage(2, '第3夜：4号 · 艾玛一张角色牌出局。')]);
     expect(store.pendingMarksTutorial, isTrue);
   });
 
@@ -353,7 +353,7 @@ void main() {
     expect(find.text('如何标记他人'), findsNothing);
 
     // 之后再收到多少条公告都不会重弹。
-    store.mergeMessagesForTest([alertMessage(2, '第2夜：4号玩家一张角色牌出局。')]);
+    store.mergeMessagesForTest([alertMessage(2, '第2夜：4号 · 艾玛一张角色牌出局。')]);
     await settleSheets(tester);
     expect(find.text('如何标记他人'), findsNothing);
   });

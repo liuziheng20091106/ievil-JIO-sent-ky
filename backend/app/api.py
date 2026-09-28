@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 import os
+import re
 import secrets
 from typing import Literal
 
@@ -1278,6 +1279,23 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                     if not channel_row or not storage.channel_visible(channel_row, actor):
                         raise HTTPException(403, "你不能访问该频道")
                     audience = storage.channel_members(channel_row)
+            # 服务端只认稳定座号 token；受众取实际落库频道，不信任客户端声称的目标。
+            mentioned_seats = dict.fromkeys(re.findall(r"@([1-7])号", body.text))
+            members = set(audience or [])
+            mention_ids = []
+            if body_channel_id != SPECTATOR_CHANNEL:
+                for seat in game["seats"]:
+                    if seat["id"] not in mentioned_seats or not seat["occupant_id"]:
+                        continue
+                    target_id = seat["occupant_id"]
+                    if target_id == actor["id"] or (audience is not None and target_id not in members):
+                        continue
+                    target = db.execute(
+                        "SELECT active,blocked FROM participants WHERE id=? AND game_id=? AND kind='player'",
+                        (target_id, game_id),
+                    ).fetchone()
+                    if target and target["active"] and not target["blocked"]:
+                        mention_ids.append(target_id)
             seat = seat_for(game, actor["seat_id"]) if actor["seat_id"] else None
             row = storage.add_message(
                 db,
@@ -1291,6 +1309,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 channel_id=body_channel_id,
                 text=body.text,
                 audience=audience,
+                mention_ids=mention_ids,
             )
             # 顺序发言：本人发言后30秒倒计时重新开始。只改公开倒计时、不抬版本号，
             # 但要把新状态推给全场，否则别人看到的还是旧截止时间（见 touch_speech_timer）。
@@ -1301,6 +1320,31 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                     retimed = True
         realtime.publish(game_id, [row], state=retimed)
         return storage.message_view(row, controller)
+
+
+@router.post("/games/{game_id}/messages/{message_id}/retract")
+async def retract_message(game_id: str, message_id: int, body: schemas.ChatRetract, request: Request):
+    async with realtime.lock:
+        with storage.transaction() as db:
+            controller = auth.require_actor(db, request, game_id)
+            auth.require_host_capable(controller)
+            game = require_game(db, game_id)
+            actor = (
+                authorized_as_seat(db, game, controller, body.as_seat)[0]
+                if body.as_seat else controller
+            )
+            row = db.execute(
+                "SELECT * FROM messages WHERE game_id=? AND id=?", (game_id, message_id)
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "消息不存在")
+            if row["kind"] != "chat" or row["sender_id"] != actor["id"]:
+                raise HTTPException(403, "只能撤回自己发送的聊天消息")
+            if row["recalled_at"]:
+                raise HTTPException(409, "消息已经撤回")
+            updated = storage.recall_message(db, row)
+        realtime.publish(game_id, [updated], state=False)
+        return storage.message_view(updated, controller)
 
 
 @router.post("/games/{game_id}/evidence")

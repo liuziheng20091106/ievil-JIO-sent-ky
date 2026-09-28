@@ -1010,6 +1010,10 @@ class _SkillDetailSheet extends StatelessWidget {
     final targetSeat = target is Map ? target['seat_id']?.toString() : null;
     final targetName = target is Map ? target['name']?.toString() ?? '' : '';
     final challengeable = payload['challengeable'] != false;
+    // 被动技能（处决幻视、时间回溯、替死、爱人庇护……）没有声明与质疑入口：
+    // 详情页换成「被动技能」标签，并把这一次的结算结果单独列出来。
+    final passive = payload['mode']?.toString() == 'passive';
+    final effect = payload['effect']?.toString() ?? '';
     return SafeArea(
       top: false,
       child: SingleChildScrollView(
@@ -1070,18 +1074,30 @@ class _SkillDetailSheet extends StatelessWidget {
                     background: context.palette.surfaceMuted,
                   ),
                 Tag(
-                  challengeable ? '可质疑' : '不可质疑',
-                  color: challengeable
-                      ? context.palette.warning
-                      : context.palette.textSecondary,
-                  background: challengeable
-                      ? context.palette.warningSoft
-                      : context.palette.surfaceMuted,
+                  passive
+                      ? '被动技能'
+                      : challengeable
+                          ? '可质疑'
+                          : '不可质疑',
+                  color: passive
+                      ? context.palette.success
+                      : challengeable
+                          ? context.palette.warning
+                          : context.palette.textSecondary,
+                  background: passive
+                      ? context.palette.successSoft
+                      : challengeable
+                          ? context.palette.warningSoft
+                          : context.palette.surfaceMuted,
                 ),
               ],
             ),
             const SizedBox(height: AppSpacing.lg),
             if (intro.isNotEmpty) _SkillBlock(title: '技能说明', body: intro),
+            if (passive && effect.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.md),
+              _SkillBlock(title: '本次生效', body: effect),
+            ],
             const SizedBox(height: AppSpacing.md),
             Text(
               '使用者：${seatId.isEmpty ? '—' : '$seatId号'}'
@@ -1103,8 +1119,11 @@ class _SkillDetailSheet extends StatelessWidget {
             ],
             const SizedBox(height: AppSpacing.md),
             Text(
-              '技能说明是公开规则；声明本身不代表身份——伪装声明的播报与真声明完全一致。'
-              '剩余次数、下层牌与私密目标不会在这里显示。',
+              passive
+                  ? '被动技能由系统自动结算，不必也不能声明发动，因此没有质疑入口；'
+                      '剩余次数、下层牌与私密目标不会在这里显示。'
+                  : '技能说明是公开规则；声明本身不代表身份——伪装声明的播报与真声明完全一致。'
+                      '剩余次数、下层牌与私密目标不会在这里显示。',
               style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],

@@ -37,6 +37,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   int index = 0;
   int lastActions = 0;
   int lastWarnings = 0;
+  bool _showingActionTutorial = false;
+  int lastMentions = 0;
 
   /// 已经按当前宽屏档位登记过「已查看」的页面；0 表示窄屏单页布局。
   /// 只在档位变化时登记一次，避免每帧写偏好引起重复重建。
@@ -55,6 +57,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     lastActions = widget.store.newActionCount;
     lastWarnings = widget.store.warningCount;
+    lastMentions = widget.store.unreadMentionCount;
     widget.store.addListener(onStoreChanged);
     if (widget.store.pendingRoleId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => onStoreChanged());
@@ -63,6 +66,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     if (widget.store.pendingMarksTutorial) {
       WidgetsBinding.instance.addPostFrameCallback((_) => onStoreChanged());
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) => maybeShowActionTutorial());
   }
 
   @override
@@ -81,6 +85,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         store.newActionCount > lastActions || store.warningCount > lastWarnings;
     lastActions = store.newActionCount;
     lastWarnings = store.warningCount;
+    if (store.unreadMentionCount > lastMentions &&
+        lifecycle == AppLifecycleState.resumed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('有人 @ 你')),
+        );
+        HapticFeedback.selectionClick();
+      });
+    }
+    lastMentions = store.unreadMentionCount;
     if (needsAttention &&
         !host &&
         store.view?.status != 'ended' &&
@@ -101,7 +116,23 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       });
     }
     maybeShowMarksTutorial();
+    maybeShowActionTutorial();
     if (mounted) setState(() {});
+  }
+
+  void maybeShowActionTutorial() {
+    if (_showingActionTutorial || !mounted) return;
+    final action = widget.store.takeActionTutorial();
+    if (action == null) return;
+    _showingActionTutorial = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        if (mounted) await showActionPreview(context, action);
+      } finally {
+        _showingActionTutorial = false;
+        if (mounted) maybeShowActionTutorial();
+      }
+    });
   }
 
   /// 首个非平安夜结束后弹一次「如何标记他人」：同一个对局只弹一次，
@@ -423,7 +454,12 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                               backgroundColor: item == 0 && urgent
                                   ? context.palette.danger
                                   : context.palette.accent,
-                              child: Icon(icons[item]),
+                              child: item == 0 && store.unreadMentionCount > 0
+                                  ? Badge(
+                                      label: const Text('@'),
+                                      child: Icon(icons[item]),
+                                    )
+                                  : Icon(icons[item]),
                             ),
                             label: labels[item],
                           ),
@@ -682,12 +718,29 @@ class ChatActionPage extends StatefulWidget {
   State<ChatActionPage> createState() => _ChatActionPageState();
 }
 
+final _mentionToken = RegExp(r'@[1-7]号');
+
+class _MentionEditingController extends EmojiEditingController {
+  @override
+  TextSpan buildTextSpan({required BuildContext context, TextStyle? style,
+      required bool withComposing}) {
+    if (withComposing || !_mentionToken.hasMatch(text)) {
+      return super.buildTextSpan(context: context, style: style,
+          withComposing: withComposing);
+    }
+    return TextSpan(style: style, children: _chatSpans(
+      text, Theme.of(context).colorScheme.primary,
+    ));
+  }
+}
+
 class _ChatActionPageState extends State<ChatActionPage> {
-  final message = EmojiEditingController();
+  final message = _MentionEditingController();
   final scroll = ScrollController();
   String? sendError;
   int lastCount = 0;
   bool emojiOpen = false;
+  bool _pickingMention = false;
 
   /// 距底部多少像素内仍算「停在最新消息」：约三条消息的高度。
   /// 只有停在最新消息附近才自动跟随滚动；往上翻历史时，
@@ -987,51 +1040,134 @@ class _ChatActionPageState extends State<ChatActionPage> {
     'host': ('主持人', Icons.workspace_premium_outlined),
   };
 
+  List<Map<String, dynamic>> get _speechSeats {
+    final view = widget.store.view!;
+    if (view.phase != 'speech') return const [];
+    final order = view.public['speech_order'];
+    if (order is! List || order.isEmpty) return const [];
+    final seats = view.seats;
+    final result = <Map<String, dynamic>>[];
+    for (final id in order) {
+      final matches = seats.where((seat) => seat['id']?.toString() == id.toString());
+      if (matches.isEmpty) return const [];
+      final seat = matches.first;
+      if (seat['avatar_role_id'] == null) return const [];
+      result.add(seat);
+    }
+    return result;
+  }
+
+  Map<String, dynamic>? get _speakerSeat {
+    final view = widget.store.view!;
+    if (view.phase != 'speech') return null;
+    final speaker = view.public['speaker']?.toString();
+    if (speaker == null) return null;
+    for (final seat in view.seats) {
+      if (seat['id']?.toString() == speaker && seat['avatar_role_id'] != null) return seat;
+    }
+    return null;
+  }
+
   /// 消息列表本体：空范围给空状态，否则渲染惰性列表。
-  Widget _messageList(GameStore store) => store.messages.isEmpty
-      ? const EmptyState(
-          icon: Icons.chat_bubble_outline,
-          title: '当前筛选范围没有消息',
-          detail: '切换上方筛选可以查看公屏、私信与系统信息。',
-        )
-      : LayoutBuilder(builder: (context, constraints) {
-          // 只为了量到消息视口的高度：输入区被顶起时视口会被顶矮多少，
-          // 偏移就补多少（见 noteViewportHeight）。
-          noteViewportHeight(constraints.maxHeight);
-          return ListView.builder(
-            key: _listKey,
-            controller: scroll,
-            padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
-            itemCount: store.messages.length + (store.hasMoreMessages ? 1 : 0),
-            itemBuilder: (context, index) {
-              if (store.hasMoreMessages && index == 0) {
-                return Center(
-                  child: TextButton(
-                    onPressed: store.loadOlderMessages,
-                    child: const Text('加载更早消息'),
-                  ),
-                );
-              }
-              final item =
-                  store.messages[index - (store.hasMoreMessages ? 1 : 0)];
-              return MessageBubble(
-                message: item,
-                self: store.actor?.id,
-                store: store,
-                onAvatar: (senderId) {
-                  final ref = participantRefFor(store, senderId);
-                  if (ref != null) showAvatarMenu(context, store, ref);
-                },
-                // 长按走「快速标记」：不经菜单，直接选标记。
-                onAvatarLongPress: (senderId) {
-                  final ref = participantRefFor(store, senderId);
-                  if (ref != null) showMarkMenu(context, store, ref);
-                },
-              );
+  Widget _messageList(GameStore store) {
+    final speaker = _speakerSeat;
+    if (store.messages.isEmpty && speaker == null) {
+      return const EmptyState(
+        icon: Icons.chat_bubble_outline,
+        title: '当前筛选范围没有消息',
+        detail: '切换上方筛选可以查看公屏、私信与系统信息。',
+      );
+    }
+    return LayoutBuilder(builder: (context, constraints) {
+      noteViewportHeight(constraints.maxHeight);
+      final header = store.hasMoreMessages ? 1 : 0;
+      return ListView.builder(
+        key: _listKey,
+        controller: scroll,
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
+        itemCount: store.messages.length + header + (speaker == null ? 0 : 1),
+        itemBuilder: (context, index) {
+          if (header == 1 && index == 0) {
+            return Center(
+              child: TextButton(
+                onPressed: store.loadOlderMessages,
+                child: const Text('加载更早消息'),
+              ),
+            );
+          }
+          if (speaker != null && index == store.messages.length + header) {
+            return _SpeechTurnDivider(seat: speaker);
+          }
+          final item = store.messages[index - header];
+          return MessageBubble(
+            message: item,
+            self: store.activeAsSeat == null
+                ? store.actor?.id
+                : store.view!.seats
+                    .where((seat) => seat['id']?.toString() == store.activeAsSeat)
+                    .map((seat) => seat['participant_id']?.toString())
+                    .firstOrNull,
+            store: store,
+            onAvatar: (senderId) {
+              final ref = participantRefFor(store, senderId);
+              if (ref != null) showAvatarMenu(context, store, ref);
+            },
+            onAvatarLongPress: (senderId) {
+              final ref = participantRefFor(store, senderId);
+              if (ref != null) showMarkMenu(context, store, ref);
             },
           );
-        });
+        },
+      );
+    });
+  }
+
+  Future<void> pickMention() async {
+    if (_pickingMention || !composerFocus.hasFocus ||
+        widget.store.actor?.isSpectator == true) {
+      return;
+    }
+    final channel = widget.store.selectedChannel;
+    if (channel?.canSend != true || channel?.id == 'spectator') return;
+    final cursor = message.selection.baseOffset;
+    if (cursor < 1 || message.text[cursor - 1] != '@') return;
+    final members = channel!.members.map((member) => member['id']?.toString()).toSet();
+    final seats = [
+      for (final seat in widget.store.view!.seats)
+        if (seat['occupied'] == true &&
+            (channel.id == 'public' || members.contains(seat['participant_id']?.toString())))
+          {
+            'id': seat['id'],
+            'name': seat['name'],
+            'participant_id': seat['participant_id'],
+            'avatar_role_id': seat['avatar_role_id'],
+          },
+    ];
+    if (seats.isEmpty) return;
+    final options = [
+      for (final seat in seats)
+        {'value': seat['id'], 'label': '${seat['id']}号 · ${seat['name'] ?? '玩家'}'},
+    ];
+    _pickingMention = true;
+    try {
+      final picked = await showPlayerPicker(context,
+        title: '@ 玩家',
+        players: playersFromOptions(options, seats: seats, byRole: true),
+      );
+      if (!mounted || picked == null || picked.isEmpty) return;
+      if (cursor > message.text.length || message.text[cursor - 1] != '@') return;
+      final token = '@${picked.first}号 ';
+      message.value = TextEditingValue(
+        text: message.text.replaceRange(cursor - 1, cursor, token),
+        selection: TextSelection.collapsed(offset: cursor - 1 + token.length),
+      );
+      composerFocus.requestFocus();
+    } finally {
+      _pickingMention = false;
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1069,6 +1205,11 @@ class _ChatActionPageState extends State<ChatActionPage> {
                   ),
               ],
             ),
+          ),
+        if (!typing && _speechSeats.isNotEmpty)
+          _SpeechOrderStrip(
+            seats: _speechSeats,
+            speaker: store.view!.public['speaker']?.toString(),
           ),
         if (!typing && store.view!.phase == 'discussion')
           _DiscussionProgressCard(view: store.view!),
@@ -1123,6 +1264,13 @@ class _ChatActionPageState extends State<ChatActionPage> {
           onTapField: () => setEmojiOpen(false),
           onSend: send,
           onClearError: () => setState(() => sendError = null),
+          onChanged: (text) {
+            setState(() => sendError = null);
+            final cursor = message.selection.baseOffset;
+            if (cursor > 0 && cursor <= text.length && text[cursor - 1] == '@') {
+              pickMention();
+            }
+          },
         ),
       ],
     );
@@ -1160,6 +1308,73 @@ class _ChatActionPageState extends State<ChatActionPage> {
     } on ApiException catch (failure) {
       if (mounted) setState(() => sendError = failure.message);
     }
+  }
+}
+
+class _SpeechOrderStrip extends StatelessWidget {
+  const _SpeechOrderStrip({required this.seats, required this.speaker});
+  final List<Map<String, dynamic>> seats;
+  final String? speaker;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 46,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          itemCount: seats.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 6),
+          itemBuilder: (context, index) {
+            final seat = seats[index];
+            final id = seat['id'].toString();
+            final role = seat['avatar_role_id'].toString();
+            final current = id == speaker;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.chip),
+                border: Border.all(
+                  color: current ? context.palette.accent : context.palette.border,
+                ),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('${index + 1}. $id号', style: TextStyle(
+                  color: current ? context.palette.accent : context.palette.textSecondary,
+                )),
+                const SizedBox(width: 4),
+                RoleAvatar(roleId: role, size: 25),
+                const SizedBox(width: 4),
+                Text(roleVisual(role)?.name ?? role, style: TextStyle(
+                  color: current ? context.palette.accent : context.palette.textSecondary,
+                )),
+              ]),
+            );
+          },
+        ),
+      );
+}
+
+class _SpeechTurnDivider extends StatelessWidget {
+  const _SpeechTurnDivider({required this.seat});
+  final Map<String, dynamic> seat;
+
+  @override
+  Widget build(BuildContext context) {
+    final role = seat['avatar_role_id'].toString();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(children: [
+        Expanded(child: Divider(color: context.palette.accent)),
+        const SizedBox(width: 6),
+        Text('${seat['id']}号'),
+        const SizedBox(width: 4),
+        RoleAvatar(roleId: role, size: 28),
+        const SizedBox(width: 4),
+        Text(roleVisual(role)?.name ?? role),
+        const SizedBox(width: 6),
+        Expanded(child: Divider(color: context.palette.accent)),
+      ]),
+    );
   }
 }
 
@@ -1216,6 +1431,7 @@ class _Composer extends StatelessWidget {
     required this.onCloseEmoji,
     required this.onTapField,
     required this.onSend,
+    required this.onChanged,
     required this.onClearError,
     this.error,
   });
@@ -1243,6 +1459,7 @@ class _Composer extends StatelessWidget {
   final VoidCallback onTapField;
   final VoidCallback onSend;
   final VoidCallback onClearError;
+  final ValueChanged<String> onChanged;
   final String? error;
 
   @override
@@ -1316,7 +1533,7 @@ class _Composer extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
               onTap: onTapField,
-              onChanged: (_) => onClearError(),
+              onChanged: onChanged,
               onSubmitted: (_) => onSend(),
             ),
             if (!channelSendable && (channel?.reason.isNotEmpty ?? false))
@@ -2171,6 +2388,69 @@ Future<void> openActionPicker(
   await showActionForm(context, store, picked);
 }
 
+Future<void> _showMessageMenu(BuildContext context, GameMessage message,
+    bool mine, GameStore? store) async {
+  final choice = await showPredictiveSheet<String>(
+    context: context,
+    useSafeArea: true,
+    builder: (sheet) => SafeArea(
+      top: false,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(
+          leading: const Icon(Icons.copy_outlined),
+          title: const Text('复制'),
+          onTap: () => Navigator.of(sheet).pop('copy'),
+        ),
+        if (mine && store != null)
+          ListTile(
+            leading: const Icon(Icons.undo_outlined),
+            title: const Text('撤回'),
+            onTap: () => Navigator.of(sheet).pop('retract'),
+          ),
+      ]),
+    ),
+  );
+  if (!context.mounted) return;
+  if (choice == 'copy') {
+    await Clipboard.setData(ClipboardData(text: message.text));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已复制')),
+      );
+    }
+  } else if (choice == 'retract' && store != null) {
+    try {
+      await store.retractMessage(message);
+    } on ApiException catch (failure) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(failure.message)),
+        );
+      }
+    } on FormatException catch (failure) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('服务器返回了无法解析的消息：${failure.message}')),
+        );
+      }
+    }
+  }
+}
+
+List<InlineSpan> _chatSpans(String text, Color mentionColor) {
+  final spans = <InlineSpan>[];
+  var cursor = 0;
+  for (final match in _mentionToken.allMatches(text)) {
+    spans.addAll(emojiSpans(text.substring(cursor, match.start)));
+    spans.add(TextSpan(text: match.group(0), style: TextStyle(
+      color: mentionColor, fontWeight: FontWeight.bold,
+    )));
+    cursor = match.end;
+  }
+  spans.addAll(emojiSpans(text.substring(cursor)));
+  return spans;
+}
+
 /// 消息气泡：自己靠右、他人靠左、系统居中。
 /// 点击头像打开该发送者的快捷菜单（看技能、私信、主持人管理）。
 class MessageBubble extends StatelessWidget {
@@ -2195,13 +2475,17 @@ class MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final system = message.kind != 'chat';
     if (system) {
-      // 私密信息（只发给本人）用金色卡片顶出来；全场公告用红边；其余保持灰色居中条。
-      if (message.kind == 'information') return _privateInfoCard(context);
-      // 技能播报带结构化载荷：渲染成 [头像] N号 昵称 · 使用技能 X 的卡片，可点开技能详细。
-      // 载荷由服务端按可见范围裁剪，客户端不再判断谁能看到目标。
+      // 结构化载荷优先：角色卡死亡卡片与技能播报（含被动技能）都由服务端下发的载荷
+      // 驱动，载荷已经按收件人裁剪过，客户端不判断谁能看到什么。被动技能的播报是
+      // kind=information 的私密消息，所以这两条必须在私密信息卡之前判断。
+      if (message.payload?['type'] == 'death') {
+        return DeathCastCard(message: message);
+      }
       if (message.payload?['type'] == 'skill') {
         return SkillCastCard(message: message, store: store);
       }
+      // 私密信息（只发给本人）用金色卡片顶出来；全场公告用红边；其余保持灰色居中条。
+      if (message.kind == 'information') return _privateInfoCard(context);
       final alert = message.kind == 'alert';
       return Padding(
         padding:  EdgeInsets.symmetric(vertical: 3),
@@ -2357,14 +2641,22 @@ class MessageBubble extends StatelessWidget {
                             ],
                           ),
                         ),
-                      Text.rich(
-                        TextSpan(children: emojiSpans(message.text)),
-                        style: TextStyle(
-                          fontSize: 15,
-                          height: 1.35,
-                          color: mine ? context.palette.onAccent : context.palette.text,
+                      if (message.recalled)
+                        Text(
+                          mine ? '你撤回了一条消息' : '对方撤回了一条消息',
+                          style: TextStyle(color: mine
+                              ? context.palette.onAccent : context.palette.textTertiary),
+                        )
+                      else
+                        GestureDetector(
+                          onLongPress: () => _showMessageMenu(context, message, mine, store),
+                          child: Text.rich(
+                            TextSpan(children: _chatSpans(message.text,
+                                mine ? Colors.white : context.palette.accent)),
+                            style: TextStyle(fontSize: 15, height: 1.35,
+                                color: mine ? context.palette.onAccent : context.palette.text),
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),

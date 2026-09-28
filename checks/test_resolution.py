@@ -1215,9 +1215,9 @@ class NightReveal(unittest.TestCase):
         )
         game["seats"][2]["avatar_role_id"] = "meruru"
         events = command(game, HOST, "host.advance")
-        self.assertNotIn("3号玩家一张角色牌出局。", [item["text"] for item in events])
+        self.assertNotIn("3号 · 梅露露一张角色牌出局。", [item["text"] for item in events])
         self.assertFalse(game["cards"]["meruru"]["alive"])
-        self.assertEqual(game["queued_notices"], ["3号玩家一张角色牌出局。"])
+        self.assertEqual(game["queued_notices"], ["3号 · 梅露露一张角色牌出局。"])
         # 夜间结算时对外仍是出局前的位置，避免头像与出局标记提前泄露
         held = game_view(game, player(game, "1"))["seats"]
         self.assertEqual(held[2]["avatar_role_id"], "meruru")
@@ -1227,7 +1227,7 @@ class NightReveal(unittest.TestCase):
         events = command(game, HOST, "host.advance")
         # 天亮只发一条汇总：夜终死讯按席位合并，不再逐条 + 角色名各发一遍。
         self.assertIn(
-            f"第{game['day']}夜：3号玩家一张角色牌出局。",
+            f"第{game['day']}夜：3号 · 梅露露一张角色牌出局。",
             [item["text"] for item in events],
         )
         self.assertEqual(game["queued_notices"], [])
@@ -1245,7 +1245,7 @@ class NightReveal(unittest.TestCase):
             "host.damage",
             {"targets": ["meruru"], "effect": "death", "source": "coco", "reason": "测试白天出局"},
         )
-        self.assertIn("3号玩家一张角色牌出局。", [item["text"] for item in events])
+        self.assertIn("3号 · 梅露露一张角色牌出局。", [item["text"] for item in events])
         self.assertEqual(game["queued_notices"], [])
         seats = {seat["id"]: seat for seat in game_view(game, player(game, "1"))["seats"]}
         self.assertEqual(seats["3"]["previous_role_id"], "meruru")
@@ -1273,7 +1273,7 @@ class NightSummaryAndWitness(unittest.TestCase):
         events = command(game, HOST, "host.advance")
         # 3号的梅露露是当夜唯一死者：逐条死讯与夜终汇总已合并成一条。
         self.assertIn(
-            f"第{game['day']}夜：3号玩家一张角色牌出局。",
+            f"第{game['day']}夜：3号 · 梅露露一张角色牌出局。",
             [item["text"] for item in events],
         )
 
@@ -1582,7 +1582,7 @@ class NightSummaryAndWitness(unittest.TestCase):
         # 未隐藏死因的13水死亡由系统直接发固定四人目击，不产生主持人待办。
         self.assertFalse(any(item["kind"] == "suspects" for item in game["pending"]))
         death = next(item for item in game["deaths"] if item["target_card"] == "meruru")
-        self.assertIn(f"{death['seat_id']}号玩家被13水毒杀。", death["notice"])
+        self.assertIn(f"{death['seat_id']}号 · 梅露露被13水毒杀。", death["notice"])
         witness = game["witness"]
         self.assertEqual(witness["death_id"], death["id"])
         names = witness["text"].removeprefix("四名疑似凶手：").split("、")

@@ -1,4 +1,4 @@
-"""SQLite state and immutable, audience-scoped message history."""
+"""SQLite state and audience-scoped message history."""
 
 import json
 import logging
@@ -48,7 +48,8 @@ def initialize():
             game_id TEXT NOT NULL REFERENCES games(id), kind TEXT NOT NULL,
             sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, avatar_role_id TEXT,
             channel_id TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
-            audience TEXT, image_id TEXT, payload TEXT
+            audience TEXT, image_id TEXT, payload TEXT, recalled_at TEXT,
+            mention_ids TEXT NOT NULL DEFAULT '[]'
         );
         CREATE INDEX IF NOT EXISTS message_game_id ON messages(game_id, id);
         CREATE TABLE IF NOT EXISTS evidence (
@@ -94,6 +95,10 @@ def initialize():
         if message_columns and "payload" not in message_columns:
             # 结构化播报（技能名/目标/介绍）存在这一列里：旧库补列，读取时按可见范围裁剪。
             db.execute("ALTER TABLE messages ADD COLUMN payload TEXT")
+        if "recalled_at" not in message_columns:
+            db.execute("ALTER TABLE messages ADD COLUMN recalled_at TEXT")
+        if "mention_ids" not in message_columns:
+            db.execute("ALTER TABLE messages ADD COLUMN mention_ids TEXT NOT NULL DEFAULT '[]'")
         # 原游戏没有成就设计：清掉历史对局里残留的占位字段，免得状态查看器继续显示它。
         for row in db.execute("SELECT id,state FROM games").fetchall():
             state = json.loads(row["state"])
@@ -224,11 +229,13 @@ def add_message(
     audience=None,
     image_id=None,
     payload=None,
+    mention_ids=None,
 ):
     created_at = now_text()
     cursor = db.execute(
         """INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,
-           channel_id,text,created_at,audience,image_id,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+           channel_id,text,created_at,audience,image_id,payload,mention_ids)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             game_id,
             kind,
@@ -241,9 +248,19 @@ def add_message(
             None if audience is None else dumps(audience),
             image_id,
             None if payload is None else dumps(payload),
+            dumps(mention_ids or []),
         ),
     )
     return dict(db.execute("SELECT * FROM messages WHERE id=?", (cursor.lastrowid,)).fetchone())
+
+
+def recall_message(db, row):
+    db.execute(
+        """UPDATE messages SET recalled_at=?,text='',mention_ids='[]',image_id=NULL,payload=NULL
+           WHERE id=?""",
+        (now_text(), row["id"]),
+    )
+    return dict(db.execute("SELECT * FROM messages WHERE id=?", (row["id"],)).fetchone())
 
 
 def add_events(db, game_id, events):
@@ -301,6 +318,15 @@ def message_view(row, actor):
             "created_at",
         )
     }
+    recalled = bool(row["recalled_at"]) if "recalled_at" in row.keys() else False
+    result["recalled"] = recalled
+    result["mention_ids"] = (
+        json.loads(row["mention_ids"]) if not recalled and "mention_ids" in row.keys() else []
+    )
+    if recalled:
+        result["text"] = ""
+        result["sender_name"] = display_player_name(result["sender_name"])
+        return result
     if row["image_id"]:
         result["image_id"] = row["image_id"]
     # 昵称展示统一走展示名：消息留档里存的是完整昵称，只有下发时按 16 半角宽度截断。
@@ -316,11 +342,15 @@ def message_view(row, actor):
 def project_message_payload(raw, actor):
     """把消息里的结构化载荷裁剪成该身份可见的细节。
 
-    目前只有技能播报用了这类载荷。技能名与介绍是公开规则，任何能看到这条消息的人
-    都能拿到；目标是否下发由技能决定（``PUBLIC_TARGET_ABILITIES``），私密目标只有
-    声明者本人（按 ``access_ids``，与其它「挂在自己名下的私密情报」同一判据）与
-    主持人能看到；``fake``（伪装声明）与牌 id 只给主持人——伪装声明在其他人眼里
-    必须与真声明完全一致，判据只能在服务端。
+    技能播报（主动与被动）与角色卡死亡两类载荷走这里。技能名与介绍是公开规则，
+    任何能看到这条消息的人都能拿到；目标是否下发由技能决定（``PUBLIC_TARGET_ABILITIES``），
+    私密目标只有声明者本人（按 ``access_ids``，与其它「挂在自己名下的私密情报」同一判据）
+    与主持人能看到；被动技能的结果同理由 ``effect_public`` 决定；``fake``（伪装声明）
+    与牌 id 只给主持人——伪装声明在其他人眼里必须与真声明完全一致，判据只能在服务端。
+
+    死亡卡片是另一回事：载荷由 ``state.death_card_entry`` 按白名单构造，里面本来就只有
+    公开信息（席位、展示名、公开头像、是否13水），因此对每个收件人原样下发；
+    这张卡片本身发给谁，仍由 ``notify`` 的 audience 决定。
     """
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
@@ -328,6 +358,8 @@ def project_message_payload(raw, actor):
         return None
     if not isinstance(payload, dict):
         return None
+    if payload.get("type") == "death":
+        return {key: payload[key] for key in ("type", "day", "half", "deaths") if key in payload}
     if payload.get("type") != "skill":
         return payload if host_capable(actor) else None
     host = host_capable(actor)
@@ -336,6 +368,7 @@ def project_message_payload(raw, actor):
         key: payload[key]
         for key in (
             "type",
+            "mode",
             "ability",
             "ability_name",
             "role_id",
@@ -346,11 +379,14 @@ def project_message_payload(raw, actor):
             "actor_name",
             "challengeable",
             "target_public",
+            "effect_public",
         )
         if key in payload
     }
     if result.get("target_public") or host or payload.get("actor_participant_id") in access:
         result["target"] = payload.get("target")
+    if result.get("effect_public") or host or payload.get("actor_participant_id") in access:
+        result["effect"] = payload.get("effect")
     if host:
         result["fake"] = bool(payload.get("fake"))
         result["card_id"] = payload.get("card_id")
