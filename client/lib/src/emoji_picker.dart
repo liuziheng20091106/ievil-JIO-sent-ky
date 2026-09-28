@@ -1,11 +1,54 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'design.dart';
 import 'emoji.dart';
 
-/// 最近使用的表情 id：只保留本次会话内的顺序，退出应用即清空。
-/// 不落盘是有意的——本机可能先后登录多个账号，表情使用记录不属于任何对局数据。
+/// 最近使用的表情 id：最近一次使用在最前，最多 [recentEmojiLimit] 个。
+/// 落盘在 shared_preferences，重启应用、退出登录都不丢——这是本机偏好，
+/// 与账号和对局无关（同 shell.dart 的聊天设置）。
 final recentEmojiIds = <String>[];
+
+/// 「最近」分组的上限：再多也用不到，落盘的内容也就这么长。
+const int recentEmojiLimit = 16;
+
+const String recentEmojiPreferenceKey = 'emoji_recent_ids';
+
+/// 落盘用的偏好实例：由 [loadRecentEmojiIds] 在启动时注入（测试里可以没有，
+/// 那样只留内存记录）。
+SharedPreferences? _recentPreferences;
+
+/// 启动时读一次落盘的最近使用记录（main.dart 拿到偏好之后调用）。
+/// 表里认不出的 id 直接丢掉：表情总表由 temp/gen_emoji.py 重新生成过，
+/// 上一版记下的 id 在这一版可能已经不存在。
+void loadRecentEmojiIds(SharedPreferences preferences) {
+  _recentPreferences = preferences;
+  final stored =
+      preferences.getStringList(recentEmojiPreferenceKey) ?? const <String>[];
+  recentEmojiIds
+    ..clear()
+    ..addAll(
+      stored.where((id) => emojiFaceById(id) != null).take(recentEmojiLimit),
+    );
+}
+
+/// 记一次使用：置顶、去重、截断，然后落盘。由面板在点选表情时调用。
+void rememberRecentEmoji(String id) {
+  recentEmojiIds
+    ..remove(id)
+    ..insert(0, id);
+  if (recentEmojiIds.length > recentEmojiLimit) {
+    recentEmojiIds.removeRange(recentEmojiLimit, recentEmojiIds.length);
+  }
+  final preferences = _recentPreferences;
+  if (preferences == null) return;
+  unawaited(preferences.setStringList(
+    recentEmojiPreferenceKey,
+    List<String>.of(recentEmojiIds),
+  ));
+}
 
 /// 表情面板打开期间的返回拦截：返回键先收面板。
 ///
@@ -35,9 +78,20 @@ class EmojiPanelScope extends StatelessWidget {
 /// 表情面板：经典 / 超级 / 最近分组 + 名称与拼音搜索。
 /// 面板本身不持有输入框，插入动作由调用方在 [onPick] 里完成。
 class EmojiPicker extends StatefulWidget {
-  const EmojiPicker({super.key, required this.onPick, this.height = 236});
+  const EmojiPicker({
+    super.key,
+    required this.onPick,
+    this.recentFirst = false,
+    this.height = 236,
+  });
 
   final ValueChanged<EmojiFace> onPick;
+
+  /// 打开面板时默认落在「最近」分组：取值来自本机设置
+  /// （`GameStore.emojiRecentFirst`，默认开启）。没有记录时「最近」是空的，
+  /// 仍然从经典开始——分组按钮那时也不显示。
+  final bool recentFirst;
+
   final double height;
 
   @override
@@ -52,7 +106,11 @@ class _EmojiPickerState extends State<EmojiPicker> {
   ];
 
   final search = TextEditingController();
-  String group = 'classic';
+
+  /// 当前分组：只在这里（面板刚建好时）按设置与记录定一次，之后全由用户点选决定，
+  /// 设置改动不会把已经打开的面板拽走。
+  late String group =
+      widget.recentFirst && recentEmojiIds.isNotEmpty ? 'recent' : 'classic';
   String query = '';
 
   @override
@@ -82,10 +140,7 @@ class _EmojiPickerState extends State<EmojiPicker> {
   }
 
   void pick(EmojiFace face) {
-    recentEmojiIds
-      ..remove(face.id)
-      ..insert(0, face.id);
-    if (recentEmojiIds.length > 16) recentEmojiIds.removeRange(16, recentEmojiIds.length);
+    rememberRecentEmoji(face.id);
     setState(() {});
     widget.onPick(face);
   }

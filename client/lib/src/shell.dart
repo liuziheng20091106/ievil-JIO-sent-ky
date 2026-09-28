@@ -1396,6 +1396,8 @@ class _Composer extends StatelessWidget {
                 onClose: onCloseEmoji,
                 child: EmojiPicker(
                   onPick: onPickEmoji,
+                  // 本机设置：默认先给最近用过的（没记录时面板自己退回经典）。
+                  recentFirst: store.emojiRecentFirst,
                   // 小屏上给消息列表留出空间：面板最高不超过屏幕的三分之一。
                   height: (MediaQuery.sizeOf(context).height * 0.32)
                       .clamp(150.0, 236.0),
@@ -1535,8 +1537,8 @@ class _SettingsButton extends StatelessWidget {
       );
 }
 
-/// 聊天设置面板：按 Enter 发送 / 公开我的输入状态 / 自动切换到可用聊天频道。
-/// 三个开关都是本机全局偏好，改动立即持久化并即时生效。
+/// 聊天设置面板：按 Enter 发送 / 公开我的输入状态 / 自动切换到可用聊天频道 /
+/// 默认打开表情最近分组。四个开关都是本机全局偏好，改动立即持久化并即时生效。
 class _ChatSettingsSheet extends StatelessWidget {
   const _ChatSettingsSheet({required this.store});
 
@@ -1581,6 +1583,12 @@ class _ChatSettingsSheet extends StatelessWidget {
                     onChanged: store.setAutoSwitchChannel,
                     title: const Text('自动切换到可用聊天频道'),
                     subtitle: const Text('当前频道不可发言时自动切到可用频道'),
+                  ),
+                  SwitchListTile(
+                    value: store.emojiRecentFirst,
+                    onChanged: store.setEmojiRecentFirst,
+                    title: const Text('默认打开最近分组'),
+                    subtitle: const Text('表情面板先显示最近用过的；没有记录时仍从经典开始'),
                   ),
                 ],
               ),

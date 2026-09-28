@@ -92,14 +92,19 @@ class GameStore extends ChangeNotifier {
   String messageScope = 'all';
   String selectedChannelId = 'public';
 
-  /// 聊天设置：公开我的输入状态 / 自动切换到可用聊天频道 / 按 Enter 发送。
-  /// 本机全局偏好（同 release.dart 的全局键风格，不属于任何对局数据）；
-  /// 前两项默认开启，「按 Enter 发送」的默认值随平台走（见 [defaultEnterToSendFor]）。
+  /// 聊天设置：公开我的输入状态 / 自动切换到可用聊天频道 / 按 Enter 发送 /
+  /// 默认打开表情最近分组。本机全局偏好（同 release.dart 的全局键风格，不属于
+  /// 任何对局数据）；前两项与表情分组默认开启，「按 Enter 发送」的默认值随平台走
+  /// （见 [defaultEnterToSendFor]）。
   static const _typingPublicKey = 'chat_typing_public';
   static const _autoSwitchKey = 'chat_auto_switch_channel';
   static const _enterToSendKey = 'chat_enter_to_send';
+  static const _emojiRecentFirstKey = 'chat_emoji_recent_first';
   bool typingPublicEnabled = true;
   bool autoSwitchChannel = true;
+
+  /// 打开表情面板时默认落在「最近」分组（没有记录时仍是经典）。
+  bool emojiRecentFirst = true;
 
   /// 「按 Enter 发送」当前的取值：开启时输入框里按 Enter 直接发出。
   bool enterToSendEnabled = true;
@@ -125,6 +130,8 @@ class GameStore extends ChangeNotifier {
     // 没存过就按平台默认：安卓换行、桌面回车发送。
     enterToSendEnabled = preferences.getBool(_enterToSendKey) ??
         defaultEnterToSendFor(defaultTargetPlatform);
+    // 表情面板默认落在「最近」分组（没记录时面板自己退回经典）。
+    emojiRecentFirst = preferences.getBool(_emojiRecentFirstKey) ?? true;
   }
 
   void setTypingPublicEnabled(bool value) {
@@ -152,6 +159,13 @@ class GameStore extends ChangeNotifier {
     if (enterToSendEnabled == value) return;
     enterToSendEnabled = value;
     unawaited(preferences.setBool(_enterToSendKey, value));
+    notifyListeners();
+  }
+
+  void setEmojiRecentFirst(bool value) {
+    if (emojiRecentFirst == value) return;
+    emojiRecentFirst = value;
+    unawaited(preferences.setBool(_emojiRecentFirstKey, value));
     notifyListeners();
   }
 

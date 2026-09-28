@@ -9,6 +9,7 @@ import 'src/achievement_pages.dart';
 import 'src/announcement_pages.dart';
 import 'src/client_version.dart';
 import 'src/design.dart';
+import 'src/emoji_picker.dart';
 import 'src/history_pages.dart';
 import 'src/host_pages.dart';
 import 'src/models.dart';
@@ -27,6 +28,8 @@ Future<void> main() async {
   // 行动弹窗的预测性返回：注册返回手势观察者（Android 14+ 由系统送到这里）。
   PredictiveSheetBack.instance.start();
   final store = await GameStore.create();
+  // 表情面板的「最近」分组：读一次本机落盘的使用记录，之后每用一次自己回写。
+  loadRecentEmojiIds(store.preferences);
   // 「知道了 / 忽略」的记忆写在偏好里，重启后不重复弹同一条提示。
   final release = ReleaseMonitor(preferences: store.preferences);
   // 上一次应用内更新留下的安装包在这里清理（安卓：安装完成或失败后的残留）。
