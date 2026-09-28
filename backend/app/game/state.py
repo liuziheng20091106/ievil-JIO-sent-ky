@@ -220,13 +220,28 @@ def player_seat(game, actor):
     return s
 
 
+def puppet_master_card(game, card):
+    """傀儡状态里记着的那张主人牌；不判断它现在还能不能控制。"""
+    return game["cards"].get(card["states"].get("puppet") or "")
+
+
+def puppet_master_dead(game, card):
+    """主人是否已经离场：牌不存在、出局，或不再是魔女牌。
+
+    用户 2026-09-28 定的规则：梅露露死亡后傀儡当前牌立即死亡，所以这个判据要能与
+    「主人还在、只是不再是自己席位的当前牌」区分开（后者只解除控制，不处死傀儡）。
+    """
+    master = puppet_master_card(game, card)
+    return master is None or not master["alive"] or not master["witch"]
+
+
 def puppet_master(game, card):
     """当前控制该傀儡牌的魔女梅露露牌；控制关系已撤销或主人已出局时返回 None。
 
     主人还必须仍是自己席位的**当前牌**：主人换牌后它连自己的行动都提交不了，更谈不上
     代操作；这种傀儡由 :func:`orphan_puppet_cards` 判定为「无人控制」并解除。
     """
-    master = game["cards"].get(card["states"].get("puppet") or "")
+    master = puppet_master_card(game, card)
     if master is None or not master["alive"] or not master["witch"]:
         return None
     return master if current(game, owner(game, master["id"])) == master else None
@@ -246,8 +261,17 @@ def puppet_cards(game):
 
 
 def orphan_puppet_cards(game):
-    """主人已经不能控制的傀儡牌；由 engine.sync_puppet_bonds 解除并通知本人。"""
-    return [card for card in puppet_cards(game) if puppet_master(game, card) is None]
+    """控制链已经断了的傀儡牌；由 engine.sync_puppet_bonds 收拾。
+
+    两种：主人已经不能代操作（出局/失去魔女身份/不再是自己席位的当前牌），或者这张
+    牌自己已不是该席位的当前牌（控制者面板也拿不到它）。主人真的离场时那张当前牌
+    还要跟着当场出局，见 :func:`puppet_master_dead`。
+    """
+    result = []
+    for card in puppet_cards(game):
+        if puppet_master(game, card) is None or current(game, owner(game, card["id"])) != card:
+            result.append(card)
+    return result
 
 
 def release_puppet(card):

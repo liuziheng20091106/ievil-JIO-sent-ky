@@ -417,6 +417,9 @@ def millia_substitute(game, attacks, protection=()):
 # 庇护把这一击降级成负伤、玛格的爱免除它、米莉亚替死把致死一击转走，都算被指到。
 WITCH_ATTACK_CAUSES = frozenset({"knife", "extra_kill", "massacre"})
 
+# 没有对应夜间技能名的死因，在主持人日志里用的中文备注。
+DEATH_CAUSE_LABELS = {"puppet": "傀儡随主人出局"}
+
 
 def witch_witness_targets(game, attacks):
     """本夜被魔女袭击（魔女刀、额外攻击、全场攻击）指到的席位，每个席位一条。
@@ -711,7 +714,10 @@ def death_batch(game, events, preview):
             else f"{s['id']}号玩家一张角色牌出局。"
         )
         record["notice"] = notice
-        cause_label = NIGHT_ABILITIES.get(death.get("cause"), (None, death.get("cause") or ""))[1]
+        # 非夜间技能造成的死亡（处决、质疑、傀儡随主人出局等）没有技能名，按死因备注。
+        cause_label = DEATH_CAUSE_LABELS.get(death.get("cause")) or NIGHT_ABILITIES.get(
+            death.get("cause"), (None, death.get("cause") or "")
+        )[1]
         src = death.get("source_card")
         src_label = ROLES.get(src, {}).get("name", src) if src else ""
         detail = f"（{cause_label}" + (f"·{src_label}" if src_label else "") + ")" if cause_label else ""

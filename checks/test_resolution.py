@@ -36,6 +36,7 @@ from backend.app.game.resolution import (
     revive,
     treasure_protected,
     witch_witness_targets,
+    witness_size,
 )
 from backend.app.game.state import (
     ballot_complete,
@@ -49,6 +50,7 @@ from backend.app.game.state import (
     pending_nominators,
     pending_revive,
     poison_sources,
+    present,
     protection_active,
     rewind,
     save_snapshot,
@@ -1327,16 +1329,62 @@ class NightSummaryAndWitness(unittest.TestCase):
         panels = game_view(game, player(game, "3"))["self"]["puppet_controls"]
         self.assertEqual(panels, [])
 
-    def test_a_puppet_seat_has_no_night_ability_and_is_auto_confirmed(self):
-        """傀儡「不能发动技能」：带刀的角色被傀儡化后本夜无技能，也不会占着阻塞待办。
+    def test_a_puppet_keeps_only_the_witch_knife_at_night(self):
+        """傀儡不能用角色特有技能，但魔女刀不是角色技能：要暴露给控制者。
 
-        夜间不需要主人代交技能——``sync_night_confirmations`` 会把没有技能可选的席位按
-        「本夜无事可做」自动确认，所以旧版「既没有行动又占着待办」的卡死不再存在。
+        用户 2026-09-28 定案：傀儡保留 13 水与魔女刀的行动，其余角色技能一律不给；
+        没有可用技能的傀儡由 ``sync_night_confirmations`` 按「无事可做」自动确认。
         """
         game = arranged_game("night", "night")
-        # 傀儡当前牌带刀：如果 no_ability 不生效，它本夜就会拿到 night.submit。
-        game["cards"]["marg"]["witch"] = True
+        # 米莉亚同时是魔女：正常她能开刀 + 换血，傀儡化后只剩刀。
+        game["cards"]["millia"]["witch"] = True
         # 主人必须是魔女牌，否则控制关系不成立。
+        game["cards"]["meruru"]["witch"] = True
+        begin_night(game, [])
+        command(
+            game,
+            HOST,
+            "host.state",
+            {
+                "card_id": "millia",
+                "state": "puppet",
+                "value": True,
+                "master": "meruru",
+                "reason": "测试傀儡控制",
+            },
+        )
+        self.assertEqual(game["cards"]["millia"]["states"]["puppet"], "meruru")
+        self.assertTrue(game["cards"]["millia"]["states"]["no_ability"])
+        # 带刀就不能当「本夜无事可做」自动确认，控制者要在面板上代开或代确认。
+        self.assertNotIn("1", game["night"]["confirmed"])
+        self.assertTrue(
+            any(task["kind"] == "night" and task["seats"] == ["1"] for task in host_tasks(game))
+        )
+        # 原玩家没有夜间行动，控制者的傀儡面板里只有刀（换血被拿掉）。
+        self.assertEqual(actions_for(game, player(game, "1")), [])
+        puppet = next(
+            panel
+            for panel in game_view(game, player(game, "3"))["self"]["puppet_controls"]
+            if panel["seat_id"] == "1"
+        )
+        submits = [item for item in puppet["actions"] if item["id"] == "night.submit"]
+        self.assertEqual([item["payload"]["ability"] for item in submits], ["knife"])
+        controller = {**player(game, "1"), "puppet_controlled": True}
+        # 角色特有技能（换血）绕过表单提交也拒绝。
+        with self.assertRaises(GameError):
+            command(game, controller, "night.submit", {"ability": "swap", "target": "2"})
+        # 魔女刀可以代开，并按该席结算进本夜预结算。
+        command(game, controller, "night.submit", {"ability": "knife", "target": "2"})
+        self.assertTrue(
+            any(
+                action["seat_id"] == "1" and action["ability"] == "knife"
+                for action in game["night"]["actions"]
+            )
+        )
+
+    def test_a_puppet_can_still_spend_its_bottle_of_13_water(self):
+        """13水不是角色技能：傀儡手里的那瓶仍由控制者代用。"""
+        game = arranged_game("night", "night")
         game["cards"]["meruru"]["witch"] = True
         begin_night(game, [])
         command(
@@ -1351,31 +1399,69 @@ class NightSummaryAndWitness(unittest.TestCase):
                 "reason": "测试傀儡控制",
             },
         )
-        # 傀儡化同时打上「无技能」，该席本夜直接视为无事可做并自动确认。
-        self.assertEqual(game["cards"]["marg"]["states"]["puppet"], "meruru")
-        self.assertTrue(game["cards"]["marg"]["states"]["no_ability"])
-        self.assertIn("4", game["night"]["confirmed"])
-        self.assertFalse(
-            any(task["kind"] == "night" and task["seats"] == ["4"] for task in host_tasks(game))
-        )
-        # 原玩家没有夜间行动，控制者也拿不到该席的刀。
-        self.assertEqual(actions_for(game, player(game, "4")), [])
+        command(game, HOST, "host.water", {"seat_id": "4"})
         puppet = next(
             panel
             for panel in game_view(game, player(game, "3"))["self"]["puppet_controls"]
             if panel["seat_id"] == "4"
         )
-        labels = [item["id"] for item in puppet["actions"]]
-        self.assertNotIn("night.submit", labels)
-        self.assertNotIn("night.confirm", labels)
-        # 绕开表单直接提交技能同样被服务端拒绝。
-        with self.assertRaises(GameError):
-            command(
-                game,
-                {**player(game, "4"), "puppet_controlled": True},
-                "night.submit",
-                {"ability": "knife", "target": "2"},
+        self.assertIn("water.use", [item["id"] for item in puppet["actions"]])
+        command(
+            game,
+            {**player(game, "4"), "puppet_controlled": True},
+            "water.use",
+            {"target": "2"},
+        )
+        self.assertEqual(game["water"]["holders"], [])
+        self.assertTrue(
+            any(
+                attack["cause"] == "water" and attack["source_card"] == "marg"
+                for attack in game["night"]["extra_attacks"]
             )
+        )
+
+    def test_puppet_keeps_its_passive_effects(self):
+        """傀儡自身的被动效果保留：毒素光环、替死、目击名额与处决幻视都不因傀儡化失效。"""
+        game = arranged_game("discussion")
+        game["cards"]["meruru"]["witch"] = True
+        # 重排座位：让每张被检查的牌都是本席当前牌（傀儡只能控制当前牌）。
+        game["seats"][0]["cards"] = ["emma", "coco"]
+        game["seats"][1]["cards"] = ["millia", "hiro"]
+        game["seats"][2]["cards"] = ["meruru", "annan"]
+        game["seats"][3]["cards"] = ["hanna", "arisa"]
+        game["seats"][4]["cards"] = ["leia", "marg"]
+        game["seats"][5]["cards"] = ["sherry", "noah"]
+        game["seats"][6]["cards"] = ["nanoka", "honoka"]
+
+        def puppetize(card_id):
+            game["cards"][card_id]["states"]["puppet"] = "meruru"
+            game["cards"][card_id]["states"]["no_ability"] = True
+
+        # 艾玛毒素是「只要艾玛牌存活」的光环：她自己被傀儡化，同席另一张牌照旧中毒。
+        puppetize("emma")
+        self.assertEqual(poison_sources(game, game["cards"]["coco"]), ["艾玛毒素"])
+        # 米莉亚替死是自动结算的被动：被傀儡化后她的换血照旧顶掉致死一击。
+        puppetize("millia")
+        game["millia_swap"] = {"seat": "5", "day": game["day"]}
+        attacks = [
+            {"target_card": current(game, "5")["id"], "source_card": "noah", "cause": "knife"}
+        ]
+        self.assertEqual(millia_substitute(game, attacks)[0]["target_card"], "millia")
+        # 汉娜「在场」只按存活且是当前牌判定：被傀儡化后目击名单照旧是四人。
+        puppetize("hanna")
+        self.assertTrue(present(game, "hanna"))
+        self.assertEqual(witness_size(game), 4)
+        # 奈乃香的处决幻视是被动：她被傀儡化后，名单定稿时照旧自动结算一次。
+        puppetize("nanoka")
+        game["execution"] = ["noah"]
+        game["cards"]["noah"]["witch"] = True
+        events = []
+        enter_execution(game, events)
+        self.assertEqual(game["cards"]["nanoka"]["uses"].get("gaze_day"), game["day"])
+        self.assertTrue(
+            any("处决名单" in item["text"] for item in events),
+            [item["text"] for item in events],
+        )
 
     def test_a_puppet_cannot_declare_day_abilities_either(self):
         """白天技能同样不给傀儡入口：复活出来的傀儡只是主人手里的票与嘴。"""
@@ -1396,6 +1482,67 @@ class NightSummaryAndWitness(unittest.TestCase):
                 "day.skill",
                 {"ability": "duel", "target": "2"},
             )
+
+    def test_the_master_dying_kills_the_puppet_and_frees_the_player(self):
+        """梅露露死亡：傀儡当前牌立即出局；下层牌还在就恢复自主，没有就是整席出局。"""
+        game = arranged_game("discussion")
+        game["cards"]["meruru"]["witch"] = True
+        # 4号席：玛格（当前牌，被傀儡化）+ 雪莉（下层牌）。
+        game["seats"][3]["cards"] = ["marg", "sherry"]
+        game["cards"]["marg"]["states"]["puppet"] = "meruru"
+        game["cards"]["marg"]["states"]["no_ability"] = True
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {
+                "targets": ["meruru"],
+                "effect": "death",
+                "source": None,
+                "reason": "测试主人出局",
+            },
+        )
+        # 傀儡当前牌跟着出局，控制关系就此解除。
+        self.assertFalse(game["cards"]["marg"]["alive"])
+        self.assertNotIn("puppet", game["cards"]["marg"]["states"])
+        self.assertFalse(game["cards"]["marg"]["states"].get("no_ability"))
+        deaths = {(item["target_card"], item["cause"]) for item in game["deaths"]}
+        self.assertIn(("marg", "puppet"), deaths)
+        # 下层牌还在：原玩家当场拿回自己的行动与权限。
+        self.assertEqual(current(game, "4")["id"], "sherry")
+        self.assertIn("player.surrender", [item["id"] for item in actions_for(game, player(game, "4"))])
+        self.assertNotIn(
+            "marg", [item["target_card"] for item in game["deaths"] if item["cause"] != "puppet"]
+        )
+        # 主人后来被复活也不会重新拉成傀儡。
+        command(
+            game,
+            HOST,
+            "host.state",
+            {"card_id": "meruru", "state": "alive", "value": True, "reason": "测试主人复活"},
+        )
+        self.assertNotIn("puppet", game["cards"]["marg"]["states"])
+
+    def test_the_master_dying_without_a_lower_card_eliminates_the_seat(self):
+        """傀儡席没有下层牌时，主人一死这张牌就整席出局。"""
+        game = arranged_game("discussion")
+        game["cards"]["meruru"]["witch"] = True
+        game["seats"][3]["cards"] = ["marg", "sherry"]
+        # 先把下层牌挪走，只留被傀儡化的当前牌。
+        game["seats"][3]["cards"] = ["marg"]
+        game["seats"][0]["cards"] = ["millia", "emma", "sherry"]
+        game["cards"]["marg"]["states"]["puppet"] = "meruru"
+        game["cards"]["marg"]["states"]["no_ability"] = True
+        command(
+            game,
+            HOST,
+            "host.damage",
+            {"targets": ["meruru"], "effect": "death", "source": None, "reason": "测试主人出局"},
+        )
+        self.assertFalse(game["cards"]["marg"]["alive"])
+        self.assertIsNone(current(game, "4"))
+        self.assertEqual(actions_for(game, player(game, "4")), [])
+
 
     def test_revive_is_limited_to_the_night_it_belongs_to(self):
         """只可复活「当夜」的死亡：天亮后死讯已公示、下层牌已登场，不能再回滚。"""
@@ -2148,7 +2295,7 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["public"]["speaker"], "3")
 
     def test_a_puppet_whose_master_died_gets_its_own_voice_back(self):
-        """主人出局后控制关系立即解除：原玩家拿回自己的发言与行动，轮次不再跳过该席。"""
+        """主人出局后傀儡当前牌当场出局：下层牌顶上来，原玩家自己接着发言。"""
         game = arranged_game("speech")
         game["cards"]["meruru"]["witch"] = True
         game["cards"]["marg"]["states"]["puppet"] = "meruru"
@@ -2159,7 +2306,7 @@ class SpeechOrder(unittest.TestCase):
             command(game, player(game, sid), "speech.done", {})
         self.assertEqual(game["public"]["speaker"], "4")
         self.assertEqual(outstanding_seats(game), ["4"])
-        # 主人出局：同一条命令里解除傀儡，4号当场拿回自己的发言按钮。
+        # 主人出局：同一条命令里傀儡当前牌跟着出局，4号的下层牌顶上。
         command(
             game,
             HOST,
@@ -2171,8 +2318,10 @@ class SpeechOrder(unittest.TestCase):
                 "reason": "测试傀儡主人出局",
             },
         )
+        self.assertFalse(game["cards"]["marg"]["alive"])
         self.assertNotIn("puppet", game["cards"]["marg"]["states"])
         self.assertFalse(game["cards"]["marg"]["states"].get("no_ability"))
+        self.assertEqual(current(game, "4")["id"], "sherry")
         self.assertIn(
             "speech.done", [item["id"] for item in actions_for(game, player(game, "4"))]
         )

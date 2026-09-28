@@ -12,6 +12,7 @@ from .actions import (
     day_fake_allowed,
     discussion_end_reached,
     evidence_public_text,
+    night_abilities,
     outstanding_seats,
 )
 from .catalog import (
@@ -52,7 +53,6 @@ from .state import (
     apply_honoka_disguise,
     audience,
     can_use_ability,
-    can_use_card,
     card_actionable,
     chat_event,
     check_winner,
@@ -84,6 +84,7 @@ from .state import (
     pending,
     player_seat,
     present,
+    puppet_master_dead,
     release_puppet,
     require,
     rewind,
@@ -446,12 +447,15 @@ def auto_gaze(game, events):
     用户 2026-09-27 确认：不再需要（也不允许）她声明发动，所以这里不由玩家点按触发——
     原来的实现只在处决阶段给一个 5 秒窗口，实战里根本点不到。中毒时照旧必定收到一条结果，
     真假由 ``information()`` 的那一次信息骰决定，且不告诉她掷骰结果。
+
+    用户 2026-09-28 追加：**傀儡自身的被动效果保留**，所以这里只看「她的奈乃香牌在场且
+    是当前牌」（`present`）。她被傀儡化或失去技能时，主动技能照旧不发，但这条自动结算
+    仍然生效；已出局或不是当前牌的奈乃香才没有它。
     """
     card = game["cards"].get("nanoka")
     if not card or card["uses"].get("gaze_day") == game["day"]:
         return
-    # 傀儡、失去技能、已出局或不是本席当前牌的奈乃香都没有这个技能。
-    if not can_use_card(game, card):
+    if not present(game, "nanoka"):
         return
     card["uses"]["gaze_day"] = game["day"]
     truth = any(game["cards"][cid]["witch"] for cid in game["execution"])
@@ -696,8 +700,12 @@ def advance(game, events):
     if game.pop("rewound_night", False):
         # 本阶段内的预结算触发了希罗回溯：时间线已换掉，不得再写阶段/快照/日志。
         return
-    # 夜间预结算/处决判死发生在本函数里：主人出局后要立刻解除傀儡（见 sync_puppet_bonds）。
+    # 夜间预结算/处决判死发生在本函数里：主人出局后傀儡当前牌要跟着当场出局
+    # （见 sync_puppet_bonds）。
     sync_puppet_bonds(game, events)
+    if game.pop("rewound_night", False):
+        # 傀儡当前牌是希罗：这次即时出局又触发了一次回溯，同样不能再写阶段/快照。
+        return
     game["warnings"] = {}
     game["deadline"] = None
     # 顺序发言的30秒倒计时随阶段进出：刚进入发言阶段就为第一位计时，离开即清除。
@@ -1302,10 +1310,11 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         ability = data["ability"]
         cid = game["night"]["actors"][sid]
         card = game["cards"][cid]
-        # 被傀儡化或失去技能的牌本夜没有技能可选（行动表里也不会出现这些入口），
-        # 这里再挡一道：主持人代操作（by_host）不受限，那是纠错通道。
+        # 本夜能用的行动必须在这张牌的技能表里：傀儡只剩魔女刀（13 水不走这里），
+        # 失去技能/被傀儡化的牌不会出现在行动表上，这里再挡一道。主持人代操作
+        # （by_host）不受限，那是纠错通道。
         require(
-            by_host or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            by_host or ability in night_abilities(game, card),
             "傀儡与失去技能的角色不能发动技能",
         )
         target = current(game, data["target"]) if data.get("target") else None
@@ -1885,14 +1894,38 @@ def command_log_text(game, actor, action, data, *, by_host=False):
 
 
 def sync_puppet_bonds(game, events):
-    """解除已经无人能控制的傀儡：主人出局/不再是当前牌时，原玩家立即恢复自主操作。
+    """收拾傀儡控制链：主人离场时傀儡当前牌当场出局，其余断链的傀儡直接解除。
 
-    傀儡机制要求主人「代其投票、发言、行动与私信」（见 state.puppet_master 与
-    puppet_action_panels）。主人离场后这条链路再也走不通，若只把控制关系判成无效，
-    留下的就是一个既不能投票、也不能发言、界面上还一直写着「由魔女梅露露代为行动」
-    的活人。这里按解除处理：清掉傀儡状态与「无技能」标记并告知本人，之后它是一张
-    普通牌。解除是永久的——主人后来被复活也不会把已经恢复自主的玩家再次拉成傀儡。
+    用户 2026-09-28 定案：**梅露露死亡后傀儡当前牌立即死亡**——下层牌还在就由原玩家
+    恢复自主操作，没有下层牌就是整席出局。死亡走标准伤害管线（``damage_preview`` +
+    ``apply_damage``），因此死亡记录、半天出局、下层登场与公告口径都和别的出局一致，
+    那张牌的状态也在 ``death_batch`` 里顺带解除。
+
+    主人只是「不再是自己席位的当前牌」（没有真的离场）时只解除控制、不处死傀儡；同一
+    半天已经出过一张牌的席位受「半天一牌」限制，杀不掉时也退化为解除。
     """
+    doomed = [
+        card
+        for card in orphan_puppet_cards(game)
+        if puppet_master_dead(game, card)
+        and card["alive"]
+        and current(game, owner(game, card["id"])) == card
+    ]
+    if doomed:
+        attacks = [
+            {
+                "target_card": card["id"],
+                "source_card": None,
+                "cause": "puppet",
+                # 「立即死亡」不吃庇护降级；玛格的爱与希罗回溯仍按各自规则参与结算。
+                "unconditional": True,
+            }
+            for card in doomed
+        ]
+        if apply_damage(game, events, damage_preview(game, attacks)):
+            # 傀儡当前牌是希罗：这次即时出局触发了回溯，时间线已换掉，不能再按
+            # 旧名单解除状态（那张傀儡牌可能已经不存在了）。
+            return
     for card in orphan_puppet_cards(game):
         holder = owner(game, card["id"])
         was_active = card["alive"] and current(game, holder) == card
@@ -1910,9 +1943,6 @@ def sync_puppet_bonds(game, events):
 def apply_command(game, actor, action, payload, *, by_host=False):
     require(game["status"] != "ended", "对局已结束，不能再操作")
     events = []
-    # 先解除「主人已经离场」的傀儡（例如主持人在别的入口改了状态、或旧存档带过来的）：
-    # 行动表与校验都按解除后的牌面算，否则刚恢复自主的玩家会拿不到自己的行动。
-    sync_puppet_bonds(game, events)
     validate_command(game, actor, action, payload)
     if actor["kind"] == "host":
         host_command(game, events, action, payload)
@@ -1928,6 +1958,7 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             events,
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
         )
+    # 这条命令可能杀掉了主人：傀儡当前牌跟着出局（见 sync_puppet_bonds）。
     sync_puppet_bonds(game, events)
     sync_speaker(game, events)
     sync_auto_advance(game)

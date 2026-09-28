@@ -127,7 +127,7 @@ DESCRIPTIONS = {
     "execution.confirm": "收手并确认，进入处决结算；剩余子弹不再使用。",
     "photo.permission": "可可赠送的照片：设置是否允许她查看你的夜间行动。",
     "water.use": "用掉本夜的一瓶13水并立即指定目标，毒杀直接进入本夜预结算，无需主持人确认。",
-    "meruru.revive": "魔女化梅露露复活当夜由自己击杀的牌；复活者是无投票权、无技能的傀儡，该次死亡的公告与死因一并撤销（被魔女刀等袭击击中的目击照发）。",
+    "meruru.revive": "魔女化梅露露复活当夜由自己击杀的牌；复活者是无投票权、不能发动角色技能的傀儡（被动效果与手里的13水、魔女刀仍由主人代用），该次死亡的公告与死因一并撤销（被魔女刀等袭击击中的目击照发）；梅露露出局时傀儡当前牌立即跟着出局。",
     "evidence.submit": "提交夜间遗留证物；公开范围由主持人裁定。",
     "player.surrender": "私信主持人申请本阵营交牌；未满足集体条件前继续游戏。",
     "discussion.request_end": "提交一次结束自由发言的请求；六个不同席位提交后10秒自动进入提名。",
@@ -483,15 +483,16 @@ def day_fake_allowed(game, card, ability):
 
 
 def night_abilities(game, card):
-    """该牌本夜可选的技能；失去技能（含傀儡）的牌一个技能都没有。
+    """该牌本夜可选的技能；失去技能（含傀儡）的牌只剩「魔女刀」。
 
-    夜间行动本身仍由控制者代确认，但傀儡「不能发动技能」——回空列表之后
-    :func:`sync_night_confirmations` 会把它当作「本夜无事可做」自动确认，
-    既不会卡住阶段，也不会让傀儡替主人多打一刀。
+    用户 2026-09-28 定案：傀儡不能使用**角色特有技能**，但魔女刀不是角色技能——魔女
+    傀儡的刀要暴露给控制者（13 水同理，由 water.use 单独放行，不经过这里）。回空列表
+    之后 :func:`sync_night_confirmations` 会把没有技能可选的席位按「本夜无事可做」自动
+    确认，所以好牌傀儡不会既没有行动又占着阻塞待办。
     """
-    if card["states"].get("no_ability"):
-        return []
     role, witch, uses = card["role_id"], card["witch"], card["uses"]
+    if card["states"].get("no_ability"):
+        return ["knife"] if witch else []
     abilities = ["knife"] if witch else []
     if role == "emma":
         # 寻宝是未魔女化时的普通技能：魔女化后只剩全场攻击（不能放弃）。
@@ -1435,7 +1436,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             result.append(
                 action(
                     "meruru.revive",
-                    "复活当夜所杀者为无投票权、无技能傀儡",
+                    "复活当夜所杀者为无角色技能的傀儡",
                     [
                         field(
                             "death_id",

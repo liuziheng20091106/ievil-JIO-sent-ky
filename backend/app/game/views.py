@@ -323,7 +323,13 @@ def status_cards(game, own):
         )
     for card in cards:
         if card["states"].get("puppet"):
-            add("puppet", "danger", "傀儡", "不能投票，也不能发动角色技能。")
+            add(
+                "puppet",
+                "danger",
+                "傀儡",
+                "不能投票，也不能发动角色技能；被动效果保留，13水与魔女刀由主人代用。"
+                "主人出局时这张牌立即出局。",
+            )
         if card["role_id"] == "noah":
             if card["uses"].get("rain"):
                 add("noah_rain", "info", "诺亚下雨", "本局下雨已使用。")
