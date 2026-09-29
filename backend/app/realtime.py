@@ -10,6 +10,7 @@ from starlette.websockets import WebSocketState
 
 from . import auth, storage, views
 from .game import expire_warnings, run_auto_advance, run_speech_timer, touch_speech_timer
+from .game import clock as game_clock
 from .game.state import controlled_cards, owner
 from .game.views import seat_chat
 
@@ -333,23 +334,36 @@ async def clock():
                         peer.last_ping = stamp
                 for game_id in dropped:
                     publish(game_id)
-                with storage.connect() as db:
-                    ids = [
-                        row["id"]
-                        for row in db.execute("SELECT id FROM games WHERE status != 'ended'")
-                    ]
-                for game_id in ids:
-                    with storage.transaction() as db:
-                        game = storage.load_game(db, game_id)
-                        previous = game["version"]
-                        events = expire_warnings(game, time.time())
-                        events += run_speech_timer(game, time.time())
-                        events += run_auto_advance(game, time.time())
-                        changed = game["version"] != previous
-                        if changed:
-                            storage.save_game(db, game)
-                            rows = storage.add_events(db, game_id, events)
-                    if changed:
-                        publish(game_id, rows)
+                for game_id, rows in run_timers():
+                    publish(game_id, rows)
         except Exception:
             logger.exception("计时任务失败；保留原状态并在下次检查重试")
+
+
+def run_timers(now=None):
+    """对所有未结束的对局跑一次计时：警告超时、顺序发言到点、自动推进。
+
+    返回 ``[(对局 id, 这次新增的消息行), ...]``。生产路径由 :func:`clock` 每秒调用
+    一次，时间取自游戏时钟（默认真实墙钟）；检查里可以装上假时钟直接驱动它，
+    把 5 秒 / 30 秒 / 10 秒的倒计时一次性推到期，不必真实等待。
+    """
+    stamp = game_clock.now() if now is None else now
+    with storage.connect() as db:
+        ids = [row["id"] for row in db.execute("SELECT id FROM games WHERE status != 'ended'")]
+    updated = []
+    for game_id in ids:
+        with storage.transaction() as db:
+            game = storage.load_game(db, game_id)
+            if not game:
+                continue
+            previous = game["version"]
+            events = expire_warnings(game, stamp)
+            events += run_speech_timer(game, stamp)
+            events += run_auto_advance(game, stamp)
+            changed = game["version"] != previous
+            if changed:
+                storage.save_game(db, game)
+                rows = storage.add_events(db, game_id, events)
+        if changed:
+            updated.append((game_id, rows))
+    return updated

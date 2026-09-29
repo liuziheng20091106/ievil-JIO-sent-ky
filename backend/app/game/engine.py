@@ -2,8 +2,8 @@
 
 from copy import deepcopy
 from random import SystemRandom
-from time import time
 
+from . import clock
 from .actions import (
     CHALLENGE_PHASES,
     actions_for,
@@ -354,7 +354,7 @@ def sync_speech_timer(game, now=None, reset=False):
         changed = public.pop("speech_deadline", None) is not None
         public.pop("speech_deadline_seat", None)
         return changed
-    now = time() if now is None else now
+    now = clock.now() if now is None else now
     if reset or public.get("speech_deadline_seat") != speaker or not public.get("speech_deadline"):
         public["speech_deadline"] = now + SPEECH_TURN_SECONDS
         public["speech_deadline_seat"] = speaker
@@ -383,7 +383,7 @@ def run_speech_timer(game, now=None):
     """
     if game["status"] != "playing":
         return []
-    now = time() if now is None else now
+    now = clock.now() if now is None else now
     events = []
     # 当前发言人若已无人可操作（出局、换牌），先按既有规则顺延；顺延会重建倒计时。
     sync_speaker(game, events)
@@ -1112,7 +1112,7 @@ def host_command(game, events, action, data):
             "该席位当前没有可超时的待确认操作",
         )
         for sid in targets:
-            game["warnings"][sid] = time() + 30
+            game["warnings"][sid] = clock.now() + 30
         game["deadline"] = min(game["warnings"].values())
         if len(targets) > 1:
             notify(
@@ -2026,16 +2026,16 @@ def auto_advance_ready(game):
 def sync_auto_advance(game):
     """没人在等的时候开始倒计时；自由发言结束请求用 10 秒，其余阶段 5 秒。"""
     if discussion_end_ready(game):
-        game["public"].setdefault("auto_advance_at", time() + DISCUSSION_END_DELAY)
+        game["public"].setdefault("auto_advance_at", clock.now() + DISCUSSION_END_DELAY)
     elif auto_advance_ready(game):
-        game["public"].setdefault("auto_advance_at", time() + AUTO_ADVANCE_DELAY)
+        game["public"].setdefault("auto_advance_at", clock.now() + AUTO_ADVANCE_DELAY)
     else:
         game["public"].pop("auto_advance_at", None)
 
 
 def run_auto_advance(game, now=None):
     """倒计时到点时替主持人推进；条件不成立或推进被拒时撤销倒计时。"""
-    now = time() if now is None else now
+    now = clock.now() if now is None else now
     deadline = game["public"].get("auto_advance_at")
     if not deadline or deadline > now or game["status"] != "playing":
         return []
@@ -2146,7 +2146,7 @@ def force_advance(game, events):
 
 
 def expire_warnings(game, now=None):
-    now = time() if now is None else now
+    now = clock.now() if now is None else now
     expired = [sid for sid, deadline in game["warnings"].items() if deadline <= now]
     if not expired or game["status"] != "playing":
         return []

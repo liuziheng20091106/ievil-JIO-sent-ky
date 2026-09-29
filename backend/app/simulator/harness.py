@@ -57,6 +57,8 @@ class Harness:
         host_brain=True,
         verbose=False,
         io=None,
+        clock=None,
+        fast_forward=True,
     ):
         self.client = client
         self.io = io
@@ -80,6 +82,9 @@ class Harness:
             log=self.log,
             io=io,
             verbose=verbose,
+            # 时钟与快进都由调用方决定：检查里可以换成假时钟，不必真实等倒计时。
+            clock=clock,
+            fast_forward=fast_forward,
         )
 
     def _seat_players(self, seed, policies):

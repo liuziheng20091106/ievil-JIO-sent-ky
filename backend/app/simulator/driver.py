@@ -10,11 +10,28 @@
 import time
 from dataclasses import dataclass, field
 
+from ..game import clock as game_clock
 from .client import ProtocolError, ProtocolClient, VersionConflict
 from .policy import Decision, HeuristicPolicy
 
 MAX_STEPS = 4000
 MAX_SECONDS = 300.0
+
+# 等系统自己推进时的预算与轮询间隔：默认（真实时钟）就是真实等待 8 秒、每 0.2 秒看一次。
+# 换掉注入的时钟就能跳过这段等待（见 ``Simulation.clock``）。
+AUTO_ADVANCE_WAIT_SECONDS = 8.0
+AUTO_ADVANCE_POLL_SECONDS = 0.2
+
+
+class SystemClock:
+    """默认时钟：时间读游戏时钟（真实墙钟），「等待」就是真实 sleep。"""
+
+    def now(self):
+        return game_clock.now()
+
+    def sleep(self, seconds):
+        time.sleep(seconds)
+
 
 # 服务端的裁定报错文案用的是角色中文名（例如「名单必须包含汉娜」）；
 # 修正名单时要把文案里点名的角色翻译回角色 id。
@@ -293,6 +310,7 @@ class Simulation:
         max_seconds=MAX_SECONDS,
         verbose=False,
         fast_forward=True,
+        clock=None,
     ):
         self.roster = roster
         self.host_brain = host_brain
@@ -302,6 +320,8 @@ class Simulation:
         self.max_seconds = max_seconds
         self.verbose = verbose
         self.fast_forward = fast_forward
+        # 等系统自动推进用的时钟：默认真实等待；检查里可以换成假时钟把等待跳过。
+        self.clock = clock if clock is not None else SystemClock()
         self.steps = 0
         self.host_actions = 0
 
@@ -455,6 +475,9 @@ class Simulation:
         这是真实规则的等待：``AUTO_PHASES`` 里无人待办时由系统倒计时推进。
         模拟器可以选择等（更贴近真实节奏）或直接由主持人推进（更快），
         ``fast_forward`` 控制后者，跑批时用它把单局时间从分钟级压到秒级。
+
+        等待本身走注入的时钟：默认（``SystemClock``）是真实 8 秒预算 + 0.2 秒轮询，
+        与改造前一致；换成假时钟就是纯粹的时间跳跃，真实一秒也不花。
         """
         self.roster.host.refresh()
         view = self.roster.host.view
@@ -469,9 +492,9 @@ class Simulation:
         ready_at = view["public"].get("auto_advance_at")
         if ready_at is None and not any(t["kind"] == "advance" for t in tasks):
             return False
-        deadline = time.monotonic() + 8.0
-        while time.monotonic() < deadline:
-            time.sleep(0.2)
+        deadline = self.clock.now() + AUTO_ADVANCE_WAIT_SECONDS
+        while self.clock.now() < deadline:
+            self.clock.sleep(AUTO_ADVANCE_POLL_SECONDS)
             self.roster.host.refresh()
             if self.roster.host.view["version"] != view["version"]:
                 return True
@@ -519,6 +542,7 @@ def run_simulation(
     max_steps=MAX_STEPS,
     max_seconds=MAX_SECONDS,
     verbose=False,
+    clock=None,
 ) -> SimulationResult:
     simulation = Simulation(
         roster,
@@ -528,6 +552,7 @@ def run_simulation(
         max_steps=max_steps,
         max_seconds=max_seconds,
         verbose=verbose,
+        clock=clock,
     )
     return simulation.run()
 
