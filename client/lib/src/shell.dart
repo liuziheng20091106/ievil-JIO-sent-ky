@@ -2721,9 +2721,23 @@ class MessageBubble extends StatelessWidget {
   /// 本机时区的精简时间；解析失败时返回空串，不显示原始时间串。
   String get _time => formatMessageTime(message.createdAt);
 
-  /// 系统消息在正文后附一个精简时间，方便对照阶段变化。
-  String get _systemText =>
-      _time.isEmpty ? message.text : '${message.text} · $_time';
+  /// 插件公告只读公开文案；载荷不完整时仍显示原有公告正文。
+  String get _systemText {
+    var text = message.text;
+    final payload = message.payload;
+    if (message.kind == 'alert' && payload?['type'] == 'plugin') {
+      final name = payload?['name'];
+      final version = payload?['version'];
+      final description = payload?['description'];
+      if (name is String && name.isNotEmpty &&
+          (version is String || version is int) &&
+          '$version'.isNotEmpty && description is String) {
+        text = '规则插件 · $name · v$version';
+        if (description.isNotEmpty) text += '\n$description';
+      }
+    }
+    return _time.isEmpty ? text : '$text · $_time';
+  }
 }
 
 /// 「请求操作」红色大警告框：自己的行动卡住流程时由服务端下发，催促玩家完成。

@@ -124,7 +124,7 @@ class SimulatorCase(unittest.TestCase):
                 for descriptor in actor.client.available("night.submit")
             ]
             self.assertTrue(submits, "首夜没有任何席位获得夜间行动")
-            actor, descriptor = submits[0]
+            actor, _ = submits[0]
             actor.client.refresh()
             decision = actor.policy.decide(actor.client)
             self.assertIsNotNone(decision, f"{actor.seat_id}号拿到行动却无法决策")
@@ -385,10 +385,9 @@ class SimulatorCase(unittest.TestCase):
         self.assertEqual(client.view, view)
 
     def client(self):
-        client = TestClient(
+        return TestClient(
             app, base_url="http://testserver", headers={"Origin": "http://testserver"}
         )
-        return client
 
 
 if __name__ == "__main__":

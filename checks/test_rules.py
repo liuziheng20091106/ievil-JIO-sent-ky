@@ -395,7 +395,7 @@ def staged_game(day=3, half="night", phase="witch", faction=("1", "2")):
     for actor in actors:
         apply_command(game, actor, "lobby.ready", {})
     apply_command(game, HOST, "host.start", {})
-    for seat, pair in zip(game["seats"], STAGED_PAIRS):
+    for seat, pair in zip(game["seats"], STAGED_PAIRS, strict=True):
         seat["cards"] = list(pair)
     for card in game["cards"].values():
         card["alive"] = True

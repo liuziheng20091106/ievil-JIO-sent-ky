@@ -10,6 +10,7 @@ class Input(BaseModel):
 
 class Create(Input):
     codex: list[str] = Field(min_length=11, max_length=11)
+    rule_plugins: list[str] | None = None
 
 
 class HostAuthorization(Input):
@@ -101,6 +102,7 @@ class ChannelRef(Input):
 
 class OpenJoin(Input):
     open: StrictBool
+
 
 class Mute(Input):
     participant_id: str

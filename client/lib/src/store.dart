@@ -795,14 +795,17 @@ class GameStore extends ChangeNotifier {
     _inviteBaseline = invites.map((invite) => invite.id).toSet();
   }
 
-  /// 建局必须由主持人先确认 11 名魔典角色。
-  Future<void> createGame(List<String> codex) async {
+  /// 建局必须由主持人先确认魔典与可选规则插件。
+  Future<void> createGame(
+    List<String> codex, {
+    required List<String> rulePlugins,
+  }) async {
     if (api == null || !actor!.isHost || writeBusy) return;
     writeBusy = true;
     error = null;
     notifyListeners();
     try {
-      final created = await api!.createGame(codex);
+      final created = await api!.createGame(codex, rulePlugins: rulePlugins);
       gameId = created.id;
       view = created;
       await preferences.setString(_gameKey, gameId!);

@@ -4,7 +4,7 @@ import hashlib
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from . import storage
 
@@ -28,7 +28,7 @@ HOST_ACHIEVEMENT_LIMITS = {3: 3, 4: 4, 5: 10}
 
 
 def now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def now_text():

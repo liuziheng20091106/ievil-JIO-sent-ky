@@ -185,7 +185,7 @@ class HistoryFlow(unittest.TestCase):
 
     def test_record_keeps_both_role_cards_and_is_idempotent(self):
         game = create_game(DEFAULT_CODEX)
-        for seat, pair in zip(game["seats"], PAIRS):
+        for seat, pair in zip(game["seats"], PAIRS, strict=True):
             seat.update(cards=list(pair), occupant_id="p" + seat["id"], name="玩家" + seat["id"])
         game["status"] = "ended"
         game["result"] = {"winner": "good", "reason": "测试宣判", "personal_losses": ["p1"]}

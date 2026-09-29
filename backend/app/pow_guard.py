@@ -99,7 +99,7 @@ def verify_solution(token: str, nonce) -> bool:
     age = time.time() * 1000 - issued_at
     if not 0 <= age <= _TOKEN_TTL_SECONDS * 1000:
         return False
-    digest = hashlib.sha256(f"{token}{nonce}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{token}{nonce}".encode()).hexdigest()
     return digest.startswith("0" * level)
 
 

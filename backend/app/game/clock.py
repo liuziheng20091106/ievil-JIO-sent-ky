@@ -36,7 +36,7 @@ def now():
 
 def set_impl(impl):
     """替换时钟实现（传 ``None`` 恢复真实墙钟）；返回被替换掉的旧实现便于还原。"""
-    global _impl
+    global _impl  # noqa: PLW0603 - 时钟注入点只有这一个，模块级 _impl 是有意的设计
     previous = _impl
     _impl = _system_now if impl is None else impl
     return previous

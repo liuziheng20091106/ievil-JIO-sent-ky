@@ -30,7 +30,7 @@ def arranged_game():
     for seat in game["seats"]:
         apply_command(game, player(game, seat["id"]), "lobby.ready", {})
     game.update(status="playing", phase="discussion", half="day", day=2)
-    for seat, pair in zip(game["seats"], PAIRS):
+    for seat, pair in zip(game["seats"], PAIRS, strict=True):
         seat.update(cards=list(pair), occupant_id="p" + seat["id"], ready=True)
     return game
 

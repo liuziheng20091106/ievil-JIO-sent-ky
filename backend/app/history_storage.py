@@ -14,7 +14,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from . import storage
 from .game.state import display_player_name, host_label
@@ -27,7 +27,7 @@ DEFAULT_PAGE = 20
 
 
 def now_text():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @contextmanager

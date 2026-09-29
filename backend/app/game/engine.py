@@ -468,9 +468,13 @@ def open_vote(game, events):
     # 不会让已经下发到玩家表单上的票数门槛在计票时悄悄变掉（见 state.vote_denominator）。
     frozen = game.get("vote_freeze") or {}
     if frozen.get("day") != game["day"] or not frozen.get("denominator"):
+        eligibility = {}
+        voters = eligible_voters(game, eligibility)
         game["vote_freeze"] = {
             "day": game["day"],
-            "denominator": len(eligible_voters(game)),
+            "denominator": len(voters),
+            "excluded_puppets": eligibility["excluded_puppets"],
+            "excluded_puppet_seats": eligibility["excluded_puppet_seats"],
         }
     game["public"]["votes"] = {
         "candidates": [{"seat_id": item["seat_id"], "card_id": item["card_id"]} for item in rounds],
@@ -512,6 +516,16 @@ def close_vote(game, events):
     # 防御性兜底：分母为 1 时 floor(n/2)＝0 会「0 票通过」，实战到不了（六个席位没有
     # 当前牌时 A、B 必然已整席出局、对局早就结束），但门槛至少是 1 票更稳妥。
     threshold = max(1, n // 2) if duel else n // 2 + 1
+    tally = {
+        "yes": yes,
+        "denominator": n,
+        "threshold": threshold,
+        "duel": duel,
+        "candidate": nominee["seat_id"],
+        "excluded_puppets": (game.get("vote_freeze") or {}).get("excluded_puppets", 0),
+    }
+    plugins.emit(game, events, "vote_tally", tally)
+    yes, n, threshold = tally["yes"], tally["denominator"], tally["threshold"]
     passed = yes >= threshold
     # 投票期间某人可能已经出局（主持人裁定、魔女希罗主动出局等）。轮次表为了不让索引
     # 错位不能中途删候选，但已经不在场的牌不能再被记成「通过处决」并公示一次。
@@ -734,7 +748,7 @@ def execute_declaration(game, events, declaration):
     if target:
         require(target_card is not None, "声明目标已不在场，请停止声明并重新裁定")
     module = next(
-        module for module in plugins.enabled(game) if module.ID == DAY_ABILITIES[ability][0]
+        module for module in plugins.enabled(game) if DAY_ABILITIES[ability][0] == module.ID
     )
     module.execute_declaration(game, events, declaration, target_card)
     declaration["executed"] = True
@@ -910,22 +924,6 @@ def host_command(game, events, action, data):
             all(s["occupant_id"] and s["ready"] for s in game["seats"]),
             "需要7名玩家全部入座、确认上下牌并准备",
         )
-        selected = data.get("rule_plugins", [])
-        require(isinstance(selected, list), "附加规则选择无效")
-        available = {module.ID: module for module in plugins.optional()}
-        require(
-            len(selected) == len(set(selected)) and all(pid in available for pid in selected),
-            "附加规则选择无效",
-        )
-        enabled_ids = {entry["id"] for entry in game["rule_plugins"]} | set(selected)
-        require(
-            all(set(available[pid].DEPENDS) <= enabled_ids for pid in selected), "附加规则缺少依赖"
-        )
-        game["rule_plugins"] = [
-            {"id": module.ID, "version": module.VERSION}
-            for module in plugins.REGISTRY
-            if module.ID in enabled_ids
-        ]
         for s in game["seats"]:
             s["avatar_role_id"] = current(game, s)["role_id"]
         honoka_seat = owner(game, "honoka")
@@ -951,6 +949,15 @@ def host_command(game, events, action, data):
         )
         save_snapshot(game)
         notify(game, events, "所有上下牌已锁定，对局开始。")
+        for module in plugins.enabled(game):
+            detail = plugins.info(module)
+            notify(
+                game,
+                events,
+                f"本局规则：{detail['name']} v{detail['version']}\n{detail['description']}",
+                alert=True,
+                payload={"type": "plugin", **detail},
+            )
     elif action == "host.advance":
         force_advance(game, events)
     elif action == "host.auto":

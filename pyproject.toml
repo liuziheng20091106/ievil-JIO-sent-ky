@@ -3,4 +3,41 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+# 只收「能逮到真 bug、或确有可读性收益」的规则族。这里不做风格统一，也不做类型检查：
+# 规则层是字符串键的 dict + SQLite JSON 往返，静态类型在这里证明不了任何东西。
+select = [
+    "E4",  # 原有：import 位置
+    "E7",  # 原有：语句层问题
+    "E9",  # 原有：语法/运行期必然出错
+    "F",   # 原有：未定义名、未用导入与变量
+    "B",   # bugbear：可变默认值、zip/batched 缺 strict、循环里改迭代对象
+    "BLE", # 盲 except（代码里已有 # noqa: BLE001 的用法）
+    "C4",  # 推导式冗余
+    "FURB",# 单元素成员测试等
+    "PLW", # pylint 警告类：冗余 lambda、循环变量被覆盖、subprocess 漏 check
+    "RET", # 返回值前后不一致
+    "RUF", # ruff 自有规则
+    "SIM", # 等价但更简的写法
+    "UP",  # pyupgrade：按 target-version 采用现代写法（含 PEP 758 的无括号 except）
+]
+ignore = [
+    # 中文全角标点是注释与玩家文案的正常内容，不是「易混字符」：全开会让全仓库多出
+    # 4300+ 条噪声（RUF001/002/003 分别对应字符串/文档串/注释）。
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # [x] + y 与 [x, *y] 完全等价，纯风格，不值得为它动 6 处规则代码。
+    "RUF005",
+    # 下面四条 SIM 都是「能写更短」，没有一条能逮 bug，而在这个仓库里短的那版往往更差：
+    # - SIM105：contextlib.suppress 会挤掉「为什么可以吞掉这个异常」的解释性注释
+    #   （realtime.py 的收尾逻辑、checks 里的门户竞态）。
+    # - SIM108：嵌套三元表达式比 if/else 更难读（见 engine.py 的处决判定）。
+    # - SIM102：本仓库习惯「分段守卫 + 段间注释」，把有副作用的调用并进复合条件
+    #   （resolution.py 的 release_puppet、api.py 的 touch_speech_timer）只会更难读。
+    # - SIM117：合并嵌套 with 会把夹在两层之间的说明性注释冲散（见 checks/test_pow.py）。
+    # 保留 SIM118 / SIM201 / SIM300 这三条无歧义的写法修正。
+    "SIM102",
+    "SIM105",
+    "SIM108",
+    "SIM117",
+]

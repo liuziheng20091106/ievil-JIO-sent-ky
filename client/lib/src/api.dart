@@ -140,10 +140,15 @@ class GameApi {
   Future<Map<String, dynamic>> catalog() async =>
       jsonObject(await _request('GET', '/api/catalog'));
 
-  /// 主持人建局必须显式给出 11 名魔典角色；不再静默使用默认名单。
-  Future<GameView> createGame(List<String> codex) async => GameView.fromJson(
-        await _request('POST', '/api/games', body: {'codex': codex}),
-      );
+  /// 主持人建局必须显式确认魔典与可选规则插件。
+  Future<GameView> createGame(
+    List<String> codex, {
+    required List<String> rulePlugins,
+  }) async =>
+      GameView.fromJson(await _request('POST', '/api/games', body: {
+        'codex': codex,
+        'rule_plugins': rulePlugins,
+      }));
 
   Future<Map<String, dynamic>> participate(String gameId, String kind) async =>
       jsonObject(

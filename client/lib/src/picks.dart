@@ -441,6 +441,160 @@ Future<ActionDescriptor?> showActionPicker(
       ),
     );
 
+/// 规则插件只展示服务器公开目录；必选规则不能关闭。
+Future<List<String>?> showRulePluginPicker(
+  BuildContext context, {
+  required List<RulePluginInfo> plugins,
+}) =>
+    showPredictiveSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => _RulePluginPickerSheet(plugins: plugins),
+    );
+
+class _RulePluginPickerSheet extends StatefulWidget {
+  const _RulePluginPickerSheet({required this.plugins});
+
+  final List<RulePluginInfo> plugins;
+
+  @override
+  State<_RulePluginPickerSheet> createState() => _RulePluginPickerSheetState();
+}
+
+class _RulePluginPickerSheetState extends State<_RulePluginPickerSheet> {
+  late final chosen = <String>{
+    for (final plugin in widget.plugins)
+      if (plugin.required || plugin.defaultEnabled) plugin.id,
+  };
+  late final names = {
+    for (final plugin in widget.plugins) plugin.id: plugin.name,
+  };
+
+  String categoryLabel(RulePluginInfo plugin) => switch (plugin.category) {
+    'builtin_required' => '内置（必须启用）',
+    'external_required' => '外置（必须启用）',
+    'external_default_on' => '外置（默认启用）',
+    'external_default_off' => '外置（默认禁用）',
+    _ => plugin.category,
+  };
+  String? notice;
+
+  String? get dependencyError {
+    for (final plugin in widget.plugins) {
+      if (!chosen.contains(plugin.id)) continue;
+      final missing = plugin.depends.where((id) => !chosen.contains(id));
+      if (missing.isNotEmpty) {
+        return '${plugin.name} 需要先启用依赖：${missing.map((id) => names[id] ?? id).join('、')}';
+      }
+    }
+    return null;
+  }
+
+  void toggle(RulePluginInfo plugin, bool enabled) {
+    if (enabled) {
+      final missing = plugin.depends.where((id) => !chosen.contains(id));
+      if (missing.isNotEmpty) {
+        setState(() => notice =
+            '请先启用依赖：${missing.map((id) => names[id] ?? id).join('、')}');
+        return;
+      }
+    } else {
+      final dependents = widget.plugins.where((other) =>
+          chosen.contains(other.id) && other.depends.contains(plugin.id));
+      if (dependents.isNotEmpty) {
+        setState(() => notice =
+            '无法关闭 ${plugin.name}；请先关闭依赖它的插件：${dependents.map((other) => other.name).join('、')}');
+        return;
+      }
+    }
+    setState(() {
+      enabled ? chosen.add(plugin.id) : chosen.remove(plugin.id);
+      notice = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final invalid = dependencyError;
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * .8,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
+            child: Text('选择规则插件',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600,
+                    color: context.palette.text)),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
+            child: Text('必选规则固定开启。可选插件需先启用依赖，关闭依赖前请先关闭使用它的插件。',
+                style: TextStyle(fontSize: 13,
+                    color: context.palette.textSecondary)),
+          ),
+          if (notice != null || invalid != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(notice ?? invalid!,
+                    style: TextStyle(color: context.palette.danger)),
+              ),
+            ),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.lg),
+              itemCount: widget.plugins.length,
+              separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+              itemBuilder: (context, index) {
+                final plugin = widget.plugins[index];
+                return Card(
+                  child: CheckboxListTile(
+                    value: chosen.contains(plugin.id),
+                    onChanged: plugin.required
+                        ? null
+                        : (value) => toggle(plugin, value!),
+                    title: Text('${plugin.name} · ${plugin.version}'),
+                    subtitle: Text([
+                      '${categoryLabel(plugin)} · ${plugin.required ? '必选 · 固定开启' : '可选'}',
+                      plugin.description,
+                      '依赖：${plugin.depends.isEmpty ? '无' : plugin.depends.map((id) => names[id] ?? id).join('、')}',
+                    ].join('\n')),
+                    isThreeLine: true,
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.lg),
+            child: SafeArea(
+              top: false,
+              child: FilledButton(
+                onPressed: invalid != null
+                    ? null
+                    : () => Navigator.pop(context, [
+                          for (final plugin in widget.plugins)
+                            if (chosen.contains(plugin.id)) plugin.id,
+                        ]),
+                child: Text('确认插件（${chosen.length}）'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 选魔典：13 张有立绘的角色卡，正好选 11 名。
 Future<List<String>?> showCodexPicker(
   BuildContext context, {

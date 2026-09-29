@@ -14,6 +14,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -120,7 +121,7 @@ class ReleaseData(unittest.TestCase):
 class UpdateRanges(ReleaseData):
     """不同版本区间下发不同的更新信息。"""
 
-    UPDATES = {
+    UPDATES: ClassVar[dict] = {
         "updates": [
             {
                 "platform": "windows",
@@ -232,7 +233,7 @@ class UpdaterPackage(ReleaseData):
     `update`，于是「后端没有下发更新包地址」——刚发的那一版自己反而装不上。
     """
 
-    UPDATES = {
+    UPDATES: ClassVar[dict] = {
         "updates": [
             {
                 "platform": "windows",

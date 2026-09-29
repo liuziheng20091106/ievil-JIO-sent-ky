@@ -295,7 +295,7 @@ class HostFlow(unittest.TestCase):
         self.assertIsNone(self.client.get("/api/me", headers=headers).json()["actor"])
         self.assertEqual(self.create_game(headers).status_code, 403)
         listed = self.client.get("/api/hosts", headers=self.admin).json()["hosts"]
-        consumed = [row for row in listed if row["qq_id"] == "10003"][0]
+        consumed = next(row for row in listed if row["qq_id"] == "10003")
         self.assertTrue(consumed["consumed"], "用完一局的授权要标成已用完")
         self.assertEqual(consumed["level"], 1)
         retry = self.client.post("/api/native/auth/host/challenges").json()

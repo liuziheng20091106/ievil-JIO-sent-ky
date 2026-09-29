@@ -167,7 +167,7 @@ def main(argv=None):
                         (result.reason or "")[:40],
                     )
                 )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - 单局异常只记失败数，不能中断整批种子
             failures += 1
             print(SUMMARY.format(seed, "FAILED", "-", "-", "-", "-", f"{type(error).__name__}: {error}"))
             if args.verbose:

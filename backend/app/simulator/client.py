@@ -20,7 +20,7 @@ def solve_pow(token, difficulty):
     prefix = "0" * max(0, int(difficulty))
     nonce = 0
     while True:
-        digest = hashlib.sha256(f"{token}{nonce}".encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(f"{token}{nonce}".encode()).hexdigest()
         if digest.startswith(prefix):
             return nonce
         nonce += 1

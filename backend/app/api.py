@@ -33,6 +33,7 @@ from .game import (
     touch_speech_timer,
 )
 from .game.catalog import night_half
+from .game import plugins
 from .game.state import (
     actor_eliminated,
     controlled_cards,
@@ -162,9 +163,10 @@ def poll_login(challenge_id, client_kind, host=False):
     if host:
         # 主持人登录必须先有授权：等一整轮才发现没权限体验太差。
         account_id = auth_storage.challenge_account(challenge_id)
-        if account_id and auth.host_level(
-            auth_storage.account(account_id)
-        ) < auth_storage.HOST_LEVEL_MIN:
+        if (
+            account_id
+            and auth.host_level(auth_storage.account(account_id)) < auth_storage.HOST_LEVEL_MIN
+        ):
             if not auth.admin_qq_ids():
                 raise HTTPException(
                     403, "服务端尚未配置管理员 QQ（GAME_ADMIN_QQ），请部署者先指定后再登录"
@@ -198,7 +200,7 @@ async def agreement():
 
 @router.get("/catalog")
 async def catalog():
-    return {"roles": CATALOG, "default_codex": DEFAULT_CODEX}
+    return {"roles": CATALOG, "default_codex": DEFAULT_CODEX, "plugins": plugins.catalog()}
 
 
 @router.post("/pow/challenges")
@@ -288,9 +290,7 @@ async def qq_login(body: schemas.QQLogin, request: Request):
     require_gateway(request)
     require_gateway_group(body.group_id)
     avatar = body.avatar_url or f"https://q1.qlogo.cn/g?b=qq&nk={body.qq_id}&s=100"
-    challenge_id = auth_storage.complete_challenge(
-        body.code, body.qq_id, body.nickname, avatar
-    )
+    challenge_id = auth_storage.complete_challenge(body.code, body.qq_id, body.nickname, avatar)
     if not challenge_id:
         raise HTTPException(409, "登录码无效、过期或已经使用")
     return {"ok": True}
@@ -307,7 +307,11 @@ async def qq_members(body: schemas.QQMemberSync, request: Request):
             continue
         member.nickname = (member.nickname.strip() or member.qq_id)[:64]
         valid.append(member)
-    return {"ok": True, "count": auth_storage.sync_accounts(valid), "skipped": len(body.members) - len(valid)}
+    return {
+        "ok": True,
+        "count": auth_storage.sync_accounts(valid),
+        "skipped": len(body.members) - len(valid),
+    }
 
 
 @router.get("/me")
@@ -437,9 +441,7 @@ async def online_players(
             "host_online": "host" in keys,
             # 「有没有更新」由 UA 里的版本与后端配置算出；为真时客户端才去重新请求
             # /api/health 取版本字段与更新详情，大厅轮询不必每次都拉完整更新信息。
-            "update_available": client_release.update_available(
-                request.headers.get("user-agent")
-            ),
+            "update_available": client_release.update_available(request.headers.get("user-agent")),
         }
 
 
@@ -468,11 +470,12 @@ async def create(body: schemas.Create, request: Request):
             active = db.execute("SELECT id FROM games WHERE status != 'ended' LIMIT 1").fetchone()
             if active:
                 raise HTTPException(409, "请先结束当前对局，再创建下一局")
+            plugins.manifest(body.rule_plugins)
             replaced = storage.current_game_id(db)
             # 上一局（结束过的，或没结束就被换成新局的）在清空前先记下来，稍后补进历史。
             archived = [row["id"] for row in db.execute("SELECT id FROM games")]
             storage.purge(db)
-            game = create_game(body.codex)
+            game = create_game(body.codex, body.rule_plugins)
             # 记下建立这一局的主持人身份：对局内显示「主持人(昵称)」，
             # 非本局主持人进入管理界面时也靠它识别（见 host_enter）。
             game["host"] = {
@@ -559,8 +562,11 @@ def join_game(db, game, account, kind, hashed):
     storage.save_game(db, game)
     actor = auth.actor_for_token(db, hashed, game_id)
     label = (
-        str(actor["seat_id"]) + "号玩家" if actor["kind"] == "player" else "观战者"
-    ) + "【" + display_player_name(actor["name"]) + "】"
+        (str(actor["seat_id"]) + "号玩家" if actor["kind"] == "player" else "观战者")
+        + "【"
+        + display_player_name(actor["name"])
+        + "】"
+    )
     row = storage.add_message(db, game_id, text=label + "已加入对局")
     return actor, row
 
@@ -740,9 +746,7 @@ async def host_enter(game_id: str, request: Request):
             if account_id and account_id not in entries:
                 # 记下「这个账号已经确认进入本局」：主持级数据从这里开始放行。
                 game["host_entries"] = [*entries, account_id]
-                entrant = display_player_name(
-                    (actor.get("nickname") or "").strip() or account_id
-                )
+                entrant = display_player_name((actor.get("nickname") or "").strip() or account_id)
                 log_event(
                     game,
                     "host",
@@ -796,7 +800,9 @@ def room_command(db, game, actor, action_id, payload):
             if game["status"] == "lobby":
                 seat["ready"] = False
         text = (
-            "【" + display_player_name(target["name"]) + "】已被移出"
+            "【"
+            + display_player_name(target["name"])
+            + "】已被移出"
             + ("并在本局拉黑" if body.block else "")
         )
     elif action_id == "room.replace":
@@ -828,12 +834,7 @@ def room_command(db, game, actor, action_id, payload):
             seat["ready"] = False
         if not body.keep_actions:
             clear_seat_actions(game, seat["id"])
-        text = (
-            seat["id"]
-            + "号席位已由【"
-            + display_player_name(substitute["name"])
-            + "】接管"
-        )
+        text = seat["id"] + "号席位已由【" + display_player_name(substitute["name"]) + "】接管"
     elif action_id == "room.mute":
         body = schemas.Mute.model_validate(payload)
         target = db.execute(
@@ -842,7 +843,9 @@ def room_command(db, game, actor, action_id, payload):
         ).fetchone()
         if not target:
             raise HTTPException(422, "请选择本局有效参与者")
-        db.execute("UPDATE participants SET muted=? WHERE id=?", (int(body.muted), body.participant_id))
+        db.execute(
+            "UPDATE participants SET muted=? WHERE id=?", (int(body.muted), body.participant_id)
+        )
         shown = display_player_name(target["name"])
         text = f"【{shown}】已被禁言" if body.muted else f"【{shown}】已解除禁言"
     else:
@@ -869,8 +872,12 @@ def channel_notice(db, game, row, ending=False):
     # 主持人用本局的展示名（主持人(昵称)）；玩家用席位号与昵称。
     names = channel_names(db, members, host_label(game))
     creator = names.get(row["creator_id"], "参与者")
-    others = "、".join(names.get(member, "参与者") for member in members if member != row["creator_id"])
-    text = creator + "与" + others + "已结束私信" if ending else creator + "正在与" + others + "私信"
+    others = "、".join(
+        names.get(member, "参与者") for member in members if member != row["creator_id"]
+    )
+    text = (
+        creator + "与" + others + "已结束私信" if ending else creator + "正在与" + others + "私信"
+    )
     # 私信开合只发给频道成员：全场公告会把记录刷满。
     return storage.add_message(db, game["id"], text=text, audience=members)
 
@@ -953,9 +960,13 @@ def channel_command(db, game, actor, action_id, payload):
         if immediate:
             ensure_channel_available(db, game, members)
         # 忽略自定义频道名，统一按成员生成：玩家用号位，主持人用「主持人」。
-        seats = {row["participant_id"]: row["seat_id"] for row in db.execute(
-            "SELECT id AS participant_id, seat_id FROM participants WHERE game_id=?", (game["id"],)
-        )}
+        seats = {
+            row["participant_id"]: row["seat_id"]
+            for row in db.execute(
+                "SELECT id AS participant_id, seat_id FROM participants WHERE game_id=?",
+                (game["id"],),
+            )
+        }
         title = "、".join(
             "主持人" if member == "host" else f"{seats.get(member) or '?'}号" for member in members
         )
@@ -1274,7 +1285,8 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                         raise HTTPException(403, "你不能访问该频道")
                 elif body.channel_id != "public":
                     channel_row = db.execute(
-                        "SELECT * FROM channels WHERE id=? AND game_id=?", (body.channel_id, game_id)
+                        "SELECT * FROM channels WHERE id=? AND game_id=?",
+                        (body.channel_id, game_id),
                     ).fetchone()
                     if not channel_row or not storage.channel_visible(channel_row, actor):
                         raise HTTPException(403, "你不能访问该频道")
@@ -1288,7 +1300,9 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                     if seat["id"] not in mentioned_seats or not seat["occupant_id"]:
                         continue
                     target_id = seat["occupant_id"]
-                    if target_id == actor["id"] or (audience is not None and target_id not in members):
+                    if target_id == actor["id"] or (
+                        audience is not None and target_id not in members
+                    ):
                         continue
                     target = db.execute(
                         "SELECT active,blocked FROM participants WHERE id=? AND game_id=? AND kind='player'",
@@ -1323,7 +1337,9 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
 
 
 @router.post("/games/{game_id}/messages/{message_id}/retract")
-async def retract_message(game_id: str, message_id: int, body: schemas.ChatRetract, request: Request):
+async def retract_message(
+    game_id: str, message_id: int, body: schemas.ChatRetract, request: Request
+):
     async with realtime.lock:
         with storage.transaction() as db:
             controller = auth.require_actor(db, request, game_id)
@@ -1331,7 +1347,8 @@ async def retract_message(game_id: str, message_id: int, body: schemas.ChatRetra
             game = require_game(db, game_id)
             actor = (
                 authorized_as_seat(db, game, controller, body.as_seat)[0]
-                if body.as_seat else controller
+                if body.as_seat
+                else controller
             )
             row = db.execute(
                 "SELECT * FROM messages WHERE game_id=? AND id=?", (game_id, message_id)
@@ -1354,7 +1371,9 @@ async def upload_evidence(game_id: str, body: schemas.Evidence, request: Request
             actor = auth.require_actor(db, request, game_id)
             auth.require_host_capable(actor)
             game = require_game(db, game_id, mutable=True)
-            if actor["kind"] == "spectator" or storage.active_private_channel(db, game, actor["id"]):
+            if actor["kind"] == "spectator" or storage.active_private_channel(
+                db, game, actor["id"]
+            ):
                 raise HTTPException(403, "当前身份不能提交游戏证物")
             return {"id": evidence.create(db, game_id, actor, body.text, body.image)}
 
@@ -1375,4 +1394,6 @@ async def get_evidence(game_id: str, evidence_id: str, request: Request):
             }
             if row["image"] is not None:
                 return Response(content=row["image"], media_type=row["mime"], headers=headers)
-            return Response(content=row["text"], media_type="text/plain; charset=utf-8", headers=headers)
+            return Response(
+                content=row["text"], media_type="text/plain; charset=utf-8", headers=headers
+            )

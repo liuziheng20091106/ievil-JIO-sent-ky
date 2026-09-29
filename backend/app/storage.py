@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from .game.catalog import night_half
@@ -147,7 +147,7 @@ def transaction():
 
 
 def now_text():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def load_game(db, game_id):
@@ -206,7 +206,7 @@ INVITE_MINUTES = 10
 
 def invite_cutoff():
     """待处理邀请的有效下界；过期不写库，读取时按时间过滤。"""
-    return (datetime.now(timezone.utc) - timedelta(minutes=INVITE_MINUTES)).isoformat()
+    return (datetime.now(UTC) - timedelta(minutes=INVITE_MINUTES)).isoformat()
 
 
 def pending_invites(db, account_id):
@@ -323,10 +323,14 @@ def message_view(row, actor):
             "created_at",
         )
     }
-    recalled = bool(row["recalled_at"]) if "recalled_at" in row.keys() else False
+    # sqlite3.Row 没有 __contains__：`x in row` 走迭代、比的是「值」而不是列名，所以
+    # 这里必须保留 .keys()——SIM118 的简化建议在这个类型上是错的（会静默丢掉撤回与播报）。
+    recalled = bool(row["recalled_at"]) if "recalled_at" in row.keys() else False  # noqa: SIM118
     result["recalled"] = recalled
     result["mention_ids"] = (
-        json.loads(row["mention_ids"]) if not recalled and "mention_ids" in row.keys() else []
+        json.loads(row["mention_ids"])
+        if not recalled and "mention_ids" in row.keys()  # noqa: SIM118 - 同上，不能用 `in row`
+        else []
     )
     if recalled:
         result["text"] = ""
@@ -337,7 +341,7 @@ def message_view(row, actor):
     # 昵称展示统一走展示名：消息留档里存的是完整昵称，只有下发时按 16 半角宽度截断。
     result["sender_name"] = display_player_name(result["sender_name"])
     # 结构化播报按收件人裁剪：同一行消息，不同的人拿到的细节不同。
-    if "payload" in row.keys() and row["payload"]:
+    if "payload" in row.keys() and row["payload"]:  # noqa: SIM118 - 同上，不能用 `in row`
         projected = project_message_payload(row["payload"], actor)
         if projected:
             result["payload"] = projected
@@ -365,6 +369,12 @@ def project_message_payload(raw, actor):
         return None
     if payload.get("type") == "death":
         return {key: payload[key] for key in ("type", "day", "half", "deaths") if key in payload}
+    if payload.get("type") == "plugin":
+        return {
+            key: payload[key]
+            for key in ("type", "id", "name", "version", "description", "category")
+            if key in payload
+        }
     if payload.get("type") != "skill":
         return payload if host_capable(actor) else None
     host = host_capable(actor)
@@ -510,11 +520,7 @@ def messages(
         else:
             # 访问名单为空的身份（例如还没确认进入本局的主持人）只能看公开消息。
             clauses.append("m.audience IS NULL")
-    if (
-        not host_capable(actor)
-        and not (actor.get("kind") == "spectator")
-        and not (scope == "system")
-    ):
+    if not host_capable(actor) and actor.get("kind") != "spectator" and scope != "system":
         # 观战频道由观战者独享：非主持人（含玩家）在所有口径下都看不到它的聊天。
         clauses.append("(m.kind!='chat' OR m.channel_id!='spectator')")
     if before is not None:

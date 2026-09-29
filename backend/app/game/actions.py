@@ -609,24 +609,7 @@ def host_actions(game, actor):
     result = []
     if game["status"] == "lobby":
         if game["phase"] == "ordering":
-            result.append(
-                action(
-                    "host.start",
-                    "全部再次准备后开局",
-                    [
-                        field(
-                            "rule_plugins",
-                            "本局附加规则（无附加规则可留空）",
-                            "multiselect",
-                            [(module.ID, module.LABEL) for module in plugins.optional()],
-                            required=False,
-                            min=0,
-                            max=len(plugins.optional()),
-                        )
-                    ],
-                    group="流程",
-                )
-            )
+            result.append(action("host.start", "全部再次准备后开局", group="流程"))
         result.append(
             action(
                 "host.codex",

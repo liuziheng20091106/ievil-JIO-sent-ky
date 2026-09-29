@@ -46,6 +46,7 @@ class UpdaterCommandLine(unittest.TestCase):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            check=False,  # 断言由调用方看 returncode 做，这里不抛异常
         )
 
     def test_version_reports_a_semantic_version(self):

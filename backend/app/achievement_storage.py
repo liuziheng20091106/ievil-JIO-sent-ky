@@ -12,7 +12,7 @@
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from . import storage
 
@@ -21,7 +21,7 @@ MAX_RARITY = 10
 
 
 def now_text():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @contextmanager

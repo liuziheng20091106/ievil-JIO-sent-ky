@@ -662,7 +662,7 @@ class _LoginSubmitButton extends StatelessWidget {
   }
 }
 
-/// 大厅：等待开放、加入或观战；主持人可先确认魔典再建局。
+/// 大厅：等待开放、加入或观战；主持人先确认魔典与规则插件再建局。
 class LobbyPage extends StatefulWidget {
   const LobbyPage({super.key, required this.store, this.release});
 
@@ -1100,7 +1100,7 @@ class _LobbyPageState extends State<LobbyPage> {
     );
   }
 
-  /// 建局前必须确认 11 名魔典角色。
+  /// 建局前依次确认魔典与规则插件。
   Future<void> pickCodexThenCreate() async {
     final store = widget.store;
     final initial = codex ?? await _defaultCodex(store);
@@ -1116,6 +1116,26 @@ class _LobbyPageState extends State<LobbyPage> {
       return;
     }
     setState(() => codex = chosen);
+    final List<RulePluginInfo> plugins;
+    try {
+      final catalog = await store.api!.catalog();
+      plugins = jsonArray(catalog['plugins'], 'catalog.plugins')
+          .map(RulePluginInfo.fromJson)
+          .toList(growable: false);
+    } catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('无法加载规则插件目录，未建局。请重试：$failure'),
+        ));
+      }
+      return;
+    }
+    if (!mounted) return;
+    final selected = await showRulePluginPicker(context, plugins: plugins);
+    if (selected == null || !mounted) return;
+    final enabledPlugins = plugins
+        .where((plugin) => selected.contains(plugin.id))
+        .toList(growable: false);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1123,8 +1143,8 @@ class _LobbyPageState extends State<LobbyPage> {
           Icons.auto_stories_outlined,
           color: context.palette.accent,
         ),
-        title: const Text('确认魔典并建局'),
-        content: Column(
+        title: const Text('确认魔典、插件并建局'),
+        content: SingleChildScrollView(child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1142,12 +1162,23 @@ class _LobbyPageState extends State<LobbyPage> {
                   ),
               ],
             ),
+            const SizedBox(height: AppSpacing.md),
+            Text('本局规则插件（${enabledPlugins.length} 项）：'),
+            const SizedBox(height: AppSpacing.sm),
+            if (enabledPlugins.isEmpty) const Text('无'),
+            for (final plugin in enabledPlugins)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                child: Text('${plugin.name} · ${plugin.version}'
+                    '${plugin.required ? '（必选）' : ''}'),
+              ),
              SizedBox(height: AppSpacing.md),
              Text(
               '建立七席空局。建局后请点击「开放加入」，玩家才能主动入席。',
               style: TextStyle(fontSize: 13, color: context.palette.textTertiary),
             ),
           ],
+        ),
         ),
         actions: [
           TextButton(
@@ -1165,7 +1196,10 @@ class _LobbyPageState extends State<LobbyPage> {
       return;
     }
     try {
-      await store.createGame(chosen);
+      await store.createGame(chosen, rulePlugins: [
+        for (final plugin in enabledPlugins)
+          if (!plugin.required) plugin.id,
+      ]);
     } catch (_) {
       // 失败原因由 store.error 呈现。
     }

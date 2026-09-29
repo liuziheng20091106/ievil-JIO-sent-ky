@@ -542,14 +542,7 @@ def game_view(game, actor):
         # 确认成功后这次投影会立刻换成完整主持投影。
         "host_entry_required": actor.get("kind") == "host" and not host,
     }
-    view["rule_plugins"] = (
-        [
-            {"id": module.ID, "label": module.LABEL, "version": module.VERSION}
-            for module in plugins.enabled(game)
-        ]
-        if host
-        else [{"label": module.LABEL} for module in plugins.enabled(game) if not module.REQUIRED]
-    )
+    view["rule_plugins"] = [plugins.info(module) for module in plugins.enabled(game)]
     if own:
         night = game["night"]
         view["self"]["night_confirmed"] = own_id in night["confirmed"]

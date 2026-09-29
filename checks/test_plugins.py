@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,9 +53,9 @@ def cancel(game, events, context):
 
 
 VERSION = 1
-LABEL = "测试附加规则"
-REQUIRED = False
-LAYER = "patch"
+NAME = "测试附加规则"
+DESCRIPTION = "取消主持人标记牌所受的一次攻击。"
+CATEGORY = "external_default_off"
 DEPENDS = ()
 HANDLERS = {"attack_intents": cancel}
 COMMANDS = {ID + ".mark": mark}
@@ -69,8 +70,8 @@ class OptionalRules(unittest.TestCase):
 
     def started(self, selection):
         game = arranged_game("ordering", "night")
-        game.update(status="lobby", day=1)
-        apply_command(game, HOST, "host.start", {"rule_plugins": selection})
+        game.update(status="lobby", day=1, rule_plugins=plugins.manifest(selection))
+        apply_command(game, HOST, "host.start", {})
         return game
 
     def test_choice_freezes_and_rewrites_only_selected_game(self):
@@ -90,8 +91,8 @@ class OptionalRules(unittest.TestCase):
         self.assertEqual(enabled["pending"], [])
         self.assertTrue(any("规则补丁调整攻击意图" in line["text"] for line in enabled["log"]))
         self.assertNotIn("plugin_state", game_view(enabled, player(enabled, "1")))
-        self.assertEqual(
-            game_view(enabled, player(enabled, "1"))["rule_plugins"], [{"label": TEST_PATCH.LABEL}]
+        self.assertIn(
+            NAME, [row["name"] for row in game_view(enabled, player(enabled, "1"))["rule_plugins"]]
         )
 
     def test_preview_edit_recomputes_once_without_double_substitution(self):
@@ -142,6 +143,70 @@ class OptionalRules(unittest.TestCase):
         self.assertNotIn(ID, selected["plugin_state"])
 
 
+class PluginRegistrySelection(unittest.TestCase):
+    def module(self, id, category, depends=()):
+        return SimpleNamespace(
+            ID=id,
+            VERSION=1,
+            NAME=id,
+            DESCRIPTION="示例外置规则",
+            CATEGORY=category,
+            DEPENDS=depends,
+            HANDLERS={},
+            COMMANDS={},
+        )
+
+    def test_categories_dependency_and_deployment_manifest(self):
+        always = self.module("always", "external_required", ("meruru",))
+        default = self.module("default_rule", "external_default_on", ("always",))
+        optional = self.module("optional_rule", "external_default_off", ("default_rule",))
+        with patch.object(plugins, "REGISTRY", [*plugins.BUILTINS, always, default, optional]):
+            plugins.validate_registry()
+            self.assertEqual(
+                [row["id"] for row in plugins.manifest()][-2:], ["always", "default_rule"]
+            )
+            self.assertEqual([row["id"] for row in plugins.manifest([])][-1], "always")
+            self.assertEqual(
+                [row["id"] for row in plugins.manifest(["default_rule", "optional_rule"])][-3:],
+                ["always", "default_rule", "optional_rule"],
+            )
+            for selected in (
+                ["optional_rule"],
+                ["optional_rule", "optional_rule"],
+                ["nonexistent"],
+                ["always"],
+            ):
+                with self.subTest(selected=selected), self.assertRaises(GameError):
+                    plugins.manifest(selected)
+            self.assertEqual(plugins.catalog()[-1]["name"], "optional_rule")
+            self.assertFalse(plugins.catalog()[-1]["default_enabled"])
+        invalid_default = self.module("invalid_default", "external_default_on", ("optional_rule",))
+        with patch.object(plugins, "REGISTRY", [*plugins.BUILTINS, optional, invalid_default]):
+            with self.assertRaisesRegex(ValueError, "默认启用"):
+                plugins.validate_registry()
+
+    def test_discovery_orders_dependent_files_and_rejects_missing_cycle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a_dependent.py").write_text("", encoding="utf-8")
+            (root / "z_base.py").write_text("", encoding="utf-8")
+            base = self.module("base_rule", "external_default_off")
+            dependent = self.module("dependent_rule", "external_default_off", ("base_rule",))
+            registry = {"a_dependent": dependent, "z_base": base}
+            with (
+                patch.object(plugins, "EXTERNAL_DIR", root),
+                patch.object(
+                    plugins,
+                    "import_module",
+                    side_effect=lambda name: registry[name.rsplit(".", 1)[-1]],
+                ),
+            ):
+                self.assertEqual(plugins.discover_external(), [base, dependent])
+                registry["z_base"] = self.module("base_rule", "external_default_off", ("missing",))
+                with self.assertRaisesRegex(ValueError, "依赖"):
+                    plugins.discover_external()
+
+
 class PluginHTTP(unittest.TestCase):
     def setUp(self):
         plugins.REGISTRY.append(TEST_PATCH)
@@ -167,7 +232,9 @@ class PluginHTTP(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.host = self.login("10001", host=True)
-        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
+        created = self.client.post(
+            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX, "rule_plugins": [ID]}
+        )
         created.raise_for_status()
         self.root = "/api/games/" + created.json()["id"]
         self.client.post(self.root + "/host/enter", headers=self.host).raise_for_status()
@@ -221,14 +288,10 @@ class PluginHTTP(unittest.TestCase):
             self.command(headers, "lobby.ready").raise_for_status()
         version = self.client.get(self.root + "/state", headers=self.host).json()["version"]
         self.assertEqual(
-            self.command(
-                self.host, "host.start", {"rule_plugins": [ID]}, version=version - 1
-            ).status_code,
+            self.command(self.host, "host.start", version=version - 1).status_code,
             409,
         )
-        self.command(
-            self.host, "host.start", {"rule_plugins": [ID]}, version=version
-        ).raise_for_status()
+        self.command(self.host, "host.start", version=version).raise_for_status()
         host_view = self.client.get(self.root + "/state", headers=self.host).json()
         unentered = self.login("10002", host=True)
         unentered_view = self.client.get(self.root + "/state", headers=unentered)
@@ -244,6 +307,19 @@ class PluginHTTP(unittest.TestCase):
             403,
         )
         self.assertIn(ID, [row["id"] for row in host_view["rule_plugins"]])
+        announced = [
+            message
+            for message in self.client.get(self.root + "/messages", headers=spectator).json()[
+                "messages"
+            ]
+            if message.get("payload", {}).get("type") == "plugin"
+        ]
+        self.assertEqual(len(announced), len(host_view["rule_plugins"]))
+        patch_notice = next(message for message in announced if message["payload"]["id"] == ID)
+        self.assertEqual(patch_notice["kind"], "alert")
+        self.assertEqual(patch_notice["payload"]["name"], NAME)
+        self.assertEqual(patch_notice["payload"]["version"], VERSION)
+        self.assertEqual(patch_notice["payload"]["description"], DESCRIPTION)
         self.assertNotIn(
             "plugin_state", self.client.get(self.root + "/state", headers=spectator).text
         )
@@ -266,19 +342,43 @@ class PluginHTTP(unittest.TestCase):
             },
         )
         self.assertEqual(forbidden.status_code, 403)
+        attacker = next(
+            s
+            for s in host_view["seats"]
+            if s["current_card_id"]
+            in {"meruru", "noah", "annan", "marg", "leia", "nanoka", "hanna"}
+        )
+        if not any(
+            c["id"] == attacker["current_card_id"] and c["witch"] for c in attacker["cards"]
+        ):
+            self.command(
+                self.host,
+                "host.state",
+                {
+                    "card_id": attacker["current_card_id"],
+                    "state": "witch",
+                    "value": True,
+                    "reason": "测试规则补丁",
+                },
+            ).raise_for_status()
         self.command(self.host, "host.advance").raise_for_status()
         state = self.client.get(self.root + "/state", headers=self.host).json()
         self.assertIn(state["phase"], {"night", "night_coco"})
-        attacker = next(
-            s
-            for s in state["seats"]
-            if any(c["id"] == s["current_card_id"] and c["witch"] for c in s["cards"])
+        knife = next(
+            action
+            for action in self.client.get(
+                self.root + "/state", headers=by_seat[attacker["id"]]
+            ).json()["actions"]
+            if action["id"] == "night.submit" and action["payload"]["ability"] == "knife"
         )
-        victim = next(
-            s
-            for s in state["seats"]
-            if s["id"] != attacker["id"] and s["current_card_id"] not in {"hiro", "millia"}
+        targets = {seat["id"]: seat for seat in state["seats"]}
+        victim_id = next(
+            option["value"]
+            for option in knife["fields"][0]["options"]
+            if option["value"] != attacker["id"]
+            and targets[option["value"]]["current_card_id"] not in {"hiro", "millia"}
         )
+        victim = targets[victim_id]
         self.command(
             self.host, ID + ".mark", {"card_id": victim["current_card_id"]}
         ).raise_for_status()
@@ -306,7 +406,9 @@ class PluginHTTP(unittest.TestCase):
         self.command(
             self.host, "host.end", {"winner": "aborted", "reason": "测试另一局"}
         ).raise_for_status()
-        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
+        created = self.client.post(
+            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX, "rule_plugins": []}
+        )
         created.raise_for_status()
         self.root = "/api/games/" + created.json()["id"]
         self.client.post(self.root + "/host/enter", headers=self.host).raise_for_status()
@@ -322,7 +424,15 @@ class PluginHTTP(unittest.TestCase):
             self.command(headers, "lobby.ready").raise_for_status()
         for headers in empty_seats.values():
             self.command(headers, "lobby.ready").raise_for_status()
-        self.command(self.host, "host.start", {"rule_plugins": []}).raise_for_status()
+        self.command(self.host, "host.start").raise_for_status()
+        empty_notices = [
+            message
+            for message in self.client.get(self.root + "/messages", headers=self.host).json()[
+                "messages"
+            ]
+            if message.get("payload", {}).get("type") == "plugin"
+        ]
+        self.assertNotIn(ID, [message["payload"]["id"] for message in empty_notices])
         setup = self.client.get(self.root + "/state", headers=self.host).json()
         witch = next(
             s

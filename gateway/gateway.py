@@ -62,8 +62,8 @@ def error_detail(response) -> str:
 def parse_group_ids(value: str) -> tuple[int, ...]:
     """`GAME_QQ_GROUP_ID` 支持英文逗号分隔的多个群号。"""
     group_ids = []
-    for item in value.split(","):
-        item = item.strip()
+    for raw in value.split(","):
+        item = raw.strip()
         if item:
             group_ids.append(int(item))
     if not group_ids:
@@ -153,7 +153,7 @@ class QQGateway:
     async def fetch_members(self, connection: OneBotConnection, group_id: int) -> list[dict]:
         try:
             result = await connection.action("get_group_member_list", {"group_id": group_id})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - OneBot 连接可能抛任意网络异常，一律降级
             # 单群拉取失败不该拖垮其余群：记日志后当这个群没有成员。
             LOG.warning("member fetch failed for group %s: %s", group_id, exc)
             return []
@@ -167,9 +167,10 @@ class QQGateway:
         if not members:
             return
         # 服务端只用 group_id 校验网关来源，所以合并后的名单只提交一次（超限则分批）。
+        # strict 必须显式写 False：末批本来就可能不满 SYNC_BATCH，strict=True 会直接抛错。
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                for batch in itertools.batched(members, SYNC_BATCH):
+                for batch in itertools.batched(members, SYNC_BATCH, strict=False):
                     response = await client.post(
                         f"{self.backend_url}/api/internal/qq/members/sync",
                         headers=self.headers,
@@ -181,7 +182,7 @@ class QQGateway:
                 len(members),
                 ",".join(str(item) for item in self.group_ids),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 名单同步是尽力而为，失败只记日志
             LOG.warning("member sync skipped: %s", exc)
 
     async def bind_login(self, *, code: str, qq_id: str, nickname: str, group_id: int) -> str | None:
@@ -209,7 +210,7 @@ class QQGateway:
             await connection.action(
                 "send_group_msg", {"group_id": group_id, "message": message}, timeout=10
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 回执发不出去只影响提示，不阻断登录流程
             LOG.debug("could not send acknowledgement: %s", exc)
 
     async def handle_event(self, connection: OneBotConnection, event: dict) -> None:
@@ -234,7 +235,7 @@ class QQGateway:
             reason = await self.bind_login(
                 code=match.group(1), qq_id=qq_id, nickname=nickname, group_id=group_id
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 后端不可达时也要给玩家一句说法
             # 后端不可达时也要给群里的玩家一个说法，不静默吞掉。
             LOG.warning("login bind failed for %s in group %s: %s", qq_id, group_id, exc)
             reason = "服务端暂时不可用"
@@ -256,7 +257,7 @@ class QQGateway:
                     if event.get("_gateway_closed"):
                         raise OSError("NapCat connection closed")
                     await self.handle_event(connection, event)
-            except (ConnectionClosed, OSError, asyncio.TimeoutError) as exc:
+            except (TimeoutError, ConnectionClosed, OSError) as exc:
                 LOG.warning("NapCat connection lost: %s", exc)
             except Exception:
                 LOG.exception("gateway loop failed")

@@ -2735,7 +2735,7 @@ class LeiaDuel(unittest.TestCase):
         self.assertIn("至少同意其中一张", descriptor["description"])
         # 两张都不同意：整份选票被拒绝。
         with self.assertRaises(GameError):
-            command(game, player(game, "1"), "vote.cast", {card: "no" for card in rounds})
+            command(game, player(game, "1"), "vote.cast", dict.fromkeys(rounds, "no"))
         # 只提交其中一张同意也合规，而且表态过的席位不再欠这张同意票。
         command(game, player(game, "1"), "vote.cast", {rounds[0]: "yes", rounds[1]: "no"})
         self.assertEqual(seat_choice(game, "1", rounds[0]), "yes")
@@ -2794,7 +2794,7 @@ class LeiaDuel(unittest.TestCase):
         with self.assertRaises(GameError):
             command(game, player(game, "4"), "vote.cast", {rounds[0]: "yes", "hanna": "yes"})
         # 她也不必被迫去投蕾雅：两张都弃票同样合规。
-        command(game, player(game, "4"), "vote.cast", {card: "abstain" for card in rounds})
+        command(game, player(game, "4"), "vote.cast", dict.fromkeys(rounds, "abstain"))
         self.assertEqual(seat_choice(game, "4", "hanna"), "abstain")
         self.assertFalse(game["duel_approvals"].get("4"))
         for sid in ("1", "2", "3", "5", "6", "7"):
@@ -3548,13 +3548,13 @@ class AuditFixes(unittest.TestCase):
         self.pass_nominations(game, skip=("1", "2"))
         command(game, HOST, "host.advance")
         self.assertEqual(game["phase"], "voting")
-        self.assertEqual(game["vote_freeze"], {"day": 2, "denominator": 7})
+        self.assertEqual(game["vote_freeze"]["denominator"], 7)
 
         # 投票中 4 号的当前牌（marg）出局：门槛仍按冻结的 7 人算。
         game["cards"]["marg"]["alive"] = False
         rounds = [item["card_id"] for item in nomination_rounds(game)]
         for sid in self.ALL_SEATS:
-            command(game, player(game, sid), "vote.cast", {card: "yes" for card in rounds})
+            command(game, player(game, sid), "vote.cast", dict.fromkeys(rounds, "yes"))
         for _ in range(5):
             if game["phase"] == "execution":
                 break

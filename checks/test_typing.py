@@ -156,7 +156,8 @@ class TypingRelay(unittest.TestCase):
             except Exception:  # noqa: BLE001 - 关闭期的门户竞态不影响断言结果
                 pass
 
-    def collect_typing_until(self, socket, participant_id, limit=60):
+    # self.fail 在 typeshed 里是 NoReturn，报 RET503 是误报；函数末尾不需要显式 return。
+    def collect_typing_until(self, socket, participant_id, limit=60):  # noqa: RET503
         """读帧直到出现 [participant_id] 的 typing 帧（含），返回沿途全部 typing 帧。
 
         主持人的输入状态对所有玩家可见，必然中继，用它当同步点。

@@ -121,13 +121,11 @@ class AchievementFlow(unittest.TestCase):
         return response
 
     def define(self, name, detail, rarity, headers=None):
-        response = self.client.post(
+        return self.client.post(
             "/api/achievements/defs",
             headers=headers or self.host,
             json={"name": name, "detail": detail, "rarity": rarity},
         )
-        return response
-
     def open_join(self):
         self.command(self.host, "room.open_join", {"open": True})
 
@@ -229,7 +227,7 @@ class AchievementFlow(unittest.TestCase):
 
     def test_player_only_equips_own_grant(self):
         owner_headers, owner = self.account("10003")
-        other_headers, other = self.account("10004")
+        other_headers, _ = self.account("10004")
         definition = self.define("神秘黑幕女", "在一局内控制傀儡未被识破", 2).json()
         granted = self.client.post(
             f"/api/achievements/players/{owner['account_id']}/grants",
@@ -295,8 +293,8 @@ class AchievementFlow(unittest.TestCase):
     def test_player_list_orders_by_recent_participation(self):
         self.open_join()
         self.join("10006")
-        first_headers, first_actor = self.account("10007")
-        second_headers, second_actor = self.account("10008")
+        first_headers, _ = self.account("10007")
+        second_headers, _ = self.account("10008")
         # 旁观不算参赛，不进入玩家列表。
         self.join("10009", kind="spectator")
         for headers in (first_headers, second_headers):

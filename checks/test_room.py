@@ -469,7 +469,7 @@ class BackendFlow(unittest.TestCase):
         self.open_join()
         player, player_actor, _ = self.join("12601")
         first, first_actor, _ = self.join("12602", "spectator")
-        second, second_actor, _ = self.join("12603", "spectator")
+        second, _, _ = self.join("12603", "spectator")
 
         # 观战者发言一律落到观战频道，不管前端传了什么 channel_id。
         sent = self.client.post(
@@ -509,7 +509,7 @@ class BackendFlow(unittest.TestCase):
         ]
         self.assertTrue(
             all(
-                message["channel_id"] in {"spectator"} or message["kind"] != "chat"
+                message["channel_id"] == "spectator" or message["kind"] != "chat"
                 for message in spectator_all
             )
         )
@@ -582,7 +582,7 @@ class BackendFlow(unittest.TestCase):
         players = [self.join(str(13001 + index)) for index in range(7)]
         first, first_actor, _ = players[0]
         second, second_actor, _ = players[1]
-        third, third_actor, _ = players[2]
+        _, third_actor, _ = players[2]
         for headers, _, _ in players:
             self.command(headers, "lobby.ready")
         for headers, _, _ in players:
@@ -1011,7 +1011,7 @@ class BackendFlow(unittest.TestCase):
 
     def test_invites_need_open_join_and_then_seat_the_player(self):
         self.open_join()
-        first, first_actor, _ = self.join("21001")
+        _, first_actor, _ = self.join("21001")
         self.command(self.host, "room.open_join", {"open": False})
         guest, guest_actor = self.account("21002")
         self.client.get("/api/lobby", headers=guest).raise_for_status()

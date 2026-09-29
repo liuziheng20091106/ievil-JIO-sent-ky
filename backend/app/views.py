@@ -574,7 +574,9 @@ def runtime_actions(game, participants):
         }
         for row in active
     ]
-    substitutes = [option for option, row in zip(people, active) if row["kind"] == "spectator"]
+    substitutes = [
+        option for option, row in zip(people, active, strict=True) if row["kind"] == "spectator"
+    ]
     actions = [
         action(
             "room.open_join",

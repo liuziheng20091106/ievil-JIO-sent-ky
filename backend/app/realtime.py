@@ -293,7 +293,7 @@ async def live(socket):
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
-    except WebSocketDisconnect, RuntimeError, ValueError, asyncio.TimeoutError:
+    except (TimeoutError, WebSocketDisconnect, RuntimeError, ValueError):
         pass
     finally:
         for task in tasks:
@@ -312,7 +312,7 @@ async def live(socket):
             ):
                 try:
                     await asyncio.wait_for(socket.close(code=1000), timeout=2)
-                except WebSocketDisconnect, RuntimeError, OSError, asyncio.TimeoutError:
+                except (TimeoutError, WebSocketDisconnect, RuntimeError, OSError):
                     pass
 
 

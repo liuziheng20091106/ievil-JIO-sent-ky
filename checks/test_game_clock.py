@@ -59,7 +59,7 @@ def arranged_game(phase="discussion", half="day"):
     for seat in game["seats"]:
         apply_command(game, player(game, seat["id"]), "lobby.ready", {})
     game.update(status="playing", phase=phase, half=half, day=2)
-    for seat, pair in zip(game["seats"], PAIRS):
+    for seat, pair in zip(game["seats"], PAIRS, strict=True):
         seat.update(cards=list(pair), occupant_id="p" + seat["id"], ready=True)
     return game
 
@@ -276,24 +276,23 @@ class WholeGameOnTheClock(unittest.TestCase):
     def test_a_whole_game_finishes_without_waiting_for_the_clock(self):
         virtual = GameSimClock()
         # 关掉后台计时循环：检查自己用虚拟时钟驱动同一条计时路径。
-        with patch.object(realtime, "clock", idle_clock), virtual.installed():
-            with TestClient(
-                app, base_url="http://testserver", headers={"Origin": "http://testserver"}
-            ) as client:
-                harness = Harness(
-                    client,
-                    seed=self.SEED,
-                    clock=virtual,
-                    fast_forward=False,
-                    policies=[
-                        SilentSpeechPolicy(seed=self.SEED * 100 + index) for index in range(7)
-                    ],
-                )
-                harness.simulation.host_brain = CountdownHostBrain(harness.log)
-                started = time.monotonic()
-                result = harness.run()
-                real_seconds = time.monotonic() - started
-                skipped = virtual.skipped()
+        with patch.object(realtime, "clock", idle_clock), virtual.installed(), TestClient(
+            app, base_url="http://testserver", headers={"Origin": "http://testserver"}
+        ) as client:
+            harness = Harness(
+                client,
+                seed=self.SEED,
+                clock=virtual,
+                fast_forward=False,
+                policies=[
+                    SilentSpeechPolicy(seed=self.SEED * 100 + index) for index in range(7)
+                ],
+            )
+            harness.simulation.host_brain = CountdownHostBrain(harness.log)
+            started = time.monotonic()
+            result = harness.run()
+            real_seconds = time.monotonic() - started
+            skipped = virtual.skipped()
 
         self.assertEqual(result.status, "ended", "\n".join(result.log[-20:]))
         self.assertTrue(result.reason)

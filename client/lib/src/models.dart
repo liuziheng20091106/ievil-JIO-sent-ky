@@ -630,6 +630,38 @@ class HostAccount {
   int get effectiveLevel => consumed ? 0 : level;
 }
 
+/// 插件的公开元数据，不保留模块路径、处理器或任意原始字段。
+class RulePluginInfo {
+  RulePluginInfo.fromJson(Object? value) {
+    final data = jsonObject(value, 'plugin');
+    id = jsonString(data['id'], 'plugin.id');
+    name = jsonString(data['name'], 'plugin.name');
+    final rawVersion = data['version'];
+    if (rawVersion is! int && rawVersion is! String) {
+      throw const FormatException('plugin.version must be a version');
+    }
+    version = rawVersion.toString();
+    description = jsonString(data['description'], 'plugin.description');
+    category = jsonString(data['category'], 'plugin.category');
+    depends = data['depends'] == null
+        ? const <String>[]
+        : jsonArray(data['depends'], 'plugin.depends')
+            .map((item) => jsonString(item, 'plugin.depends[]'))
+            .toList(growable: false);
+    required = jsonBool(data['required'], 'plugin.required');
+    defaultEnabled = jsonBool(data['default_enabled'], 'plugin.default_enabled');
+  }
+
+  late final String id;
+  late final String name;
+  late final String version;
+  late final String description;
+  late final String category;
+  late final List<String> depends;
+  late final bool required;
+  late final bool defaultEnabled;
+}
+
 /// 角色目录：`/api/catalog` 的裁剪结果。
 class RoleCatalog {
   RoleCatalog.fromJson(Object? value) : raw = jsonObject(value, 'catalog') {
@@ -644,11 +676,17 @@ class RoleCatalog {
             raw['default_codex'],
             'catalog.default_codex',
           ).map((item) => item.toString()).toList(growable: false);
+    plugins = raw['plugins'] == null
+        ? const <RulePluginInfo>[]
+        : jsonArray(raw['plugins'], 'catalog.plugins')
+            .map(RulePluginInfo.fromJson)
+            .toList(growable: false);
   }
 
   final Map<String, dynamic> raw;
   late final List<RoleInfo> roles;
   late final List<String> defaultCodex;
+  late final List<RulePluginInfo> plugins;
 }
 
 class GameView {
@@ -667,12 +705,18 @@ class GameView {
         : jsonArray(raw['channels'], 'state.channels')
             .map(GameChannel.fromJson)
             .toList(growable: false);
+    rulePlugins = raw['rule_plugins'] == null
+        ? const <RulePluginInfo>[]
+        : jsonArray(raw['rule_plugins'], 'state.rule_plugins')
+            .map(RulePluginInfo.fromJson)
+            .toList(growable: false);
   }
 
   final Map<String, dynamic> raw;
   late final int uiVersion;
   late final List<ActionDescriptor> actions;
   late final List<GameChannel> channels;
+  late final List<RulePluginInfo> rulePlugins;
 
   String get id => jsonString(raw['id'], 'state.id');
   int get version => jsonInt(raw['version'], 'state.version');

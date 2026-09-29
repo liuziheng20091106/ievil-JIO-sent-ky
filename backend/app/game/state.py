@@ -484,23 +484,25 @@ def annan_penalty_day(game, seat_id):
     return penalty
 
 
-def eligible_voters(game):
-    """有投票权的席位。
+def eligible_voters(game, context=None):
+    """Voting seats after enabled rules; original no-vote and control criteria stay core."""
+    from .plugins import emit
 
-    傀儡自身无投票权，但控制它的魔女梅露露可以用该席位投票：
-    控制者缺位（出局或不再是当前牌）时该席不再计票。
-    安安后果按席位记账，因此该席换当前牌也不会洗掉「次日失去投票权」。
-    """
-    return [
+    voters = [
         s
         for s in living(game)
         if (
             not (card := current(game, s))["states"].get("puppet")
             or puppet_master(game, card) is not None
         )
-        and not current(game, s)["states"].get("no_vote")
+        and not card["states"].get("no_vote")
         and annan_penalty_day(game, s["id"]) != game["day"]
     ]
+    selection = {"voters": voters, "excluded_puppets": 0, "excluded_puppet_seats": []}
+    emit(game, [], "vote_eligibility", selection)
+    if context is not None:
+        context.update(selection)
+    return selection["voters"]
 
 
 def vote_denominator(game):
@@ -1076,7 +1078,7 @@ def upgrade_game(game):
     return changed
 
 
-def create_game(codex):
+def create_game(codex, rule_plugins=None):
     require(
         isinstance(codex, list)
         and len(codex) == 11
@@ -1086,12 +1088,12 @@ def create_game(codex):
     )
     shuffled_codex = list(codex)
     SystemRandom().shuffle(shuffled_codex)
-    from .plugins import required_manifest
+    from .plugins import manifest
 
     return {
         "id": uid(),
         "rules_revision": 6,
-        "rule_plugins": required_manifest(),
+        "rule_plugins": manifest(rule_plugins),
         "plugin_state": {},
         # 建立这一局的主持人身份快照：对局内显示「主持人(昵称)」，
         # 也让非本局主持人进入管理界面时能被认出来（见 api.host_enter）。

@@ -338,9 +338,9 @@ class Simulation:
         self.roster.host.open_join(True)
         for actor in self.roster.seats:
             actor.client.game_id = self.roster.host.game_id
-        self._drive_until(lambda: self._all_seated(), "全员入场")
-        self._drive_until(lambda: self._dealt(), "首次准备发牌")
-        self._drive_until(lambda: self._ordered(), "上下牌与再次准备")
+        self._drive_until(self._all_seated, "全员入场")
+        self._drive_until(self._dealt, "首次准备发牌")
+        self._drive_until(self._ordered, "上下牌与再次准备")
         # 全员再次准备后由主持人开局：这一步必须真的发生，否则对局会停在 ordering。
         self.roster.host.refresh()
         if self.roster.host.view["phase"] == "ordering":
