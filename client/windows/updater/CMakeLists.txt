@@ -20,13 +20,6 @@ add_executable(Updater WIN32
 
 apply_standard_settings(Updater)
 
-# 更新器有 10 个互不依赖的翻译单元，每个都要单独解析一遍 windows.h：实测
-# 2.7-6s/个，且与源码行数几乎无关（45 行的 job.cpp 也要 2.8s）。MSBuild 默认
-# 串行编译（不带 /MP），整个目标约 40s；开 /MP 让 cl.exe 并行编译这些文件后
-# 约 14s（本机 8 核，瓶颈落在最大的 gui.cpp 与链接上）。
-# 只加在 Updater 上：apply_standard_settings 是 Flutter 插件共用的，别动它。
-target_compile_options(Updater PRIVATE "/MP")
-
 target_compile_definitions(Updater PRIVATE "NOMINMAX")
 target_compile_definitions(Updater PRIVATE "_CRT_SECURE_NO_WARNINGS")
 target_compile_definitions(Updater PRIVATE "WIN32_LEAN_AND_MEAN")

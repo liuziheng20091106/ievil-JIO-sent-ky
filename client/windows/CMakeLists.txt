@@ -44,6 +44,13 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   # 源码里含有中文窗口标题，必须显式声明 UTF-8；否则 MSVC 会按系统 ANSI 代码页
   # （本机为 GBK）解析，中文标题会变成乱码。
   target_compile_options(${TARGET} PRIVATE /utf-8)
+  # 并行编译本目标内部的多个翻译单元（CMake 会译为 MSBuild 的
+  # <MultiProcessorCompilation>）。MSBuild 默认按文件串行，而本工程每个 TU 都要
+  # 单独解析一遍 windows.h：实测 2.7-6s/个且与源码行数无关（45 行的 job.cpp 也要
+  # 2.8s），所以文件多的目标几乎线性吃亏——更新器 10 个文件 40.4s → 14.4s。
+  # 注意：这是"目标内"并行，与 MSBuild 的 /m（项目间并行）叠加会过度并发，
+  # 本机可用内存常年只有 1-2 GB，别同时把 CMAKE_BUILD_PARALLEL_LEVEL 设大。
+  target_compile_options(${TARGET} PRIVATE /MP)
   target_compile_definitions(${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
 endfunction()
