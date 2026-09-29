@@ -47,6 +47,36 @@ def field_spec(descriptor, name):
     return next((item for item in descriptor["fields"] if item["name"] == name), None)
 
 
+def submitted_night_actions(actions):
+    """从傀儡面板回填该席本夜已提交的夜间技能。
+
+    傀儡席自己没有视图，服务端只把 ``actions`` 放进控制者的 ``puppet_controls``，
+    所以没有 ``self.night_actions`` 可读；但面板本身带着两个权威信号：
+
+    * ``night.clear`` 只在 ``actions_for`` 算出的 ``submitted`` 非空时出现
+      （见 ``actions.actions_for`` 的夜间分支），因此它的存在等价于「该席本夜已有提交」；
+    * 面板里的 ``night.submit`` 条目就是该席此刻仍可提交的技能。
+
+    傀儡不能发动角色技能、只剩魔女刀（``actions.night_abilities`` 对打上
+    ``no_ability`` 的牌直接返回 ``["knife"]``），所以「已有提交」就意味着那唯一一条
+    ``night.submit`` 已经交过。不回填的话 ``HeuristicPolicy._night`` 会认为什么都没
+    提交，反复重投同一条 ``night.submit``，控制者永远走不到确认（真实事故：seed 3
+    的一局烧满 600 秒预算仍停在 playing）。
+    """
+    if not any(item.get("id") == "night.clear" for item in actions):
+        return []
+    offered = [
+        item.get("payload", {}).get("ability")
+        for item in actions
+        if item.get("id") == "night.submit"
+    ]
+    # 傀儡只剩一个技能（checks/test_simulator_puppet.py 钉住这条不变式）。
+    # 万一将来放宽到多个，这里宁可保持原样，也不能猜错交的是哪一个。
+    if len(offered) != 1 or offered[0] is None:
+        return []
+    return [{"ability": offered[0]}]
+
+
 def puppet_view(view, panel):
     """把控制者视图裁剪成「以傀儡席位身份看到的视图」。
 
@@ -64,7 +94,8 @@ def puppet_view(view, panel):
             "seat_id": panel["seat_id"],
             # 夜间已确认与否不参与判断：面板有 night.confirm 才会被选中。
             "night_confirmed": False,
-            "night_actions": [],
+            # 面板不直接给「已提交哪些技能」，只能按 night.clear 回填，见上。
+            "night_actions": submitted_night_actions(panel["actions"]),
         },
     }
 
