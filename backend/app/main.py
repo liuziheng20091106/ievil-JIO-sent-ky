@@ -28,6 +28,7 @@ from . import (
     storage,
 )
 from .game import GameError
+from .game.plugins import PluginMismatch
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,11 @@ async def request_boundary(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "private, no-store"
     return response
+
+
+@app.exception_handler(PluginMismatch)
+async def plugin_mismatch(request, exc):
+    return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
 @app.exception_handler(GameError)

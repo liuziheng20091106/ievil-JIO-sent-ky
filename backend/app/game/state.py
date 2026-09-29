@@ -6,6 +6,7 @@ from random import SystemRandom
 from uuid import uuid4
 
 from .catalog import DAY_ABILITIES, NIGHT_ABILITIES, ROLES
+from .roles import emma
 
 
 class GameError(ValueError):
@@ -140,23 +141,6 @@ def present(game, role):
     return c["alive"] and current(game, owner(game, c["id"])) == c
 
 
-def apply_honoka_disguise(game, seat):
-    """下层穗乃香登场时套用先前选定的示人角色，并就此锁定。
-
-    返回套用的角色 id；没有选择（或她已经不是当前牌、已经锁定）时返回 None，
-    由本人登场后再选一次。
-    """
-    card = game["cards"]["honoka"]
-    if current(game, seat) != card or card["states"].get("disguise_locked"):
-        return None
-    role = card["states"].get("disguise")
-    if not role:
-        return None
-    card["states"]["disguise_locked"] = True
-    seat["avatar_role_id"] = role
-    return role
-
-
 def protection_active(game, card):
     """主持人裁定的「庇护」是否仍生效。
 
@@ -178,36 +162,10 @@ def witch_faction(game):
     return list(destiny.get("first", []))
 
 
-def sherry_bound_now(game):
-    """雪莉对汉娜的绑定此刻是否仍然成立；任一张牌出局即视为已经解绑。"""
-    return (
-        game["spiritual"]["sherry_bound"]
-        and role_card(game, "sherry")["alive"]
-        and role_card(game, "hanna")["alive"]
-    )
-
-
 def hanna_witch_window(game):
     """「汉娜魔化」开关只在第三天入夜前可调；第三天当晚的检测尚未结算时仍可补开。"""
     return game["status"] == "playing" and (
         game["day"] < 3 or (game["day"] == 3 and game["phase"] == "witch")
-    )
-
-
-def hanna_witch_override(game):
-    """第三天夜里汉娜是否覆盖当天魔女人选。
-
-    开关为开、汉娜在场上、汉娜曾经和雪莉绑定过、当前已经解绑、艾玛不在场，
-    五条同时成立时由汉娜魔女化，顶掉魔女阵营 A、B 的补位。
-    """
-    return (
-        bool(game.get("hanna_witch"))
-        # 「在场」一律按 present 判定：未登场的下层牌即使活着也不能成为当天魔女，
-        # 否则又会出现「没有刀可点的魔女」。这与第三天艾玛按「当前牌」判定同一口径。
-        and present(game, "hanna")
-        and game["spiritual"]["sherry_bound"]
-        and not sherry_bound_now(game)
-        and not present(game, "emma")
     )
 
 
@@ -406,13 +364,14 @@ def death_card_payload(game, entries, half=None, day=None):
         "day": day if day is not None else game["day"],
         "half": half if half is not None else game["half"],
         "deaths": [
-            {key: entry[key] for key in DEATH_CARD_KEYS if key in entry}
-            for entry in entries
+            {key: entry[key] for key in DEATH_CARD_KEYS if key in entry} for entry in entries
         ],
     }
 
 
-def notify(game, events, text, seats=None, title="游戏信息", image_id=None, alert=False, payload=None):
+def notify(
+    game, events, text, seats=None, title="游戏信息", image_id=None, alert=False, payload=None
+):
     recipients = None if seats is None else audience(game, seats)
     event = {
         "kind": "information" if recipients is not None else ("alert" if alert else "notice"),
@@ -508,9 +467,7 @@ def pending_nominators(game):
     当前牌本阶段不能行动的席位（傀儡、下层登场受限等）拿不到提名按钮，
     也不能算作待办，否则阶段永远等不到它提交，只能由主持人纠错。
     """
-    order = dict.fromkeys(
-        game["public"].get("speech_order", []) + [s["id"] for s in game["seats"]]
-    )
+    order = dict.fromkeys(game["public"].get("speech_order", []) + [s["id"] for s in game["seats"]])
     done = game.get("nomination_done", [])
     return [
         sid
@@ -682,8 +639,7 @@ def ballot_selection(game, seat_id):
 def ballot_complete(game, seat_id):
     """该席位是否已经对今天全部候选做出选择；今天没有候选时视为完成。"""
     return all(
-        seat_choice(game, seat_id, item["card_id"]) is not None
-        for item in nomination_rounds(game)
+        seat_choice(game, seat_id, item["card_id"]) is not None for item in nomination_rounds(game)
     )
 
 
@@ -693,24 +649,8 @@ def poison_sources(game, card):
     if card["states"].get("poisoned"):
         sources.append("主持人状态")
     target_seat = next((s for s in game["seats"] if card["id"] in s["cards"]), None)
-    emma = game["cards"].get("emma")
-    emma_seat = next((s for s in game["seats"] if emma and emma["id"] in s["cards"]), None)
-    # 安安在医务室休息的这一夜不吃艾玛毒素（其他中毒来源照旧）。
-    resting = (game.get("night") or {}).get("rest") or {}
-    rest_exempt = (
-        bool(resting)
-        and game["half"] == "night"
-        and resting.get("day") == game["day"]
-        and target_seat is not None
-        and resting.get("seat_id") == target_seat["id"]
-    )
-    if target_seat and emma_seat and emma["alive"] and not rest_exempt:
-        indexes = {s["id"]: index for index, s in enumerate(game["seats"])}
-        distance = (indexes[target_seat["id"]] - indexes[emma_seat["id"]]) % len(game["seats"])
-        same_other = target_seat == emma_seat and card["id"] != emma["id"]
-        adjacent_current = distance in {1, len(game["seats"]) - 1} and current(game, target_seat) == card
-        if same_other or adjacent_current:
-            sources.append("艾玛毒素")
+    if emma.poison_exposed(game, card):
+        sources.append("艾玛毒素")
     if card["role_id"] == "annan" and target_seat:
         noah = game["cards"].get("noah")
         noah_seat = next((s for s in game["seats"] if noah and noah["id"] in s["cards"]), None)
@@ -866,7 +806,12 @@ def pending_revive(game):
 # 不允许发到同一席位的角色对：每对的两个角色牌序索引 //2 必须不同。
 # 米莉亚与希罗同席时，米莉亚夜间临死换牌可能把希罗牌换走、希罗的回溯时点跟着错乱，
 # 规则上不允许两人同一天挤在同一席位。
-DEAL_EXCLUDED_PAIRS = (("millia", "arisa"), ("coco", "sherry"), ("millia", "hiro"), ("emma", "noah"))
+DEAL_EXCLUDED_PAIRS = (
+    ("millia", "arisa"),
+    ("coco", "sherry"),
+    ("millia", "hiro"),
+    ("emma", "noah"),
+)
 
 # 艾玛、米莉亚、亚里沙不会发给同一个人，且必须放在每席两张牌的下层（牌序索引为奇数）。
 DEAL_LOWER_ROLES = ("emma", "millia", "arisa")
@@ -930,6 +875,23 @@ def deal_cards(game):
 def upgrade_game(game):
     """就地补齐第六版规则字段；保留旧局的全部历史数据。"""
     changed = game.get("rules_revision") != 6
+    from .plugins import required_manifest
+
+    add_manifest = required_manifest()
+    if "rule_plugins" not in game:
+        game["rule_plugins"] = add_manifest
+        changed = True
+    if "plugin_state" not in game:
+        game["plugin_state"] = {}
+        changed = True
+    for snapshot in game.get("snapshots", []):
+        if "plugin_state" not in snapshot["state"]:
+            snapshot["state"]["plugin_state"] = {}
+            changed = True
+        if "rule_plugins" in snapshot["state"]:
+            del snapshot["state"]["rule_plugins"]
+            changed = True
+
     game["rules_revision"] = 6
 
     def add(mapping, key, value):
@@ -961,7 +923,9 @@ def upgrade_game(game):
     if legacy_entries:
         game["host_entries"] = list(dict.fromkeys([*game["host_entries"], *legacy_entries]))
         changed = True
-    legacy_actions = [action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES]
+    legacy_actions = [
+        action for action in night["actions"] if action.get("ability") not in NIGHT_ABILITIES
+    ]
     if legacy_actions:
         night.setdefault("legacy_actions", []).extend(legacy_actions)
         night["actions"] = [
@@ -1122,9 +1086,13 @@ def create_game(codex):
     )
     shuffled_codex = list(codex)
     SystemRandom().shuffle(shuffled_codex)
+    from .plugins import required_manifest
+
     return {
         "id": uid(),
         "rules_revision": 6,
+        "rule_plugins": required_manifest(),
+        "plugin_state": {},
         # 建立这一局的主持人身份快照：对局内显示「主持人(昵称)」，
         # 也让非本局主持人进入管理界面时能被认出来（见 api.host_enter）。
         "host": None,
@@ -1240,6 +1208,7 @@ SNAPSHOT_EXCLUDED = {
     "spiritual",
     "seats",
     "hanna_witch",
+    "rule_plugins",
 }
 
 
@@ -1249,36 +1218,6 @@ def fallen_upper_role(game, seat):
         return None
     upper = game["cards"][seat["cards"][0]]
     return None if upper["alive"] else upper["role_id"]
-
-
-def hiro_target_snapshot(game, half):
-    """希罗的固定回溯点：夜间回到前一天顺序发言，白天回到前一天自由发言。
-
-    找不到该时点（例如第1天夜里的死亡）时回到开局保存的最早快照。
-    """
-    want = "speech" if half == "night" else "discussion"
-    day = game["day"] - 1
-    found = next(
-        (snap for snap in game["snapshots"] if snap["day"] == day and snap["phase"] == want), None
-    )
-    return found or (game["snapshots"][0] if game["snapshots"] else None)
-
-
-def hiro_rewind(game, events, half):
-    """希罗即将出局：立即按固定时点回溯一次；普通与魔女各有独立额度。
-
-    返回 True 表示已经回溯；调用方必须停止继续写阶段与快照，否则会覆盖恢复的时间线。
-    """
-    hiro = role_card(game, "hiro")
-    mode = "witch" if hiro["witch"] else "normal"
-    if game["spiritual"]["hiro_used"][mode]:
-        return False
-    snap = hiro_target_snapshot(game, half)
-    if snap is None:
-        return False
-    rewind(game, snap["id"], events, mode)
-    game["rewound_night"] = True
-    return True
 
 
 def save_snapshot(game):
@@ -1504,9 +1443,7 @@ def clear_seat_actions(game, seat_id, events=None):
     if night.get("locked") and game["phase"] == "night_review":
         from .resolution import prepare_night_preview
 
-        game["pending"] = [
-            p for p in game["pending"] if p["kind"] != "hiro" or p.get("preview")
-        ]
+        game["pending"] = [p for p in game["pending"] if p["kind"] != "hiro" or p.get("preview")]
         night["reactions"] = []
         # 重算预结算同样可能触发希罗回溯，事件队列要一起传下去（见 prepare_night_preview）。
         prepare_night_preview(game, events)

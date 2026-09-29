@@ -13,7 +13,8 @@ from unittest.mock import patch
 from backend.app import storage
 from backend.app.game import DEFAULT_CODEX, apply_command, create_game
 from backend.app.game.engine import enter_execution
-from backend.app.game.resolution import damage_preview, millia_substitute
+from backend.app.game.resolution import damage_preview
+from backend.app.game.roles.millia import substitute as millia_substitute
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
 PAIRS = [
@@ -86,7 +87,9 @@ class PassiveGazeCard(unittest.TestCase):
         game = self.gaze_game()
         events = []
         enter_execution(game, events)
-        event = next(event for event in skill_cards(events) if event["payload"]["ability"] == "gaze")
+        event = next(
+            event for event in skill_cards(events) if event["payload"]["ability"] == "gaze"
+        )
         # 只发给奈乃香本人：其余玩家连这条消息都收不到。
         self.assertEqual(event["kind"], "information")
         self.assertEqual(event["audience"], ["p7"])
@@ -264,7 +267,9 @@ class PassiveNightCards(unittest.TestCase):
         self.assertEqual(game["night"]["preview"]["deaths"][0]["substituted_from"], "meruru")
         # 预结算阶段一条被动卡都不许发：夜里提示替死就等于提前公布夜里的结算。
         events = command(game, HOST, "host.advance")
-        self.assertFalse([item for item in skill_cards(events) if item["payload"]["mode"] == "passive"])
+        self.assertFalse(
+            [item for item in skill_cards(events) if item["payload"]["mode"] == "passive"]
+        )
         self.assertFalse(game["cards"]["millia"]["alive"])
         self.assertTrue(game["cards"]["meruru"]["alive"])
         self.assertEqual(game["deaths"][-1].get("substituted_from"), "meruru")
@@ -319,7 +324,9 @@ class PassiveNightCards(unittest.TestCase):
             [death["target_card"] for death in game["night"]["preview"]["deaths"]], ["meruru"]
         )
         events = command(game, HOST, "host.advance")
-        self.assertFalse([item for item in skill_cards(events) if item["payload"]["mode"] == "passive"])
+        self.assertFalse(
+            [item for item in skill_cards(events) if item["payload"]["mode"] == "passive"]
+        )
         self.assertFalse(game["cards"]["meruru"]["alive"])
         game["pending"] = []
         events = command(game, HOST, "host.advance")

@@ -12,9 +12,11 @@ from . import auth, storage, views
 from .game import expire_warnings, run_auto_advance, run_speech_timer, touch_speech_timer
 from .game import clock as game_clock
 from .game.state import controlled_cards, owner
+from .game.plugins import PluginMismatch
 from .game.views import seat_chat
 
 logger = logging.getLogger(__name__)
+incompatible_games = set()
 # ponytail: one room and one worker; use per-room locks if concurrent games are added.
 lock = asyncio.Lock()
 connections = set()
@@ -214,9 +216,7 @@ async def handle_typing(peer, data):
             # 公屏的发言权还有一层 phase 判定（顺序发言等待/夜间关闭），
             # 由 can_chat/seat_chat 给出：与频道投影里的 can_send 同一来源。
             if channel_id == "public" and actor.get("kind") == "player":
-                seat = next(
-                    (s for s in game["seats"] if s["id"] == actor["seat_id"]), None
-                )
+                seat = next((s for s in game["seats"] if s["id"] == actor["seat_id"]), None)
                 if seat is None or not seat_chat(game, seat)[0]:
                     return
             if active and channel_id == "public" and actor.get("kind") == "player":
@@ -229,9 +229,7 @@ async def handle_typing(peer, data):
                 if other.game_id != peer.game_id or other.participant_id == actor["id"]:
                     continue
                 theirs = auth.actor_for_token(db, other.token_hash, peer.game_id)
-                if not theirs or not storage.typing_visible(
-                    db, peer.game_id, theirs, channel_id
-                ):
+                if not theirs or not storage.typing_visible(db, peer.game_id, theirs, channel_id):
                     continue
                 enqueue(
                     other,
@@ -352,18 +350,24 @@ def run_timers(now=None):
         ids = [row["id"] for row in db.execute("SELECT id FROM games WHERE status != 'ended'")]
     updated = []
     for game_id in ids:
-        with storage.transaction() as db:
-            game = storage.load_game(db, game_id)
-            if not game:
-                continue
-            previous = game["version"]
-            events = expire_warnings(game, stamp)
-            events += run_speech_timer(game, stamp)
-            events += run_auto_advance(game, stamp)
-            changed = game["version"] != previous
+        try:
+            with storage.transaction() as db:
+                game = storage.load_game(db, game_id)
+                if not game:
+                    continue
+                incompatible_games.discard(game_id)
+                previous = game["version"]
+                events = expire_warnings(game, stamp)
+                events += run_speech_timer(game, stamp)
+                events += run_auto_advance(game, stamp)
+                changed = game["version"] != previous
+                if changed:
+                    storage.save_game(db, game)
+                    rows = storage.add_events(db, game_id, events)
             if changed:
-                storage.save_game(db, game)
-                rows = storage.add_events(db, game_id, events)
-        if changed:
-            updated.append((game_id, rows))
+                updated.append((game_id, rows))
+        except PluginMismatch as exc:
+            if game_id not in incompatible_games:
+                logger.error("对局 %s 规则模块不兼容，暂停计时：%s", game_id, exc)
+                incompatible_games.add(game_id)
     return updated

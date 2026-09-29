@@ -156,9 +156,12 @@ def load_game(db, game_id):
         return None
     game = json.loads(row["state"])
     from .game.state import upgrade_game
+    from .game.plugins import require_compatible
 
     upgrade_game(game)
+    require_compatible(game)
     return game
+
 
 def current_game_id(db):
     row = db.execute("SELECT id FROM games ORDER BY rowid DESC LIMIT 1").fetchone()
@@ -182,6 +185,7 @@ def save_game(db, game):
         "UPDATE games SET state=?,version=?,status=? WHERE id=?",
         (dumps(game), game["version"], game["status"], game["id"]),
     )
+
 
 def purge(db):
     """Clear game data without touching global accounts or login tokens."""
@@ -215,6 +219,7 @@ def pending_invites(db, account_id):
             (account_id, invite_cutoff()),
         )
     )
+
 
 def add_message(
     db,
@@ -354,7 +359,7 @@ def project_message_payload(raw, actor):
     """
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -455,10 +460,7 @@ def channel_send_reason(db, game, actor, channel_id):
     if actor.get("kind") == "spectator" and channel_id != SPECTATOR_CHANNEL:
         # 观战者没有私信与公屏：发言只能落在观战频道。
         return "观战者只能在观战频道发言"
-    if (
-        actor.get("kind") == "player"
-        and channel_id == SPECTATOR_CHANNEL
-    ):
+    if actor.get("kind") == "player" and channel_id == SPECTATOR_CHANNEL:
         return "观战频道仅观战者可见"
     if (
         not host_capable(actor)
@@ -467,7 +469,9 @@ def channel_send_reason(db, game, actor, channel_id):
     ):
         # 夜间与整席出局都只允许与主持人私聊：不含主持人的频道（旧数据或异常路径
         # 遗留）一律不能再发言。出局按当前牌现场求值，回溯或复活后自动解除。
-        row = db.execute("SELECT participant_ids FROM channels WHERE id=?", (channel_id,)).fetchone()
+        row = db.execute(
+            "SELECT participant_ids FROM channels WHERE id=?", (channel_id,)
+        ).fetchone()
         if row and "host" not in json.loads(row["participant_ids"]):
             return "夜间只能与主持人私聊" if night_half(game) else "出局后只能与主持人私信"
     active = active_private_channel(db, game, actor["id"])
@@ -476,7 +480,9 @@ def channel_send_reason(db, game, actor, channel_id):
     return ""
 
 
-def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, scope="all", channel_ids=None):
+def messages(
+    db, game_id, actor, *, before=None, after=None, channel_id=None, scope="all", channel_ids=None
+):
     clauses, args = ["m.game_id=?"], [game_id]
     if channel_ids is not None:
         # 傀儡代读：只放行该席位所在的聊天频道历史，不放行面向个人的系统情报。
@@ -486,10 +492,12 @@ def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, sc
     elif actor.get("kind") == "spectator" and not host_capable(actor):
         # 观战者独享观战频道：聊天只放行观战频道，系统消息（kind!=chat）照常；
         # 玩家的公屏、私信与面向个人的情报一律不出现在历史里。
-        clauses.append("(m.kind!='chat' AND (m.audience IS NULL OR EXISTS ("
-                       "SELECT 1 FROM json_each(m.audience) WHERE value IN ("
-                       + ",".join("?" for _ in actor["access_ids"] or ["-"])
-                       + "))) OR m.channel_id='spectator')")
+        clauses.append(
+            "(m.kind!='chat' AND (m.audience IS NULL OR EXISTS ("
+            "SELECT 1 FROM json_each(m.audience) WHERE value IN ("
+            + ",".join("?" for _ in actor["access_ids"] or ["-"])
+            + "))) OR m.channel_id='spectator')"
+        )
         args.extend(actor["access_ids"] or ["-"])
     elif not host_capable(actor):
         ids = actor["access_ids"]
@@ -525,9 +533,7 @@ def messages(db, game_id, actor, *, before=None, after=None, channel_id=None, sc
         else:
             clauses.append("m.kind='chat' AND m.channel_id='public'")
     elif scope == "private":
-        clauses.append(
-            "m.kind='chat' AND m.channel_id!='public' AND m.channel_id!='information'"
-        )
+        clauses.append("m.kind='chat' AND m.channel_id!='public' AND m.channel_id!='information'")
         if actor.get("kind") == "spectator" and not host_capable(actor):
             clauses.append("m.channel_id!='spectator'")
             # 观战者没有私信；这个口径对观战者恒为空。

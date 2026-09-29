@@ -4,6 +4,8 @@ from copy import deepcopy
 from random import SystemRandom
 
 from . import clock
+from . import plugins
+from .roles import emma, hanna, hiro, honoka, meruru, millia, nanoka, sherry
 from .actions import (
     CHALLENGE_PHASES,
     actions_for,
@@ -31,28 +33,22 @@ from .catalog import (
 )
 from .resolution import (
     begin_night,
-    damage_preview,
     death_batch,
     eliminate_seat,
     false_witness,
-    information,
     lock_night,
-    millia_substitute,
     prepare_night_preview,
     publish_day_passives,
     publish_night_passives,
-    publish_witness,
     revive,
-    revoke_death,
+    resolve_intents,
     sync_night_confirmations,
     target_allowed,
-    treasure_protected,
-    unlock_coco,
 )
+from .roles.coco import unlock_coco
 from .state import (
     DEAL_LOWER_ROLES,
     GameError,
-    apply_honoka_disguise,
     audience,
     can_use_ability,
     card_actionable,
@@ -71,26 +67,21 @@ from .state import (
     eligible_voters,
     effect_effective,
     finish,
-    hanna_witch_override,
     hanna_witch_window,
-    hiro_rewind,
     living,
     log_event,
     lost_by_challenge,
     nomination_auto_yes,
     nomination_rounds,
-    orphan_puppet_cards,
     pending_nominators,
     pending_revive,
     notify,
     owner,
-    passive_card_payload,
     pending,
     player_seat,
     present,
-    puppet_master_dead,
-    release_puppet,
     require,
+    release_puppet,
     rewind,
     role_card,
     save_snapshot,
@@ -110,9 +101,7 @@ def validate_command(game, actor, action, payload):
     # 主持人要先确认进入本局管理界面，服务端才按主持人放行（见 state.host_capable）；
     # 未确认时连这里列出的行动表都是空的，命令无从通过。
     require(
-        host_capable(actor)
-        if actor.get("kind") == "host"
-        else actor.get("game_id") == game["id"],
+        host_capable(actor) if actor.get("kind") == "host" else actor.get("game_id") == game["id"],
         "没有本局操作权限",
     )
     choices = [
@@ -215,7 +204,7 @@ def convert_daily(game, events):
         # 也变成假话，还会泄露「被转化的是我另一张隐藏牌」。
         # 「汉娜魔化」五条全部成立时由汉娜覆盖该人选（条件里已含艾玛不在场）；以上都不
         # 成立时，改由魔女阵营 A、B 中仍可转化的一位接替，不再退回魔典。
-        if hanna_witch_override(game):
+        if hanna.witch_override(game):
             if not game["cards"]["hanna"]["witch"]:
                 set_witch(game, events, "hanna")
                 log_event(game, "system", "「汉娜魔化」生效：第三天夜的魔女人选由汉娜承担。")
@@ -248,7 +237,11 @@ def convert_daily(game, events):
                 break
     if not converted:
         if day == 3:
-            log_event(game, "system", "第三天没有以当前牌登场的艾玛，且魔女阵营无可转化目标，本夜不产生新的魔女。")
+            log_event(
+                game,
+                "system",
+                "第三天没有以当前牌登场的艾玛，且魔女阵营无可转化目标，本夜不产生新的魔女。",
+            )
         else:
             pending(game, "codex", "本日无合法魔女化目标：主持人裁定转化或耗尽处理")
             return
@@ -257,16 +250,16 @@ def convert_daily(game, events):
 
 def apply_damage(game, events, preview, allow_reaction=True):
     """结算一次伤害；希罗缺阵时按固定时点自动回溯并返回 True。"""
-    hiro = role_card(game, "hiro")
+    hiro_card = role_card(game, "hiro")
     half = game["half"]
-    mode = "witch" if hiro["witch"] else "normal"
+    mode = "witch" if hiro_card["witch"] else "normal"
     hiro_triggered = (
         allow_reaction
         and not game["spiritual"]["hiro_used"][mode]
         and any(death["target_card"] == "hiro" for death in preview["deaths"])
     )
     if hiro_triggered:
-        if hiro_rewind(game, events, half):
+        if hiro.rewind_on_death(game, events, half):
             return True
     if game["half"] == "night":
         # 夜间的被动播报一律压到天亮（见 publish_night_passives），这里只把事实记在
@@ -312,9 +305,7 @@ def next_speaker(game, current_speaker, events):
     index = order.index(current_speaker) + 1 if current_speaker in order else 0
     # 用 seat_operable 而不是「有当前牌」：傀儡主人出局后该席无人可代操作，
     # 若仍排它发言就会卡死在「当前发言人」上。发言本身不需要牌面技能，故不看技能。
-    while index < len(order) and (
-        order[index] in passed or not seat_operable(game, order[index])
-    ):
+    while index < len(order) and (order[index] in passed or not seat_operable(game, order[index])):
         sid = order[index]
         if sid in queued:
             # 跳过或轮到自己前已出局：提前写好的内容照旧公开，不静默丢弃。
@@ -442,13 +433,14 @@ def enter_execution(game, events):
         # 洗脑后的当天：只有被洗脑者与安安本人会被处决，投票选出的其他候选不执行。
         game["execution"] = [cid for cid in game["execution"] if cid in lock["cards"]]
     # 名单到这里才算定稿：奈乃香的被动幻视就在这一刻自动结算（见 auto_gaze）。
-    auto_gaze(game, events)
+    previous = game["phase"]
+    nanoka.auto_gaze(game, events)
     if game["phase"] != "execution":
         # 奈乃香的命中率只在她自己的这一次处决里递增：刚进入处决阶段时清零，
         # 不留「上一轮残留让第一枪就是高命中」这个隐式前提。
-        nanoka = game["cards"].get("nanoka")
-        if nanoka:
-            nanoka["uses"]["shot_misses"] = 0
+        nanoka_card = game["cards"].get("nanoka")
+        if nanoka_card:
+            nanoka_card["uses"]["shot_misses"] = 0
     game["phase"] = "execution"
     game["execution_ready"] = []
     game["execution_shots"] = []
@@ -457,34 +449,8 @@ def enter_execution(game, events):
     )
     # 本日投票结束：解除分母冻结，下一轮投票重新按当时在场的有投票权人数算。
     game["vote_freeze"] = None
-
-
-def auto_gaze(game, events):
-    """处决幻视是被动技能：当天的处决名单一定下来就自动结算一次，结果私下发给奈乃香。
-
-    用户 2026-09-27 确认：不再需要（也不允许）她声明发动，所以这里不由玩家点按触发——
-    原来的实现只在处决阶段给一个 5 秒窗口，实战里根本点不到。中毒时照旧必定收到一条结果，
-    真假由 ``information()`` 的那一次信息骰决定，且不告诉她掷骰结果。
-
-    用户 2026-09-28 追加：**傀儡自身的被动效果保留**，所以这里只看「她的奈乃香牌在场且
-    是当前牌」（`present`）。她被傀儡化或失去技能时，主动技能照旧不发，但这条自动结算
-    仍然生效；已出局或不是当前牌的奈乃香才没有它。
-    """
-    card = game["cards"].get("nanoka")
-    if not card or card["uses"].get("gaze_day") == game["day"]:
-        return
-    if not present(game, "nanoka"):
-        return
-    card["uses"]["gaze_day"] = game["day"]
-    truth = any(game["cards"][cid]["witch"] for cid in game["execution"])
-    information(
-        game,
-        events,
-        card,
-        "处决幻视",
-        f"本日处决名单{'含有' if truth else '不含'}魔女。",
-        f"本日处决名单{'不含' if truth else '含有'}魔女。",
-        payload=passive_card_payload(game, "gaze", ""),
+    plugins.emit(
+        game, events, "phase_enter", {"from": previous, "to": "execution", "day": game["day"]}
     )
 
 
@@ -507,9 +473,7 @@ def open_vote(game, events):
             "denominator": len(eligible_voters(game)),
         }
     game["public"]["votes"] = {
-        "candidates": [
-            {"seat_id": item["seat_id"], "card_id": item["card_id"]} for item in rounds
-        ],
+        "candidates": [{"seat_id": item["seat_id"], "card_id": item["card_id"]} for item in rounds],
         "total": len(rounds),
         "results": deepcopy(game["vote_rounds"]),
     }
@@ -523,6 +487,10 @@ def open_vote(game, events):
             + "）；同意票需严格超过有投票权存活玩家的一半方可处决"
             + ("，其中蕾雅决斗的两张牌达到半数即可处决。" if duel else "。"),
             alert=True,
+        )
+    if index == 0:
+        plugins.emit(
+            game, events, "phase_enter", {"from": "nomination", "to": "voting", "day": game["day"]}
         )
 
 
@@ -608,18 +576,13 @@ def advance(game, events):
             s["avatar_role_id"] = lower["role_id"]
             text = f"下层角色{ROLES[lower['role_id']]['name']}已登场。"
             if lower["id"] == "honoka":
-                shown = apply_honoka_disguise(game, s)
+                shown = honoka.apply_disguise(game, s)
                 text += (
                     f"按先前选择示人为{ROLES[shown]['name']}。"
                     if shown
                     else "你可以选择一次示人角色。"
                 )
             notify(game, events, text, [s["id"]], "下层登场")
-        game["day_binding"] = (
-            {"day": game["day"], "intact": True}
-            if present(game, "sherry") and present(game, "hanna")
-            else None
-        )
         # 天亮只发一条汇总：逐条死讯与夜终总结合并，同一批死讯不再刷两遍。
         # 角色卡死亡卡片与这句话同一条消息：一夜多人都出局时合并成一张卡。
         queued_deaths = game.get("queued_deaths") or []
@@ -698,26 +661,14 @@ def advance(game, events):
         ]
         attacks.extend(game.get("execution_shots", []))
         # 白天只有奈乃香的枪会替死：处决死亡因 cause=execution 被排除，命中枪可以被米莉亚顶掉。
-        preview = damage_preview(game, millia_substitute(game, attacks))
+        preview = resolve_intents(game, events, attacks)
         apply_damage(game, events, preview)
         if game.get("rewound_night"):
             return
         game["phase"] = "dusk"
     elif phase == "dusk":
         require(not game["winner_candidate"], "已有胜负候选，请确认本半天所有效果后宣判或裁定纠错")
-        binding = game["day_binding"]
-        if binding and binding["intact"] and present(game, "sherry") and present(game, "hanna"):
-            game["spiritual"]["sherry_bound"] = True
-            notify(
-                game,
-                events,
-                "你与汉娜已共同度过完整白天，绑定生效。",
-                [owner(game, "sherry")["id"]],
-                "雪莉绑定",
-                payload=passive_card_payload(
-                    game, "bind", "你与汉娜已共同度过完整白天，绑定生效。"
-                ),
-            )
+        sherry.finish_day_binding(game, events)
         game["day"] += 1
         game["half"] = "night"
         game["phase"] = "witch"
@@ -734,7 +685,7 @@ def advance(game, events):
         return
     # 夜间预结算/处决判死发生在本函数里：主人出局后傀儡当前牌要跟着当场出局
     # （见 sync_puppet_bonds）。
-    sync_puppet_bonds(game, events)
+    meruru.sync_puppet_bonds(game, events)
     if game.pop("rewound_night", False):
         # 傀儡当前牌是希罗：这次即时出局又触发了一次回溯，同样不能再写阶段/快照。
         return
@@ -742,6 +693,17 @@ def advance(game, events):
     game["deadline"] = None
     # 顺序发言的30秒倒计时随阶段进出：刚进入发言阶段就为第一位计时，离开即清除。
     sync_speech_timer(game)
+    if game["phase"] != phase and game["phase"] in {
+        "night_results",
+        "speech",
+        "discussion",
+        "nomination",
+        "dusk",
+        "witch",
+    }:
+        plugins.emit(
+            game, events, "phase_enter", {"from": phase, "to": game["phase"], "day": game["day"]}
+        )
     save_snapshot(game)
     if game["status"] != "ended":
         # 阶段推进不再发系统消息：两端都有阶段标题与全屏阶段动画，只留主持人日志。
@@ -752,7 +714,7 @@ def execute_declaration(game, events, declaration):
     if declaration["executed"]:
         return
     data = declaration["data"]
-    cid, sid, ability = declaration["card_id"], declaration["seat_id"], declaration["ability"]
+    cid, ability = declaration["card_id"], declaration["ability"]
     card = game["cards"][cid]
     # 处决幻视自 2026-09-27 起是被动技能，不再有声明：名单定稿时由 auto_gaze 直接结算。
     # 效果类声明里只剩「赠送照片」仍吃中毒效果骰；其余真实声明不再因中毒被判假。
@@ -771,61 +733,10 @@ def execute_declaration(game, events, declaration):
     target_card = current(game, target) if target else None
     if target:
         require(target_card is not None, "声明目标已不在场，请停止声明并重新裁定")
-    if ability == "interrupt":
-        card["uses"]["interrupt_day"] = game["day"]
-        require(target != sid, "不能打断自己的发言")
-        if game["phase"] == "speech":
-            require(game["public"]["speaker"] == target, "只能打断当前发言者")
-            game["public"]["interrupted_speaker"] = target
-            game["public"]["speaker"] = sid
-            declaration["effects"] = {"interrupted_speaker": target, "speaker": sid}
-    elif ability == "love":
-        card["uses"]["love_day"] = game["day"]
-        # 爱从当天夜里才开始生效，见 resolution.active_love；记下被爱的那张牌，
-        # 它出局后玛格就转爱自己（用户批注 B20）。
-        game["marg_love"] = {"seat_id": target, "card_id": target_card["id"], "day": game["day"]}
-    elif ability == "duel":
-        # 蕾雅决斗：宣布即失去本技能，当天两张牌强制进入投票并降为半数门槛。
-        card["uses"]["duel_day"] = game["day"]
-        game["duel"] = {"day": game["day"], "leia_card": cid, "target_card": target_card["id"]}
-        game["duel_approvals"] = {}
-        declaration["effects"] = {"duel": cid}
-        notify(
-            game,
-            events,
-            f"{sid}号与{target}号决斗：今天所有人必须至少同意这两张牌之一，"
-            "且它们达到半数即可处决。",
-            alert=True,
-        )
-    elif ability == "mass_brainwash":
-        card["uses"]["mass_brainwash"] = True
-        if target_card["id"] not in game["execution"]:
-            game["execution"].append(target_card["id"])
-        # 用户批注（B14）采用新规则：洗脑者本人也被处决，且今天不再处决其他人。
-        # 因此当天处决名单被锁死为这两张牌，投票选出来的其他候选一律不执行；
-        # 不直接跳到处决阶段，是为了保留「假洗脑可以被人质疑撤销」的时窗。
-        if cid not in game["execution"]:
-            game["execution"].append(cid)
-        game["execution_lock"] = {"day": game["day"], "cards": [target_card["id"], cid]}
-        game["spiritual"]["annan_penalty"][sid] = {
-            "day": game["day"],
-            "declaration_id": declaration["id"],
-            "self_card": cid,
-        }
-        declaration["effects"] = {
-            "execution_card": target_card["id"],
-            "self_execution_card": cid,
-            "penalty_seat": sid,
-        }
-        notify(
-            game,
-            events,
-            f"洗脑生效：{target}号与{sid}号一同进入今天的处决名单，今天不再处决其他人。",
-        )
-    elif ability == "photo":
-        photo = {"id": uid(), "sender": sid, "target": target, "day": game["day"], "allowed": False}
-        game["photos"].append(photo)
-        notify(game, events, "收到照片，可自愿授权发送者查看你的夜间行动。", [target], "收到照片")
+    module = next(
+        module for module in plugins.enabled(game) if module.ID == DAY_ABILITIES[ability][0]
+    )
+    module.execute_declaration(game, events, declaration, target_card)
     declaration["executed"] = True
 
 
@@ -875,32 +786,12 @@ def resolve_pending(game, events, data):
         shown_source = (
             game["cards"][source]["states"].get("display_killer", source) if source else None
         )
-        require(not present(game, "hanna") or "hanna" in suspects, "名单必须包含在场的汉娜")
+        require(not hanna.witness_extra(game) or "hanna" in suspects, "名单必须包含在场的汉娜")
         require(not shown_source or shown_source in suspects, "名单必须包含技能处理后的真凶")
         if not item.get("truthful", True):
             # 死者中毒、目击信息骰失败：主持人照常填含真凶的完整名单，发出去的是假名单。
             suspects = false_witness(game, suspects, shown_source)
-        if "honoka" in suspects and game["cards"]["honoka"]["witch"]:
-            pending(
-                game,
-                "honoka_witness",
-                "穗乃香被列入目击：等待本人选择显示角色",
-                seat_id=owner(game, "honoka")["id"],
-                victim=item["victim"],
-                witness_seat=item["seat_id"],
-                # death_id 一并带过去：否则最终发出的目击与这次死亡脱钩，复活时撤不掉。
-                death_id=item.get("death_id"),
-                suspects=list(suspects),
-            )
-            notify(
-                game,
-                events,
-                "你被列入一份目击名单，请选择本次显示的角色；超时将显示穗乃香。",
-                [owner(game, "honoka")["id"]],
-                "目击改名",
-            )
-        else:
-            publish_witness(game, events, item, suspects)
+        honoka.queue_witness(game, events, item, suspects)
     elif kind == "evidence":
         if data.get("allow"):
             recipients = None if data.get("public") else data.get("recipients", [])
@@ -931,8 +822,11 @@ def resolve_pending(game, events, data):
                 apply_damage(
                     game,
                     events,
-                    damage_preview(
-                        game, [{"target_card": cid, "cause": "madness", "unconditional": True}]
+                    resolve_intents(
+                        game,
+                        events,
+                        [{"target_card": cid, "cause": "madness", "unconditional": True}],
+                        substitute=False,
                     ),
                 )
             elif effect == "poison":
@@ -1016,30 +910,30 @@ def host_command(game, events, action, data):
             all(s["occupant_id"] and s["ready"] for s in game["seats"]),
             "需要7名玩家全部入座、确认上下牌并准备",
         )
+        selected = data.get("rule_plugins", [])
+        require(isinstance(selected, list), "附加规则选择无效")
+        available = {module.ID: module for module in plugins.optional()}
+        require(
+            len(selected) == len(set(selected)) and all(pid in available for pid in selected),
+            "附加规则选择无效",
+        )
+        enabled_ids = {entry["id"] for entry in game["rule_plugins"]} | set(selected)
+        require(
+            all(set(available[pid].DEPENDS) <= enabled_ids for pid in selected), "附加规则缺少依赖"
+        )
+        game["rule_plugins"] = [
+            {"id": module.ID, "version": module.VERSION}
+            for module in plugins.REGISTRY
+            if module.ID in enabled_ids
+        ]
         for s in game["seats"]:
             s["avatar_role_id"] = current(game, s)["role_id"]
         honoka_seat = owner(game, "honoka")
         # 未登场的穗乃香保留已选的示人角色，等她登场时再自动套用（见 state.apply_honoka_disguise）。
-        apply_honoka_disguise(game, honoka_seat)
+        honoka.apply_disguise(game, honoka_seat)
         game["status"] = "playing"
         game["phase"] = "witch"
-        # 汉娜与雪莉开局即各自上层：立即绑定，不再等共同度过一个白天。
-        if current(game, owner(game, "hanna"))["id"] == "hanna" and (
-            current(game, owner(game, "sherry"))["id"] == "sherry"
-        ):
-            game["spiritual"]["sherry_bound"] = True
-            notify(
-                game,
-                events,
-                "你与汉娜均为上层，绑定自开局生效：胜负跟随汉娜，不能同意处决汉娜。",
-                [owner(game, "sherry")["id"]],
-                "雪莉绑定",
-                payload=passive_card_payload(
-                    game,
-                    "bind",
-                    "你与汉娜均为上层，绑定自开局生效：胜负跟随汉娜，不能同意处决汉娜。",
-                ),
-            )
+        sherry.start_binding(game, events)
         sid = honoka_seat["id"]
         # 穗乃香的「开局前获知上层牌」是普通技能，不吃中毒/信息骰：这里恒发真表。
         # 与排序阶段预览（views.game_view 的 honoka_upper）同源，不许出现假值分支。
@@ -1050,6 +944,10 @@ def host_command(game, events, action, data):
             "；".join(f"{seat_id}号：{ROLES[role]['name']}" for seat_id, role in upper),
             [sid],
             "开局上层角色",
+        )
+        plugins.emit(game, events, "game_started", {"day": game["day"]})
+        plugins.emit(
+            game, events, "phase_enter", {"from": "ordering", "to": "witch", "day": game["day"]}
         )
         save_snapshot(game)
         notify(game, events, "所有上下牌已锁定，对局开始。")
@@ -1165,7 +1063,7 @@ def host_command(game, events, action, data):
             if game["night"]["locked"]:
                 prepare_night_preview(game, events)
         else:
-            apply_damage(game, events, damage_preview(game, attacks))
+            apply_damage(game, events, resolve_intents(game, events, attacks, substitute=False))
         notify(game, events, data["reason"], [], "伤害裁定")
     elif action == "host.state":
         cid, state, value = data["card_id"], data["state"], data.get("value", False)
@@ -1186,8 +1084,9 @@ def host_command(game, events, action, data):
                 apply_damage(
                     game,
                     events,
-                    damage_preview(
+                    resolve_intents(
                         game,
+                        events,
                         [
                             {
                                 "target_card": cid,
@@ -1196,6 +1095,7 @@ def host_command(game, events, action, data):
                                 "allow_lower": True,
                             }
                         ],
+                        substitute=False,
                     ),
                 )
         elif state == "injured":
@@ -1207,9 +1107,9 @@ def host_command(game, events, action, data):
             else:
                 card["states"].pop("protected_day", None)
             if data.get("persistent"):
-                game["spiritual"]["persistent_states"].setdefault(cid, {})["protected_day"] = (
-                    card["states"].get("protected_day")
-                )
+                game["spiritual"]["persistent_states"].setdefault(cid, {})["protected_day"] = card[
+                    "states"
+                ].get("protected_day")
         else:
             if state == "puppet":
                 require(not value or data.get("master"), "傀儡需指定主人")
@@ -1264,9 +1164,7 @@ def host_command(game, events, action, data):
         if side == "witch":
             # 「只剩可可一名魔女」按**场上**的魔女牌算：已经魔女化但还没登场的下层牌
             # 不该让魔女交牌被误拒。同意只看今天，且必须是可可本人的申请。
-            witches = [
-                c for c in game["cards"].values() if c["witch"] and present(game, c["id"])
-            ]
+            witches = [c for c in game["cards"].values() if c["witch"] and present(game, c["id"])]
             require(
                 len(witches) == 1
                 and witches[0]["id"] == "coco"
@@ -1340,6 +1238,9 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                 else:
                     text = "本局你不会魔女化。"
                 notify(game, events, text, [sid], "魔女化命运")
+            plugins.emit(
+                game, events, "phase_enter", {"from": "lobby", "to": "ordering", "day": game["day"]}
+            )
     elif action == "player.profile":
         require(1 <= len(data["name"].strip()) <= 30, "公开称呼需为1至30字")
         s["name"] = data["name"].strip()
@@ -1369,49 +1270,9 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             **deepcopy({k: v for k, v in data.items() if k != "ability"}),
         }
         if ability == "treasure":
-            # 寻宝提交后本夜定局：不可修改、不可清除、不可放弃并确认。否则踩雷后
-            # 重交能洗掉地雷结果、反复重交还能把 1/5 地雷概率磨没（对局实测 bug）。
-            require(
-                not any(a["ability"] == "treasure" for a in game["night"]["actions"] if a["seat_id"] == sid),
-                "寻宝已提交，本夜不可修改或放弃",
-            )
-            # 寻宝只清空本席的其他夜间选择，不替其他席位锁夜；地雷伤害并入本夜预结算，
-            # 且不接入替死。
-            game["night"]["actions"] = [
-                a for a in game["night"]["actions"] if a["seat_id"] != sid
-            ]
-            # 每夜只掷一次地雷骰：骰值按天记在牌状态里，主持人代操作或状态异常时
-            # 重复提交也复用第一次结果（状态白名单不外发这个键，前端看不到）。
-            saved = card["states"].get("treasure_roll")
-            if saved and saved.get("day") == game["day"]:
-                roll, mine = saved["roll"], saved["mine"]
-            else:
-                roll = SystemRandom().randrange(5)
-                mine = roll == 0
-                card["states"]["treasure_roll"] = {"day": game["day"], "roll": roll, "mine": mine}
-            card["states"]["treasure_protected_day"] = game["day"]
-            entry["roll"] = roll
-            entry["mine"] = mine
-            log_event(game, "roll", f"艾玛寻宝骰值{roll}：{'触发地雷' if mine else '安全'}。")
-            # 寻宝是夜间私密行动：结果只发本人，触发地雷的死亡照常在白天公示。
-            notify(
-                game,
-                events,
-                (
-                    "庭院中传来一声巨响——艾玛挖到地雷了！"
-                    if mine
-                    else "你整夜在庭院里挖来挖去，然而却找到了滚木。"
-                ),
-                [sid],
-                "寻宝结果",
-            )
-            if mine:
-                # 自己踩雷时当天的寻宝保护作废。
-                card["states"].pop("treasure_protected_day", None)
+            emma.submit_treasure(game, events, card, entry, sid)
         if ability == "swap":
-            require(target is not None, "米莉亚每晚必须选择一名玩家换血")
-            # 换血目标持久保存：跨白天继续替死，直到下一次有效换血覆盖。
-            game["millia_swap"] = {"seat": data["target"], "day": game["day"]}
+            millia.record_swap(game, data.get("target"))
         if target:
             entry["target_seat"], entry["target_card"] = data["target"], target["id"]
         game["night"]["actions"] = [
@@ -1425,29 +1286,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         actions = [a for a in game["night"]["actions"] if a["seat_id"] == sid]
         card = game["cards"][game["night"]["actors"][sid]]
         if card["id"] == "hiro" and card["witch"]:
-            emma = role_card(game, "emma")
-            # 必须与魔女刀给出的候选一致：寻宝保护当天刀不到艾玛，也就不该要求她出手。
-            can_attack_emma = (
-                emma["alive"]
-                and current(game, owner(game, "emma")) == emma
-                and target_allowed(game, "emma")
-                and not treasure_protected(game, "emma")
-            )
-            attacked = any(
-                a["ability"] == "knife" and a.get("target_card") == "emma" for a in actions
-            )
-            if can_attack_emma and not attacked:
-                if game["spiritual"]["hiro_exception"]:
-                    # 唯一一次例外夜已经用完：这里不能硬拒——那样整夜没有任何人能推进，
-                    # 也无法给出「不够疯狂」的后果。按规则交主持人裁定是否足够疯狂。
-                    pending(
-                        game,
-                        "madness",
-                        f"魔女希罗（{sid}号）本夜未攻击艾玛，请裁定是否足够疯狂",
-                        seat_id=sid,
-                    )
-                else:
-                    game["spiritual"]["hiro_exception"] = True
+            hiro.confirm_madness(game, card, actions, sid)
         if card["id"] == "emma" and card["witch"]:
             # 魔女化艾玛必须杀光全场，不能「放弃并确认」。
             require(
@@ -1455,14 +1294,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                 "魔女化艾玛必须提交全场攻击",
             )
         if card["id"] == "millia":
-            # 换血是强制 debuff：还有合法目标时必须先选一个换血对象。
-            has_target = any(
-                s["id"] != sid and current(game, s) for s in game["seats"]
-            )
-            require(
-                any(a["ability"] == "swap" for a in actions) or not has_target,
-                "米莉亚每晚必须选择一名玩家换血",
-            )
+            millia.require_swap(game, sid, actions)
         for selected in actions:
             selected["confirmed"] = True
         game["night"]["confirmed"].append(sid)
@@ -1472,8 +1304,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         # 傀儡与失去技能的角色不能发动白天技能（含伪装声明）：行动表里已经不给入口，
         # 这里再挡一道，避免绕过表单直接提交。
         require(
-            by_host
-            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            by_host or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
             "傀儡与失去技能的角色不能发动技能",
         )
         use_card = card
@@ -1511,10 +1342,19 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         }
         game["declarations"].append(declaration)
         execute_declaration(game, events, declaration)
+        if real and declaration["executed"] and not declaration["fake"]:
+            plugins.emit(
+                game,
+                events,
+                "day_declaration",
+                {
+                    "declaration_id": declaration["id"],
+                    "card_id": use_card["id"],
+                    "ability": ability,
+                },
+            )
         sync_declarations(game)
-        suffix = (
-            "该技能不可质疑。" if ability in {"photo", "love", "gaze"} else "其他玩家可质疑。"
-        )
+        suffix = "该技能不可质疑。" if ability in {"photo", "love", "gaze"} else "其他玩家可质疑。"
         # 播报带上结构化载荷：技能名、介绍与目标由 storage.message_view 按收件人裁剪，
         # 文本保留给不支持载荷的旧客户端与历史搜索。
         notify(
@@ -1560,67 +1400,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                 f"{sid}号质疑失败，两张角色牌直接出局，本局个人判负。",
             )
         sync_declarations(game)
-    elif action == "honoka.disguise":
-        hc = game["cards"]["honoka"]
-        require(owner(game, "honoka")["id"] == sid, "只有穗乃香可以选择示人角色")
-        if game["status"] == "lobby":
-            hc["states"]["disguise"] = data["role"]
-            notify(
-                game,
-                events,
-                f"开局前示人选择已记录：{ROLES[data['role']]['name']}（穗乃香登场时生效）。",
-                [sid],
-                "穗乃香示人",
-            )
-        else:
-            require(hc["alive"], "穗乃香已经出局")
-            require(not hc["states"].get("disguise_locked"), "示人角色已经确定，不能再更改")
-            hc["states"]["disguise"] = data["role"]
-            if card and card["id"] == "honoka":
-                # 已经登场：立刻示人并锁定。
-                hc["states"]["disguise_locked"] = True
-                s["avatar_role_id"] = data["role"]
-                notify(game, events, f"{sid}号示人为{ROLES[data['role']]['name']}。", [], "穗乃香示人")
-            else:
-                # 还没登场：只登记，登场时自动生效；未登场期间可以继续改。
-                notify(
-                    game,
-                    events,
-                    f"示人选择已记录：{ROLES[data['role']]['name']}（登场时生效）。",
-                    [sid],
-                    "穗乃香示人",
-                )
-    elif action == "honoka.witness":
-        item = next(
-            pending_item
-            for pending_item in game["pending"]
-            if pending_item["id"] == data["pending_id"]
-            and pending_item["kind"] == "honoka_witness"
-            and pending_item["seat_id"] == sid
-        )
-        publish_witness(
-            game,
-            events,
-            {**item, "seat_id": item["witness_seat"]},
-            item["suspects"],
-            data["role"],
-        )
-        game["pending"] = [
-            pending_item for pending_item in game["pending"] if pending_item["id"] != item["id"]
-        ]
-    elif action == "hiro.exit":
-        require(
-            by_host
-            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
-            "傀儡与失去技能的角色不能发动技能",
-        )
-        attack = {"target_card": card["id"], "cause": "voluntary", "unconditional": True}
-        if game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"}:
-            game["night"].setdefault("extra_attacks", []).append(attack)
-            if game["night"]["locked"]:
-                prepare_night_preview(game, events)
-        else:
-            apply_damage(game, events, damage_preview(game, [attack]))
     elif action == "speech.done":
         if sid == game["public"]["speaker"]:
             speech_done(game, events)
@@ -1702,47 +1481,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         if any(cast.get(cid) == "yes" for cid in duel):
             game["duel_approvals"][sid] = True
     elif action == "execution.shoot":
-        # 奈乃香的临刑枪是连发：每开一枪都重新选目标，直到子弹用完或本人收手。
-        # 因此这里不写 execution_ready，只有 execution.confirm（收手）或打空才结束。
-        require(
-            by_host
-            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
-            "傀儡与失去技能的角色不能发动技能",
-        )
-        require(card["uses"].get("bullets", 0) > 0, "子弹已经用完")
-        card["uses"]["bullets"] -= 1
-        threshold = min(card["uses"].get("shot_misses", 0) + 1, 6)
-        roll = SystemRandom().randrange(6) + 1
-        target = current(game, data["target"])
-        require(target is not None, "目标当前没有登场角色牌")
-        effective = True  # 临刑开枪不吃中毒效果骰
-        hit = roll <= threshold and effective
-        card["uses"]["shot_misses"] = 0 if hit else min(threshold, 6)
-        game.setdefault("execution_rolls", []).append(
-            {
-                "day": game["day"],
-                "roll": roll,
-                "threshold": threshold,
-                "target_card": target["id"],
-                "effective": effective,
-                "hit": hit,
-            }
-        )
-        log_event(game, "roll", f"奈乃香临刑开枪：命中阈值{threshold}/6，骰值{roll}，{'命中' if hit else '未命中'}。")
-        if hit:
-            game.setdefault("execution_shots", []).append(
-                {"target_card": target["id"], "source_card": card["id"], "cause": "shoot"}
-            )
-        bullets = card["uses"]["bullets"]
-        if bullets <= 0:
-            # 子弹打空即视为临刑响应完成：待办与提醒都以「还有子弹」为准，不会卡住推进。
-            game["execution_ready"].append(sid)
-        notify(
-            game,
-            events,
-            f"{sid}号临刑开枪，命中率{threshold}/6，{'命中' if hit else '未命中'}；剩余{bullets}颗子弹。",
-            alert=True,
-        )
+        nanoka.shoot(game, actor, events, data, by_host=by_host)
     elif action == "execution.confirm":
         game["execution_ready"].append(sid)
     elif action == "photo.permission":
@@ -1768,26 +1507,15 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             "target_card": target["id"],
             "source_card": card["id"] if card else None,
             "cause": "water",
-            "hide_cause": bool(data.get("hide_cause") and card and card["id"] == "meruru" and card["witch"]),
+            "hide_cause": bool(
+                data.get("hide_cause") and card and card["id"] == "meruru" and card["witch"]
+            ),
         }
         game["night"].setdefault("extra_attacks", []).append(attack)
         if game["night"]["locked"]:
             # 已锁夜：重算预结算，不创建主持人待办。
             prepare_night_preview(game, events)
         notify(game, events, f"{sid}号使用13水指定{data['target']}号。")
-    elif action == "meruru.revive":
-        death = next(death for death in game["deaths"] if death["id"] == data["death_id"])
-        require(
-            game["half"] == "night"
-            and death["day"] == game["day"]
-            and death["half"] == "night"
-            and death.get("source_card") == card["id"],
-            "只能复活当夜由该梅露露牌造成的死亡",
-        )
-        require(not game["cards"][death["target_card"]]["alive"], "该死亡已被处理")
-        card["uses"]["revive"] = True
-        revoke_death(game, events, death)
-        revive(game, events, death["target_card"], puppet=card["id"])
     elif action == "evidence.submit":
         dead = game["cards"][data["card_id"]]
         require(not dead["alive"], "只有已经出局的牌可以留下证物")
@@ -1838,7 +1566,12 @@ def _ability_label(ability):
 
 
 def _target_text(game, data):
-    target = data.get("target") or data.get("target_card") or data.get("target_seat") or data.get("seat_id")
+    target = (
+        data.get("target")
+        or data.get("target_card")
+        or data.get("target_seat")
+        or data.get("seat_id")
+    )
     if not target:
         return ""
     target = str(target)
@@ -1929,58 +1662,15 @@ def command_log_text(game, actor, action, data, *, by_host=False):
     return f"{prefix}执行 {action}"
 
 
-def sync_puppet_bonds(game, events):
-    """收拾傀儡控制链：主人离场时傀儡当前牌当场出局，其余断链的傀儡直接解除。
-
-    用户 2026-09-28 定案：**梅露露死亡后傀儡当前牌立即死亡**——下层牌还在就由原玩家
-    恢复自主操作，没有下层牌就是整席出局。死亡走标准伤害管线（``damage_preview`` +
-    ``apply_damage``），因此死亡记录、半天出局、下层登场与公告口径都和别的出局一致，
-    那张牌的状态也在 ``death_batch`` 里顺带解除。
-
-    主人只是「不再是自己席位的当前牌」（没有真的离场）时只解除控制、不处死傀儡；同一
-    半天已经出过一张牌的席位受「半天一牌」限制，杀不掉时也退化为解除。
-    """
-    doomed = [
-        card
-        for card in orphan_puppet_cards(game)
-        if puppet_master_dead(game, card)
-        and card["alive"]
-        and current(game, owner(game, card["id"])) == card
-    ]
-    if doomed:
-        attacks = [
-            {
-                "target_card": card["id"],
-                "source_card": None,
-                "cause": "puppet",
-                # 「立即死亡」不吃庇护降级；玛格的爱与希罗回溯仍按各自规则参与结算。
-                "unconditional": True,
-            }
-            for card in doomed
-        ]
-        if apply_damage(game, events, damage_preview(game, attacks)):
-            # 傀儡当前牌是希罗：这次即时出局触发了回溯，时间线已换掉，不能再按
-            # 旧名单解除状态（那张傀儡牌可能已经不存在了）。
-            return
-    for card in orphan_puppet_cards(game):
-        holder = owner(game, card["id"])
-        was_active = card["alive"] and current(game, holder) == card
-        release_puppet(card)
-        if was_active:
-            notify(
-                game,
-                events,
-                "控制关系已解除：你恢复了普通玩家权限。",
-                [holder["id"]],
-                "傀儡解除",
-            )
-
-
 def apply_command(game, actor, action, payload, *, by_host=False):
     require(game["status"] != "ended", "对局已结束，不能再操作")
     events = []
     validate_command(game, actor, action, payload)
-    if actor["kind"] == "host":
+    module = next((module for module in plugins.enabled(game) if action in module.COMMANDS), None)
+    if module:
+        require(action.startswith(module.ID + "."), "规则模块命令 ID 无效")
+        module.COMMANDS[action](game, actor, events, payload, by_host=by_host)
+    elif actor["kind"] == "host":
         host_command(game, events, action, payload)
     else:
         player_command(game, actor, events, action, payload, by_host=by_host)
@@ -1995,7 +1685,7 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
         )
     # 这条命令可能杀掉了主人：傀儡当前牌跟着出局（见 sync_puppet_bonds）。
-    sync_puppet_bonds(game, events)
+    meruru.sync_puppet_bonds(game, events)
     sync_speaker(game, events)
     sync_auto_advance(game)
     game["version"] += 1
@@ -2069,16 +1759,12 @@ def timeout_seat(game, events, sid):
         None,
     )
     if witness:
-        publish_witness(
-            game,
-            events,
-            {**witness, "seat_id": witness["witness_seat"]},
-            witness["suspects"],
-        )
-        game["pending"] = [item for item in game["pending"] if item["id"] != witness["id"]]
+        honoka.resolve_witness(game, events, witness)
     elif phase in {"night", "night_coco"} and sid not in game["night"]["confirmed"]:
         # 已提交寻宝的席位没有「放弃」可言：超时只补确认，寻宝照常结算。
-        if not any(a["seat_id"] == sid and a["ability"] == "treasure" for a in game["night"]["actions"]):
+        if not any(
+            a["seat_id"] == sid and a["ability"] == "treasure" for a in game["night"]["actions"]
+        ):
             clear_seat_actions(game, sid, events)
         game["night"]["confirmed"].append(sid)
         unlock_coco(game, events)
@@ -2131,7 +1817,9 @@ def timeout_outstanding(game, events):
         log_event(
             game,
             "host",
-            "主持人强制推进：" + "、".join(f"{sid}号" for sid in timed_out) + "未完成的行动按超时处理",
+            "主持人强制推进："
+            + "、".join(f"{sid}号" for sid in timed_out)
+            + "未完成的行动按超时处理",
         )
     return timed_out
 

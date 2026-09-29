@@ -9,7 +9,8 @@ from .actions import (
     puppet_action_panels,
 )
 from .catalog import PHASES, ROLES
-from .resolution import coco_seat
+from . import plugins
+from .roles.coco import coco_seat
 from .state import (
     annan_penalty_day,
     ballot_complete,
@@ -257,7 +258,12 @@ def status_cards(game, own):
         None,
     )
     if protected:
-        add("treasure", "success", "寻宝-不在场证明", "魔女刀、蕾雅决斗和提名暂不能选择你；全场攻击仍有效。")
+        add(
+            "treasure",
+            "success",
+            "寻宝-不在场证明",
+            "魔女刀、蕾雅决斗和提名暂不能选择你；全场攻击仍有效。",
+        )
     protection_day = next(
         (card["states"].get("protected_day") for card in cards if protection_active(game, card)),
         None,
@@ -270,15 +276,29 @@ def status_cards(game, own):
             f"致命伤害改为负伤一次；到第{protection_day + 1}天夜里自动过期。",
         )
     swap = next(
-        (action for action in game["night"]["actions"] if action["seat_id"] == own["id"] and action["ability"] == "swap"),
+        (
+            action
+            for action in game["night"]["actions"]
+            if action["seat_id"] == own["id"] and action["ability"] == "swap"
+        ),
         None,
     )
     if swap:
-        add("millia_swap", "info", "米莉亚换血", f"本夜与{swap['target_seat']}号换血；其即将死亡时你代替其死亡。")
+        add(
+            "millia_swap",
+            "info",
+            "米莉亚换血",
+            f"本夜与{swap['target_seat']}号换血；其即将死亡时你代替其死亡。",
+        )
     nanoka = next((card for card in cards if card["role_id"] == "nanoka"), None)
     if nanoka:
         misses = nanoka["uses"].get("shot_misses", 0)
-        add("nanoka_bullets", "info", "奈乃香子弹", f"剩余{nanoka['uses'].get('bullets', 0)}颗；下一枪命中率{min(misses + 1, 6)}/6。")
+        add(
+            "nanoka_bullets",
+            "info",
+            "奈乃香子弹",
+            f"剩余{nanoka['uses'].get('bullets', 0)}颗；下一枪命中率{min(misses + 1, 6)}/6。",
+        )
     if any(card["role_id"] == "marg" for card in cards) and game.get("marg_love"):
         love = game["marg_love"]
         pending = game["half"] != "night" and game["day"] <= love.get("day", 0)
@@ -410,11 +430,7 @@ def game_view(game, actor):
             else pub["avatar_role_id"]
             if pub
             else s["avatar_role_id"],
-            "previous_role_id": None
-            if lobby
-            else pub["previous_role_id"]
-            if pub
-            else fallen,
+            "previous_role_id": None if lobby else pub["previous_role_id"] if pub else fallen,
             "occupied": bool(s["occupant_id"]),
             # 行动选项里的人物用的是参与者 id，客户端需要它把选项关联到席位与角色，
             # 否则选择界面只能显示座位号而无法显示头像与角色。
@@ -526,6 +542,14 @@ def game_view(game, actor):
         # 确认成功后这次投影会立刻换成完整主持投影。
         "host_entry_required": actor.get("kind") == "host" and not host,
     }
+    view["rule_plugins"] = (
+        [
+            {"id": module.ID, "label": module.LABEL, "version": module.VERSION}
+            for module in plugins.enabled(game)
+        ]
+        if host
+        else [{"label": module.LABEL} for module in plugins.enabled(game) if not module.REQUIRED]
+    )
     if own:
         night = game["night"]
         view["self"]["night_confirmed"] = own_id in night["confirmed"]
@@ -533,9 +557,7 @@ def game_view(game, actor):
         view["self"]["puppet_spectator"] = bool(
             current(game, own) and current(game, own)["states"].get("puppet") and not controlled
         )
-        view["self"]["puppet_controls"] = (
-            puppet_action_panels(game, actor) if controlled else []
-        )
+        view["self"]["puppet_controls"] = puppet_action_panels(game, actor) if controlled else []
         view["self"]["night_actions"] = [
             {
                 "ability": a["ability"],

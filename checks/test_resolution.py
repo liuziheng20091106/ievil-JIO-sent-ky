@@ -6,10 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from backend.app.game import (
-    DEFAULT_CODEX,
     GameError,
     apply_command,
-    create_game,
     game_view,
     run_auto_advance,
     run_speech_timer,
@@ -28,16 +26,16 @@ from backend.app.game.resolution import (
     damage_preview,
     death_batch,
     lock_night,
-    loved_card_id,
-    millia_substitute,
     night_damage,
     prepare_night_preview,
-    unlock_coco,
     revive,
-    treasure_protected,
     witch_witness_targets,
     witness_size,
 )
+from backend.app.game.roles.coco import unlock_coco
+from backend.app.game.roles.emma import treasure_protected
+from backend.app.game.roles.marg import loved_card_id
+from backend.app.game.roles.millia import substitute as millia_substitute
 from backend.app.game.state import (
     ballot_complete,
     chat_event,
@@ -58,40 +56,10 @@ from backend.app.game.state import (
     seat_choice,
 )
 from backend.app.game.views import host_tasks
+from checks.rule_factory import arranged_game, player
 from backend.app.views import action_prompt
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
-PAIRS = [
-    ["millia", "emma"],
-    ["hiro", "coco"],
-    ["meruru", "hanna"],
-    ["marg", "sherry"],
-    ["leia", "arisa"],
-    ["noah", "annan"],
-    ["nanoka", "honoka"],
-]
-
-
-def arranged_game(phase="discussion", half="day"):
-    game = create_game(DEFAULT_CODEX)
-    for seat in game["seats"]:
-        seat["occupant_id"] = "p" + seat["id"]
-    for seat in game["seats"]:
-        apply_command(game, player(game, seat["id"]), "lobby.ready", {})
-    game.update(status="playing", phase=phase, half=half, day=2)
-    for seat, pair in zip(game["seats"], PAIRS):
-        seat.update(cards=list(pair), occupant_id="p" + seat["id"], ready=True)
-    return game
-
-
-def player(game, sid):
-    return {
-        "id": "p" + sid,
-        "kind": "player",
-        "seat_id": sid,
-        "game_id": game["id"],
-        "access_ids": ["p" + sid],
-    }
 
 
 def command(game, actor, action, payload=None):
@@ -199,9 +167,7 @@ class PoisonAndDeclarations(unittest.TestCase):
         game = arranged_game()
         game["cards"]["noah"]["states"]["display_killer"] = "coco"
         player_view = game_view(game, player(game, "1"))
-        self.assertNotIn(
-            "poison", [item["id"] for item in player_view["self"]["statuses"]]
-        )
+        self.assertNotIn("poison", [item["id"] for item in player_view["self"]["statuses"]])
         for card in player_view["self"]["cards"]:
             self.assertNotIn("poisoned", card["states"])
         # 其他席位的牌面明细本来就不下发给玩家。
@@ -226,9 +192,7 @@ class PoisonAndDeclarations(unittest.TestCase):
         game["cards"]["hiro"]["alive"] = False
         game["cards"]["emma"]["alive"] = False
         command(game, player(game, "2"), "day.skill", {"ability": "photo", "target": "1"})
-        self.assertEqual(
-            set(game["photos"][0]), {"id", "sender", "target", "day", "allowed"}
-        )
+        self.assertEqual(set(game["photos"][0]), {"id", "sender", "target", "day", "allowed"})
 
         fake = arranged_game()
         fake["cards"]["nanoka"]["alive"] = False
@@ -250,9 +214,7 @@ class PoisonAndDeclarations(unittest.TestCase):
         self.assertIn("millia", game["execution"])
         # 新规则：洗脑者本人在场时也被处决，当天处决名单锁死为这两张牌。
         self.assertIn("annan", game["execution"])
-        self.assertEqual(
-            game["execution_lock"], {"day": game["day"], "cards": ["millia", "annan"]}
-        )
+        self.assertEqual(game["execution_lock"], {"day": game["day"], "cards": ["millia", "annan"]})
         self.assertEqual(
             game["spiritual"]["annan_penalty"]["6"]["declaration_id"], declaration["id"]
         )
@@ -335,9 +297,7 @@ class PoisonAndDeclarations(unittest.TestCase):
         game["seats"][6]["cards"] = ["honoka", "nanoka"]
         game["cards"]["honoka"]["states"]["disguise"] = "nanoka"
         fake = player(game, "7")
-        offered = [
-            item["label"] for item in actions_for(game, fake) if item["id"] == "day.skill"
-        ]
+        offered = [item["label"] for item in actions_for(game, fake) if item["id"] == "day.skill"]
         self.assertNotIn("声称处决幻视", offered)
         with self.assertRaises(GameError):
             command(game, fake, "day.skill", {"ability": "gaze"})
@@ -430,7 +390,7 @@ class NewNightRules(unittest.TestCase):
         begin_night(game, [])
         # 别的席位先提交一条行动：寻宝只清本席，不能把别人的行动一起清掉。
         command(game, player(game, "3"), "night.submit", {"ability": "protect", "target": "2"})
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.emma.SystemRandom") as random:
             random.return_value.randrange.return_value = 1
             command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
         self.assertFalse(game["night"]["locked"])
@@ -458,13 +418,13 @@ class NewNightRules(unittest.TestCase):
         game = arranged_game("night", "night")
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.emma.SystemRandom") as random:
             random.return_value.randrange.return_value = 0  # 第一次就踩雷
             command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
         entry = next(a for a in game["night"]["actions"] if a["ability"] == "treasure")
         self.assertTrue(entry["mine"])
         # 重交被拒：骰值不会被重掷成安全结果。
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.emma.SystemRandom") as random:
             random.return_value.randrange.return_value = 1
             with self.assertRaises(GameError):
                 command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
@@ -489,7 +449,7 @@ class NewNightRules(unittest.TestCase):
         game = arranged_game("night", "night")
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.emma.SystemRandom") as random:
             random.return_value.randrange.return_value = 1
             command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
         self.assertEqual(game["cards"]["emma"]["states"]["treasure_protected_day"], 2)
@@ -499,7 +459,7 @@ class NewNightRules(unittest.TestCase):
         game = arranged_game("night", "night")
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.emma.SystemRandom") as random:
             random.return_value.randrange.return_value = 0  # 触发地雷
             command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
         self.assertNotIn("treasure_protected_day", game["cards"]["emma"]["states"])
@@ -530,7 +490,7 @@ class NewNightRules(unittest.TestCase):
             "preview": None,
             "reactions": [],
         }
-        with patch("backend.app.game.resolution.SystemRandom") as random:
+        with patch("backend.app.game.roles.arisa.SystemRandom") as random:
             random.return_value.randrange.side_effect = [0, 1]
             lock_night(game, [])
         self.assertTrue(game["night"]["preview"]["injured"]["marg"])
@@ -550,7 +510,7 @@ class NewNightRules(unittest.TestCase):
         game["execution"] = ["nanoka"]
         game["execution_ready"] = []
         game["execution_shots"] = []
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.nanoka.SystemRandom") as random:
             random.return_value.randrange.return_value = 5  # 骰值恒为6：只有6/6那一枪命中
             for index in range(6):
                 offered = [
@@ -593,7 +553,7 @@ class NewNightRules(unittest.TestCase):
         game["execution"] = ["nanoka"]
         game["execution_ready"] = []
         game["execution_shots"] = []
-        with patch("backend.app.game.engine.SystemRandom") as random:
+        with patch("backend.app.game.roles.nanoka.SystemRandom") as random:
             random.return_value.randrange.return_value = 0  # 骰值1：1/6 也命中
             command(game, player(game, "7"), "execution.shoot", {"target": "3"})
             next_shot = next(
@@ -636,7 +596,11 @@ class NewNightRules(unittest.TestCase):
                 "suspects": ["hanna", "honoka", "noah", "coco"],
             },
         )
-        witness = next(action for action in actions_for(game, player(game, "7")) if action["id"] == "honoka.witness")
+        witness = next(
+            action
+            for action in actions_for(game, player(game, "7"))
+            if action["id"] == "honoka.witness"
+        )
         command(
             game,
             player(game, "7"),
@@ -648,7 +612,6 @@ class NewNightRules(unittest.TestCase):
 
 
 class ResolutionEdges(unittest.TestCase):
-
     def test_night_victory_cannot_turn_into_day_victory_on_advance(self):
         game = arranged_game("night_results", "night")
         for cid in ("millia", "arisa", "noah"):
@@ -704,9 +667,7 @@ class ResolutionEdges(unittest.TestCase):
             self.assertEqual(len(set(names)), 3)
             self.assertEqual("可可" in names, killer_shown)
             # 中毒骰只写主持人日志，不发给死者。
-            self.assertFalse(
-                [e for e in game["information"] if e["title"] == "中毒判定"]
-            )
+            self.assertFalse([e for e in game["information"] if e["title"] == "中毒判定"])
 
     def test_poisoned_water_victim_can_get_a_list_without_the_water_user(self):
         game = arranged_game("night", "night")
@@ -730,7 +691,9 @@ class ResolutionEdges(unittest.TestCase):
         death_batch(
             game,
             [],
-            damage_preview(game, [{"target_card": "meruru", "source_card": "coco", "cause": "host"}]),
+            damage_preview(
+                game, [{"target_card": "meruru", "source_card": "coco", "cause": "host"}]
+            ),
         )
         self.assertTrue(game["cards"]["millia"]["alive"])
         self.assertFalse(game["cards"]["meruru"]["alive"])
@@ -762,7 +725,8 @@ class ResolutionEdges(unittest.TestCase):
         preview = damage_preview(
             game,
             millia_substitute(
-                game, [{"target_card": "meruru", "source_card": None, "cause": "host", "injury": True}]
+                game,
+                [{"target_card": "meruru", "source_card": None, "cause": "host", "injury": True}],
             ),
         )
         self.assertFalse(preview["deaths"])
@@ -776,7 +740,8 @@ class ResolutionEdges(unittest.TestCase):
         preview = damage_preview(
             game,
             millia_substitute(
-                game, [{"target_card": "meruru", "source_card": None, "cause": "host", "injury": True}]
+                game,
+                [{"target_card": "meruru", "source_card": None, "cause": "host", "injury": True}],
             ),
         )
         self.assertEqual({death["target_card"] for death in preview["deaths"]}, {"millia"})
@@ -927,8 +892,7 @@ class ResolutionEdges(unittest.TestCase):
         for viewer in (player(game, "1"), actor):
             self.assertFalse(
                 any(
-                    item["title"] == "穗乃香示人"
-                    for item in game_view(game, viewer)["information"]
+                    item["title"] == "穗乃香示人" for item in game_view(game, viewer)["information"]
                 )
             )
 
@@ -1007,9 +971,7 @@ class PlaytestFixes(unittest.TestCase):
         self.assertTrue(declaration["fake"])
         # 真艾玛（1号席持有艾玛牌）不能质疑别人发动的艾玛技能，换 2 号质疑。
         with self.assertRaises(GameError):
-            command(
-                game, player(game, "1"), "day.challenge", {"declaration_id": declaration["id"]}
-            )
+            command(game, player(game, "1"), "day.challenge", {"declaration_id": declaration["id"]})
         command(game, player(game, "2"), "day.challenge", {"declaration_id": declaration["id"]})
         self.assertFalse(any(p["kind"] == "challenge" for p in game["pending"]))
         self.assertFalse(any(p.get("declaration_id") == declaration["id"] for p in game["pending"]))
@@ -1303,7 +1265,10 @@ class NightSummaryAndWitness(unittest.TestCase):
         self.assertEqual(game["cards"]["millia"]["states"]["puppet"], "meruru")
         self.assertTrue(game["cards"]["millia"]["states"]["no_ability"])
         self.assertEqual(
-            [panel["seat_id"] for panel in game_view(game, player(game, "3"))["self"]["puppet_controls"]],
+            [
+                panel["seat_id"]
+                for panel in game_view(game, player(game, "3"))["self"]["puppet_controls"]
+            ],
             ["1"],
         )
         # 投票阶段：控制者能以该傀儡席投票，傀儡本身不产生第二个身份。
@@ -1511,7 +1476,9 @@ class NightSummaryAndWitness(unittest.TestCase):
         self.assertIn(("marg", "puppet"), deaths)
         # 下层牌还在：原玩家当场拿回自己的行动与权限。
         self.assertEqual(current(game, "4")["id"], "sherry")
-        self.assertIn("player.surrender", [item["id"] for item in actions_for(game, player(game, "4"))])
+        self.assertIn(
+            "player.surrender", [item["id"] for item in actions_for(game, player(game, "4"))]
+        )
         self.assertNotIn(
             "marg", [item["target_card"] for item in game["deaths"] if item["cause"] != "puppet"]
         )
@@ -1544,7 +1511,6 @@ class NightSummaryAndWitness(unittest.TestCase):
         self.assertIsNone(current(game, "4"))
         self.assertEqual(actions_for(game, player(game, "4")), [])
 
-
     def test_revive_is_limited_to_the_night_it_belongs_to(self):
         """只可复活「当夜」的死亡：天亮后死讯已公示、下层牌已登场，不能再回滚。"""
         game = arranged_game("night_review", "night")
@@ -1560,9 +1526,7 @@ class NightSummaryAndWitness(unittest.TestCase):
         command(game, HOST, "host.advance")
         self.assertEqual(game["half"], "day")
         revive_action = [
-            item
-            for item in actions_for(game, player(game, "3"))
-            if item["id"] == "meruru.revive"
+            item for item in actions_for(game, player(game, "3")) if item["id"] == "meruru.revive"
         ]
         self.assertEqual(revive_action, [])
         with self.assertRaises(GameError):
@@ -1655,7 +1619,9 @@ class KnifeWitnessAlways(unittest.TestCase):
             game["marg_love"] = {"seat_id": love, "day": 2}
         begin_night(game, [])
         if protect:
-            command(game, player(game, "3"), "night.submit", {"ability": "protect", "target": protect})
+            command(
+                game, player(game, "3"), "night.submit", {"ability": "protect", "target": protect}
+            )
             command(game, player(game, "3"), "night.confirm", {})
         if swap:
             command(game, player(game, "1"), "night.submit", {"ability": "swap", "target": swap})
@@ -1740,8 +1706,7 @@ class KnifeWitnessAlways(unittest.TestCase):
         ruling = next(
             action
             for action in game_view(game, HOST)["actions"]
-            if action["id"] == "host.resolve"
-            and action["payload"]["pending_id"] == item["id"]
+            if action["id"] == "host.resolve" and action["payload"]["pending_id"] == item["id"]
         )
         payload = {
             entry["name"]: entry.get("default")
@@ -1764,7 +1729,10 @@ class KnifeWitnessAlways(unittest.TestCase):
         ]
         # 全场攻击会把上下两张牌都列出来：名单按席位发，victim 取该席当前牌。
         self.assertEqual(
-            [(item["seat_id"], item["victim"], item["cause"]) for item in witch_witness_targets(game, attacks)],
+            [
+                (item["seat_id"], item["victim"], item["cause"])
+                for item in witch_witness_targets(game, attacks)
+            ],
             [("4", "marg", "knife"), ("2", "hiro", "extra_kill"), ("3", "meruru", "massacre")],
         )
 
@@ -2042,9 +2010,7 @@ class WitchHiroMandate(unittest.TestCase):
         # 提名同样不能选中受保护的牌：刀口与提名选项共用同一个判定。
         game["phase"] = "nomination"
         nomination = next(
-            item
-            for item in actions_for(game, player(game, "2"))
-            if item["id"] == "vote.nominate"
+            item for item in actions_for(game, player(game, "2")) if item["id"] == "vote.nominate"
         )
         self.assertNotIn("1", [o["value"] for o in nomination["fields"][0]["options"]])
         # 例外夜用完后确认仍然成功：受保护当天根本没有「攻击艾玛」这个选项。
@@ -2202,9 +2168,7 @@ class SpeechOrder(unittest.TestCase):
             command(game, player(game, "4"), "speech.speak", {"text": "   "})
         events = command(game, player(game, "4"), "speech.speak", {"text": "我提前说完了"})
         # 预提交发言不再发系统消息：内容留在队列里，轮到时以玩家发言公开。
-        self.assertEqual(
-            [item["text"] for item in events if item["text"].startswith("4号")], []
-        )
+        self.assertEqual([item["text"] for item in events if item["text"].startswith("4号")], [])
         self.assertEqual(game["speech_queued"], {"4": "我提前说完了"})
         self.assertIn("4", game["speech_passed"])
         for sid in ("1", "2"):
@@ -2332,7 +2296,9 @@ class SpeechOrder(unittest.TestCase):
         self.assertEqual(game["public"]["speech_order"], ["2", "3", "4", "5", "6", "7"])
         self.assertEqual(game["public"]["speaker"], "2")
         self.assertEqual(outstanding_seats(game), ["2"])
-        self.assertNotIn("speech.done", [item["id"] for item in actions_for(game, player(game, "1"))])
+        self.assertNotIn(
+            "speech.done", [item["id"] for item in actions_for(game, player(game, "1"))]
+        )
         with self.assertRaises(GameError):
             command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         # 轮到之前出局的席位同样跳过，不留一个等不到人的发言位。
@@ -2369,14 +2335,10 @@ class SpeechOrder(unittest.TestCase):
         self.assertNotIn("puppet", game["cards"]["marg"]["states"])
         self.assertFalse(game["cards"]["marg"]["states"].get("no_ability"))
         self.assertEqual(current(game, "4")["id"], "sherry")
-        self.assertIn(
-            "speech.done", [item["id"] for item in actions_for(game, player(game, "4"))]
-        )
+        self.assertIn("speech.done", [item["id"] for item in actions_for(game, player(game, "4"))])
         self.assertEqual(game["public"]["speaker"], "4")
         self.assertEqual(outstanding_seats(game), ["4"])
-        self.assertIn(
-            "4", [seat for task in host_tasks(game) for seat in task["seats"]]
-        )
+        self.assertIn("4", [seat for task in host_tasks(game) for seat in task["seats"]])
         # 他自己结束发言后轮次照常顺延；主人后来被复活也不会再把他拉成傀儡。
         command(game, player(game, "4"), "speech.done", {})
         self.assertEqual(game["public"]["speaker"], "5")
@@ -2413,7 +2375,6 @@ class SpeechOrder(unittest.TestCase):
             retry["cards"][card_id]["alive"] = False
         with self.assertRaises(GameError):
             command(retry, HOST, "host.speech", {"start": "5", "direction": "asc"})
-
 
 
 class AutoAdvance(unittest.TestCase):
@@ -2491,7 +2452,9 @@ class AutoAdvance(unittest.TestCase):
         for cid in ("millia", "emma", "hiro", "coco"):
             game["cards"][cid]["alive"] = False
         offered = next(
-            item for item in actions_for(game, player(game, "3")) if item["id"] == "discussion.request_end"
+            item
+            for item in actions_for(game, player(game, "3"))
+            if item["id"] == "discussion.request_end"
         )
         self.assertEqual(offered["label"], "请求结束自由发言（已有0/5人提交）")
         # 死透的席位没有结束请求按钮，也不会被算进「全员」。
@@ -2636,9 +2599,7 @@ class NominationFlow(unittest.TestCase):
         command(game, HOST, "host.advance")
         rounds = [item["card_id"] for item in nomination_rounds(game)]
         descriptor = next(
-            item
-            for item in actions_for(game, player(game, "1"))
-            if item["id"] == "vote.cast"
+            item for item in actions_for(game, player(game, "1")) if item["id"] == "vote.cast"
         )
         # 两个候选各一行：提名过的那个锁成同意，另一个正常三选一。
         self.assertEqual([item["name"] for item in descriptor["fields"]], rounds)
@@ -2718,9 +2679,7 @@ class LeiaDuel(unittest.TestCase):
 
     def test_the_duel_pairs_the_two_cards_and_locks_the_skill(self):
         game = self.duel_game()
-        self.assertEqual(
-            game["duel"], {"day": 2, "leia_card": "leia", "target_card": "marg"}
-        )
+        self.assertEqual(game["duel"], {"day": 2, "leia_card": "leia", "target_card": "marg"})
         self.assertEqual(game["cards"]["leia"]["uses"]["duel_day"], 2)
         self.assertFalse(can_day_ability(game, game["cards"]["leia"], "duel"))
 
@@ -2768,9 +2727,7 @@ class LeiaDuel(unittest.TestCase):
         command(game, HOST, "host.advance", {})
         rounds = [item["card_id"] for item in nomination_rounds(game)]
         descriptor = next(
-            item
-            for item in actions_for(game, player(game, "1"))
-            if item["id"] == "vote.cast"
+            item for item in actions_for(game, player(game, "1")) if item["id"] == "vote.cast"
         )
         # 两张决斗牌各占一行，都带 duel 标记；说明里写明必须至少同意一张。
         duel_rows = [item for item in descriptor["fields"] if item.get("duel")]
@@ -2812,9 +2769,7 @@ class LeiaDuel(unittest.TestCase):
         self.assertEqual([item["seat_id"] for item in nomination_rounds(game)], ["5", "4"])
         self.assertEqual(game["public"]["votes"]["total"], 2)
         descriptor = next(
-            item
-            for item in actions_for(game, player(game, "2"))
-            if item["id"] == "vote.cast"
+            item for item in actions_for(game, player(game, "2")) if item["id"] == "vote.cast"
         )
         self.assertEqual([item["name"] for item in descriptor["fields"]], rounds)
 
@@ -2828,9 +2783,7 @@ class LeiaDuel(unittest.TestCase):
         command(game, HOST, "host.advance", {})
         rounds = [item["card_id"] for item in nomination_rounds(game)]
         descriptor = next(
-            item
-            for item in actions_for(game, player(game, "4"))
-            if item["id"] == "vote.cast"
+            item for item in actions_for(game, player(game, "4")) if item["id"] == "vote.cast"
         )
         hanna_row = next(item for item in descriptor["fields"] if item["name"] == "hanna")
         # 绑定的雪莉不能同意处决汉娜：这一行根本没有「同意」选项。
@@ -2995,7 +2948,11 @@ class ReviveTodo(unittest.TestCase):
         # 警告到点＝放弃：入口与本夜的待办一起关闭（否则她还能在主持人推进前反悔）。
         self.assertTrue(game["night"]["revive_declined"])
         self.assertEqual(
-            [item for item in actions_for(game, player(game, "3")) if item["id"] == "meruru.revive"],
+            [
+                item
+                for item in actions_for(game, player(game, "3"))
+                if item["id"] == "meruru.revive"
+            ],
             [],
         )
         self.assertEqual([item for item in host_tasks(game) if item["kind"] == "revive"], [])
@@ -3099,8 +3056,7 @@ class EvidenceAnnouncement(unittest.TestCase):
         return next(
             action
             for action in game_view(game, HOST)["actions"]
-            if action["id"] == "host.resolve"
-            and action["payload"]["pending_id"] == item["id"]
+            if action["id"] == "host.resolve" and action["payload"]["pending_id"] == item["id"]
         )
 
     def publish(self, game, item, **overrides):
@@ -3162,9 +3118,7 @@ class ActionDescriptions(unittest.TestCase):
             [{"seat_id": "3", "card_id": candidate}],
         )
         action = next(
-            item
-            for item in actions_for(game, player(game, "4"))
-            if item["id"] == "vote.cast"
+            item for item in actions_for(game, player(game, "4")) if item["id"] == "vote.cast"
         )
         # 一次性选票：每个候选一行，字段名是角色牌 id，行上带该席的座位号。
         self.assertEqual([item["name"] for item in action["fields"]], [candidate])
@@ -3172,9 +3126,7 @@ class ActionDescriptions(unittest.TestCase):
         self.assertEqual(row["type"], "select")
         self.assertEqual(row["seat_id"], "3")
         self.assertIn("3号", row["label"])
-        self.assertEqual(
-            [option["value"] for option in row["options"]], ["yes", "no", "abstain"]
-        )
+        self.assertEqual([option["value"] for option in row["options"]], ["yes", "no", "abstain"])
         self.assertIn("3号", action["label"])
         self.assertIn("3号", action["description"])
         self.assertIn("至少4票", action["description"])
@@ -3202,8 +3154,7 @@ class ActionDescriptions(unittest.TestCase):
                 tile = next(
                     item
                     for item in actions_for(game, player(game, "7"))
-                    if item["id"] == "day.skill"
-                    and item["payload"].get("ability") == ability
+                    if item["id"] == "day.skill" and item["payload"].get("ability") == ability
                 )
                 text = tile["description"]
                 self.assertIn("伪装声明", text)
@@ -3419,7 +3370,9 @@ class RuleRevisions(unittest.TestCase):
         item = pending(
             game, "suspects", "填写名单", seat_id="2", victim="meruru", source_card="coco"
         )
-        form = next(a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"])
+        form = next(
+            a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"]
+        )
         default = form["fields"][0]["default"]
         self.assertEqual(len(default), 3)
         # 真凶必勾；补位只勾当前在场角色（按魔典顺序）：
@@ -3435,7 +3388,9 @@ class RuleRevisions(unittest.TestCase):
         item = pending(
             game, "suspects", "填写名单", seat_id="2", victim="hanna", source_card="coco"
         )
-        form = next(a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"])
+        form = next(
+            a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"]
+        )
         suspects = next(field for field in form["fields"] if field["name"] == "suspects")
         self.assertEqual((suspects["min"], suspects["max"]), (4, 4))
         self.assertIn("hanna", suspects["default"])
@@ -3487,9 +3442,7 @@ class RuleRevisions(unittest.TestCase):
         command(game, player(game, "4"), "vote.nominate", {"target": "7"})
         self.assertEqual(game["public"]["votes"]["total"], 3)
         reopen = next(
-            action
-            for action in actions_for(game, player(game, "1"))
-            if action["id"] == "vote.cast"
+            action for action in actions_for(game, player(game, "1")) if action["id"] == "vote.cast"
         )
         self.assertEqual([item["seat_id"] for item in reopen["fields"]], ["7"])
         third = reopen["fields"][0]["name"]
