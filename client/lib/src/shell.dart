@@ -1714,6 +1714,14 @@ class _Composer extends StatelessWidget {
                 height: 42,
                 child: Row(
                   children: [
+                    if (typing) ...[
+                      TextFieldTapRegion(child: TextButton(
+                        onPressed: channelSendable ? () => onShortcut('@') : null,
+                        child: const Text('证人'))),
+                      TextFieldTapRegion(child: TextButton(
+                        onPressed: channelSendable ? () => onShortcut('#') : null,
+                        child: const Text('证物'))),
+                    ],
                     if (actions.isNotEmpty)
                       Flexible(child: typing
                         ? Align(alignment: Alignment.centerLeft,
@@ -1727,12 +1735,7 @@ class _Composer extends StatelessWidget {
                             itemBuilder: (context, index) => ActionChipButton(
                               action: actions[index], busy: store.writeBusy,
                               onTap: () => showActionForm(context, store, actions[index])))),
-                    TextFieldTapRegion(child: TextButton(
-                      onPressed: channelSendable ? () => onShortcut('@') : null,
-                      child: const Text('证人'))),
-                    TextFieldTapRegion(child: TextButton(
-                      onPressed: channelSendable ? () => onShortcut('#') : null,
-                      child: const Text('证物'))),
+
                     if (typers.isNotEmpty)
                       Flexible(child: ClipRect(child: _TypingIndicator(typers: typers))),
                   ],

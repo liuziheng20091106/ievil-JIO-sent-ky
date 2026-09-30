@@ -713,12 +713,40 @@ void main() {
     await withClock(Clock.fixed(fixedNow), () async {
       final store = await previewStore(host: false);
       await pumpAt(tester, store, const Size(420, 880));
+      expect(find.text('证人'), findsNothing);
+      expect(find.text('证物'), findsNothing);
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(FilterChip), findsWidgets);
 
       // 模拟软键盘弹出：物理像素与逻辑像素在 pumpAt 里是 1:1。
       tester.view.viewInsets = const FakeViewPadding(bottom: 320);
       await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('证人'), findsOneWidget);
+      expect(find.text('证物'), findsOneWidget);
+      final witnessX = tester.getTopLeft(find.text('证人')).dx;
+      final evidenceX = tester.getTopLeft(find.text('证物')).dx;
+      expect(witnessX, lessThan(evidenceX));
+      expect(witnessX, lessThan(50), reason: '快捷入口应从输入区左侧开始');
+      await expectLater(
+        find.byType(GameShell),
+        matchesGoldenFile('goldens/player_chat_keyboard.png'),
+      );
+      store.noteTyping(TypingUser.fromJson({
+        'participant_id': 'p2', 'name': 'kiwi', 'kind': 'player',
+        'seat_id': '2', 'avatar_role_id': 'hiro',
+        'active': true, 'channel_id': 'public',
+      }));
+      await tester.pump();
+      expect(tester.getTopLeft(find.text('证人')).dx, witnessX);
+      expect(tester.getTopLeft(find.text('证物')).dx, evidenceX);
+      store.noteTyping(TypingUser.fromJson({
+        'participant_id': 'p2', 'name': 'kiwi', 'kind': 'player',
+        'seat_id': '2', 'avatar_role_id': 'hiro',
+        'active': false, 'channel_id': 'public',
+      }));
+      await tester.pump();
+      expect(tester.getTopLeft(find.text('证人')).dx, witnessX);
+      expect(tester.getTopLeft(find.text('证物')).dx, evidenceX);
 
       // 标题栏、筛选、快捷工具与底栏全部让位，只留消息与输入区。
       expect(find.byType(AppBar), findsNothing);
@@ -731,9 +759,12 @@ void main() {
       // 收起键盘后回到原来的完整布局。
       tester.view.viewInsets = FakeViewPadding.zero;
       await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('证人'), findsNothing);
+      expect(find.text('证物'), findsNothing);
       expect(find.byType(AppBar), findsOneWidget);
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(FilterChip), findsWidgets);
+      store.dispose();
     });
   });
 
