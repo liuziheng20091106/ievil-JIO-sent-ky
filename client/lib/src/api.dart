@@ -254,11 +254,16 @@ class GameApi {
     );
   }
 
+  Future<Map<String, dynamic>> references(String gameId) async =>
+      jsonObject(await _request('GET',
+          '/api/games/${Uri.encodeComponent(gameId)}/references'));
+
   Future<GameMessage> sendMessage(
     String gameId,
     String channelId,
     String text, {
     String? asSeat,
+    List<ChatReference> references = const [],
   }) async =>
       GameMessage.fromJson(await _request(
         'POST',
@@ -267,6 +272,7 @@ class GameApi {
           'channel_id': channelId,
           'text': text,
           if (asSeat != null) 'as_seat': asSeat,
+          if (references.isNotEmpty) 'references': [for (final ref in references) ref.toJson()],
         },
       ));
 

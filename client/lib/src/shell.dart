@@ -741,6 +741,59 @@ class _ChatActionPageState extends State<ChatActionPage> {
   int lastCount = 0;
   bool emojiOpen = false;
   bool _pickingMention = false;
+  bool _pickingEvidence = false;
+  final List<ChatReference> editingReferences = [];
+  final Map<(String?, String?, String?, String),
+      (TextEditingValue, List<ChatReference>)> _drafts = {};
+  late (String?, String?, String?, String) _draftKey;
+  String _previousText = '';
+  bool _restoringDraft = false;
+
+  (String?, String?, String?, String) get _currentDraftKey => (
+    widget.store.gameId, widget.store.actor?.id,
+    widget.store.activeAsSeat, widget.store.activeChannelId,
+  );
+
+  void _trackEdits() {
+    if (_restoringDraft || message.text == _previousText) return;
+    final old = _previousText;
+    final next = message.text;
+    var prefix = 0;
+    while (prefix < old.length && prefix < next.length && old[prefix] == next[prefix]) {
+      prefix++;
+    }
+    var suffix = 0;
+    while (suffix < old.length - prefix && suffix < next.length - prefix &&
+        old[old.length - 1 - suffix] == next[next.length - 1 - suffix]) {
+      suffix++;
+    }
+    final oldEnd = old.length - suffix;
+    final shift = next.length - old.length;
+    editingReferences.removeWhere((ref) =>
+        ref.start < oldEnd && ref.end > prefix);
+    for (var i = 0; i < editingReferences.length; i++) {
+      if (editingReferences[i].start >= oldEnd) {
+        editingReferences[i] = editingReferences[i].shifted(shift);
+      }
+    }
+    _previousText = next;
+  }
+
+  void _switchDraft() {
+    final key = _currentDraftKey;
+    if (key == _draftKey) return;
+    _drafts[_draftKey] = (message.value, List.of(editingReferences));
+    if (key.$1 != _draftKey.$1) _drafts.clear();
+    _draftKey = key;
+    final saved = _drafts[key];
+    _restoringDraft = true;
+    editingReferences..clear()..addAll(saved?.$2 ?? const []);
+    message.value = saved?.$1 ?? const TextEditingValue();
+    _previousText = message.text;
+    _restoringDraft = false;
+  }
+
+
 
   /// 距底部多少像素内仍算「停在最新消息」：约三条消息的高度。
   /// 只有停在最新消息附近才自动跟随滚动；往上翻历史时，
@@ -774,6 +827,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
   @override
   void initState() {
     super.initState();
+    _draftKey = _currentDraftKey;
+    message.addListener(_trackEdits);
     widget.store.addListener(onStore);
     message.addListener(reportTyping);
     lastCount = widget.store.messages.length;
@@ -784,6 +839,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
   @override
   void dispose() {
     scroll.removeListener(_scheduleJumpCheck);
+    message.removeListener(_trackEdits);
     widget.store.removeListener(onStore);
     message.removeListener(reportTyping);
     message.dispose();
@@ -844,6 +900,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 
   void onStore() {
+    _switchDraft();
     final count = widget.store.messages.length;
     if (count != lastCount) {
       lastCount = count;
@@ -1169,6 +1226,91 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 
 
+  void insertShortcut(String token) {
+    final selection = message.selection;
+    final start = selection.isValid ? selection.start : message.text.length;
+    final end = selection.isValid ? selection.end : start;
+    message.value = TextEditingValue(
+      text: message.text.replaceRange(start, end, token),
+      selection: TextSelection.collapsed(offset: start + token.length),
+    );
+    composerFocus.requestFocus();
+    if (token == '@') {
+      pickMention();
+    } else {
+      pickEvidence();
+    }
+  }
+
+  Future<void> pickEvidence() async {
+    if (_pickingEvidence || widget.store.actor?.isSpectator == true ||
+        widget.store.selectedChannel?.canSend != true ||
+        widget.store.selectedChannel?.id == 'spectator') {
+      return;
+    }
+    final cursor = message.selection.baseOffset;
+    if (cursor < 1 || cursor > message.text.length || message.text[cursor - 1] != '#') return;
+    final draftKey = _draftKey;
+    _pickingEvidence = true;
+    try {
+      var load = widget.store.loadReferences(refresh: true);
+      final chosen = await showPredictiveSheet<ReferenceItem>(
+        context: context,
+        useSafeArea: true,
+        builder: (sheet) => StatefulBuilder(builder: (sheet, refreshSheet) =>
+          SizedBox(
+            height: MediaQuery.sizeOf(sheet).height * .68,
+            child: FutureBuilder<void>(
+              future: load,
+              builder: (sheet, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final store = widget.store;
+                if (store.referenceError != null) {
+                  return Center(child: Column(mainAxisSize: MainAxisSize.min,
+                    children: [Text(store.referenceError!), TextButton(
+                      onPressed: () => refreshSheet(() { load = store.loadReferences(refresh: true); }),
+                      child: const Text('重试'),
+                    )],
+                  ));
+                }
+                return ListView(children: [
+                  const ListTile(title: Text('本局公开信息')),
+                  for (final item in store.referenceEvents)
+                    ListTile(title: Text(item.label), subtitle: Text(item.text, maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                      onTap: () => Navigator.of(sheet).pop(item)),
+                  if (store.referenceEvents.isEmpty)
+                    const ListTile(title: Text('暂无公开游戏事件')),
+                  const Divider(),
+                  const ListTile(title: Text('游戏规则')),
+                  for (final item in [...store.referenceRoles, ...store.referenceSkills])
+                    ListTile(title: Text(item.label), subtitle: Text(item.text, maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                      onTap: () => Navigator.of(sheet).pop(item)),
+                ]);
+              },
+            ),
+          ),
+        ),
+      );
+      if (!mounted || chosen == null || draftKey != _draftKey ||
+          cursor > message.text.length || message.text[cursor - 1] != '#') {
+        return;
+      }
+      final token = '#${chosen.label}';
+      message.value = TextEditingValue(
+        text: message.text.replaceRange(cursor - 1, cursor, '$token '),
+        selection: TextSelection.collapsed(offset: cursor + token.length),
+      );
+      editingReferences.add(ChatReference(cursor - 1, cursor - 1 + token.length, chosen));
+      composerFocus.requestFocus();
+    } finally {
+      _pickingEvidence = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
@@ -1263,12 +1405,14 @@ class _ChatActionPageState extends State<ChatActionPage> {
           onCloseEmoji: () => setEmojiOpen(false),
           onTapField: () => setEmojiOpen(false),
           onSend: send,
+          onShortcut: insertShortcut,
           onClearError: () => setState(() => sendError = null),
           onChanged: (text) {
             setState(() => sendError = null);
             final cursor = message.selection.baseOffset;
-            if (cursor > 0 && cursor <= text.length && text[cursor - 1] == '@') {
-              pickMention();
+            if (cursor > 0 && cursor <= text.length) {
+              if (text[cursor - 1] == '@') pickMention();
+              if (text[cursor - 1] == '#') pickEvidence();
             }
           },
         ),
@@ -1301,8 +1445,13 @@ class _ChatActionPageState extends State<ChatActionPage> {
     if (widget.store.writeBusy) return;
     setState(() => sendError = null);
     try {
-      await widget.store.sendMessage(text);
-      message.clear();
+      final draftKey = _draftKey;
+      await widget.store.sendMessage(text, references: List.of(editingReferences)..sort(
+        (a, b) => a.start.compareTo(b.start)));
+      if (draftKey == _draftKey && message.text == text) {
+        message.clear();
+        editingReferences.clear();
+      }
       // 已发出即输入结束：补一帧停止，别让「正在输入」多挂几秒。
       widget.store.reportTyping(hasText: false);
     } on ApiException catch (failure) {
@@ -1431,6 +1580,7 @@ class _Composer extends StatelessWidget {
     required this.onCloseEmoji,
     required this.onTapField,
     required this.onSend,
+    required this.onShortcut,
     required this.onChanged,
     required this.onClearError,
     this.error,
@@ -1460,6 +1610,7 @@ class _Composer extends StatelessWidget {
   final VoidCallback onSend;
   final VoidCallback onClearError;
   final ValueChanged<String> onChanged;
+  final ValueChanged<String> onShortcut;
   final String? error;
 
   @override
@@ -1554,7 +1705,7 @@ class _Composer extends StatelessWidget {
                   ],
                 ),
               ),
-            if (actions.isNotEmpty || typers.isNotEmpty) ...[
+            if (typing || actions.isNotEmpty || typers.isNotEmpty) ...[
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
                 child: DashedDivider(),
@@ -1563,47 +1714,27 @@ class _Composer extends StatelessWidget {
                 height: 42,
                 child: Row(
                   children: [
-                    Expanded(
-                      child: typing
-                          ? Align(
-                              alignment: Alignment.centerLeft,
-                              child: actions.isEmpty
-                                  ? null
-                                  : Badge.count(
-                                      count: actions.length,
-                                      backgroundColor:
-                                          context.palette.accent,
-                                      child: FilledButton.tonalIcon(
-                                        onPressed: () => openActionPicker(
-                                            context, store, actions),
-                                        icon: const Icon(Icons.bolt_outlined,
-                                            size: 18),
-                                        label: const Text('行动'),
-                                      ),
-                                    ),
-                            )
-                          : actions.isEmpty
-                              ? const SizedBox.shrink()
-                              : ListView.separated(
-                                  scrollDirection: Axis.horizontal,
-                                  itemCount: actions.length,
-                                  separatorBuilder: (_, __) =>
-                                      const SizedBox(width: AppSpacing.sm),
-                                  itemBuilder: (context, index) =>
-                                      ActionChipButton(
-                                        action: actions[index],
-                                        busy: store.writeBusy,
-                                        onTap: () => showActionForm(
-                                            context, store, actions[index]),
-                                      ),
-                                ),
-                    ),
-                    // 折叠的行动按钮右侧显示「[头像][头像][头像]…正在输入...」；
-                    // 展开态也保留在同一行右端，收起键盘后仍然可见。
-                    if (typers.isNotEmpty) ...[
-                      const SizedBox(width: AppSpacing.sm),
-                      _TypingIndicator(typers: typers),
-                    ],
+                    if (actions.isNotEmpty)
+                      Flexible(child: typing
+                        ? Align(alignment: Alignment.centerLeft,
+                            child: Badge.count(count: actions.length,
+                              child: FilledButton.tonal(
+                                onPressed: () => openActionPicker(context, store, actions),
+                                child: const Text('行动'))))
+                        : ListView.separated(scrollDirection: Axis.horizontal,
+                            itemCount: actions.length,
+                            separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
+                            itemBuilder: (context, index) => ActionChipButton(
+                              action: actions[index], busy: store.writeBusy,
+                              onTap: () => showActionForm(context, store, actions[index])))),
+                    TextFieldTapRegion(child: TextButton(
+                      onPressed: channelSendable ? () => onShortcut('@') : null,
+                      child: const Text('证人'))),
+                    TextFieldTapRegion(child: TextButton(
+                      onPressed: channelSendable ? () => onShortcut('#') : null,
+                      child: const Text('证物'))),
+                    if (typers.isNotEmpty)
+                      Flexible(child: ClipRect(child: _TypingIndicator(typers: typers))),
                   ],
                 ),
               ),
@@ -2437,6 +2568,56 @@ Future<void> _showMessageMenu(BuildContext context, GameMessage message,
   }
 }
 
+Future<void> _showReference(BuildContext context, GameStore? store,
+    ReferenceItem item) async {
+  await showPredictiveSheet<void>(context: context, useSafeArea: true,
+    builder: (sheet) => SafeArea(top: false, child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: SingleChildScrollView(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(item.label, style: Theme.of(sheet).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Text(item.text),
+          if (item.imageId != null && store?.api != null && store?.gameId != null)
+            FutureBuilder<List<int>>(
+              future: store!.api!.evidence(store.gameId!, item.imageId!),
+              builder: (context, result) {
+                if (result.hasError) return const Text('取图失败，请稍后重试');
+                if (!result.hasData) return const CircularProgressIndicator();
+                return Image.memory(Uint8List.fromList(result.data!),
+                  height: 320, fit: BoxFit.contain);
+              },
+            ),
+        ],
+      )),
+    )),
+  );
+}
+
+List<InlineSpan> _referenceSpans(BuildContext context, GameMessage message,
+    Color mentionColor, GameStore? store) {
+  if (message.references.isEmpty) return _chatSpans(message.text, mentionColor);
+  final spans = <InlineSpan>[];
+  var offset = 0;
+  for (final ref in message.references) {
+    spans.addAll(_chatSpans(message.text.substring(offset, ref.start), mentionColor));
+    spans.add(WidgetSpan(alignment: PlaceholderAlignment.middle, child: GestureDetector(
+      onTap: () => _showReference(context, store, ref.item),
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: mentionColor.withValues(alpha: .16),
+          borderRadius: BorderRadius.circular(4)),
+        child: Text(message.text.substring(ref.start, ref.end),
+          style: TextStyle(color: mentionColor, fontWeight: FontWeight.bold)),
+      ),
+    )));
+    offset = ref.end;
+  }
+  spans.addAll(_chatSpans(message.text.substring(offset), mentionColor));
+  return spans;
+}
+
 List<InlineSpan> _chatSpans(String text, Color mentionColor) {
   final spans = <InlineSpan>[];
   var cursor = 0;
@@ -2661,8 +2842,8 @@ class MessageBubble extends StatelessWidget {
                         GestureDetector(
                           onLongPress: () => _showMessageMenu(context, message, mine, store),
                           child: Text.rich(
-                            TextSpan(children: _chatSpans(message.text,
-                                mine ? Colors.white : context.palette.accent)),
+                            TextSpan(children: _referenceSpans(context, message,
+                                mine ? Colors.white : context.palette.accent, store)),
                             style: TextStyle(fontSize: 15, height: 1.35,
                                 color: mine ? context.palette.onAccent : context.palette.text),
                           ),

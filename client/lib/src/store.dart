@@ -84,6 +84,39 @@ class GameStore extends ChangeNotifier {
   /// 角色目录（id → 名称、好人技能、魔女化技能）；公开信息，用于角色详情与魔典说明。
   List<RoleInfo> roles = const <RoleInfo>[];
   List<String> defaultCodex = const <String>[];
+  String? referencesGameId;
+  List<ReferenceItem> referenceEvents = const [];
+  List<ReferenceItem> referenceRoles = const [];
+  List<ReferenceItem> referenceSkills = const [];
+  String? referenceError;
+
+  Future<void> loadReferences({bool refresh = false}) async {
+    final id = gameId;
+    final client = api;
+    if (id == null || client == null) return;
+    if (!refresh && referencesGameId == id) return;
+    if (referencesGameId != id) {
+      referenceEvents = const [];
+      referenceRoles = const [];
+      referenceSkills = const [];
+      referencesGameId = null;
+    }
+    referenceError = null;
+    try {
+      final result = await client.references(id);
+      if (gameId != id) return;
+      referenceEvents = jsonArray(result['events']).map(ReferenceItem.fromJson).toList();
+      referenceRoles = jsonArray(result['roles']).map(ReferenceItem.fromJson).toList();
+      referenceSkills = jsonArray(result['skills']).map(ReferenceItem.fromJson).toList();
+      referencesGameId = id;
+    } on ApiException catch (failure) {
+      referenceError = failure.message;
+    } on FormatException catch (failure) {
+      referenceError = '无法解析公开资料：${failure.message}';
+    }
+    notifyListeners();
+  }
+
   String connectionStatus = '未连接';
   String? error;
   bool restoring = true;
@@ -960,6 +993,7 @@ class GameStore extends ChangeNotifier {
     gameId = id;
     try {
       await loadCatalog();
+      await loadReferences(refresh: true);
       _applyView(await api!.state(id));
       await loadMessages('all');
       await _startLive();
@@ -1094,6 +1128,11 @@ class GameStore extends ChangeNotifier {
     // 角标与已读游标属于这一局，没有跨局保留的价值。
     await _purgeLocalData();
     gameId = null;
+    referencesGameId = null;
+    referenceEvents = const [];
+    referenceRoles = const [];
+    referenceSkills = const [];
+    referenceError = null;
     view = null;
     messages = [];
     hasMoreMessages = false;
@@ -1841,16 +1880,22 @@ class GameStore extends ChangeNotifier {
     _typingActiveChannels.add(channelId);
     live!.sendTyping(channelId);
   }
-
-  Future<void> sendMessage(String text) async {
+  Future<void> sendMessage(String text, {List<ChatReference> references = const []}) async {
     final id = gameId;
     if (api == null || id == null || writeBusy || text.trim().isEmpty) return;
     writeBusy = true;
     error = null;
     notifyListeners();
+    final trimmed = text.trim();
+    final prefix = text.length - text.trimLeft().length;
+    final adjusted = [
+      for (final ref in references)
+        if (ref.start >= prefix && ref.end <= prefix + trimmed.length)
+          ref.shifted(-prefix),
+    ];
     try {
-      final message = await api!
-          .sendMessage(id, activeChannelId, text.trim(), asSeat: puppetSeatId);
+      final message = await api!.sendMessage(id, activeChannelId, trimmed,
+          asSeat: puppetSeatId, references: adjusted);
       _mergeMessages([message]);
     } on ApiException catch (failure) {
       error = failure.message;

@@ -370,7 +370,15 @@ def death_card_payload(game, entries, half=None, day=None):
 
 
 def notify(
-    game, events, text, seats=None, title="游戏信息", image_id=None, alert=False, payload=None
+    game,
+    events,
+    text,
+    seats=None,
+    title="游戏信息",
+    image_id=None,
+    alert=False,
+    payload=None,
+    reference_title=None,
 ):
     recipients = None if seats is None else audience(game, seats)
     event = {
@@ -379,6 +387,8 @@ def notify(
         "audience": recipients,
         "title": title,
     }
+    if reference_title is not None and recipients is None:
+        event["reference_title"] = reference_title
     if image_id:
         event["image_id"] = image_id
     if payload is not None:

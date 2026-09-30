@@ -392,6 +392,7 @@ class GameMessage {
     payload = raw['payload'] == null
         ? null
         : jsonObject(raw['payload'], 'message.payload');
+    references = _messageReferences(kind, recalled, text, payload);
   }
 
   final Map<String, dynamic> raw;
@@ -409,6 +410,61 @@ class GameMessage {
   /// 结构化播报载荷（例如技能声明的技能名、介绍与目标）。
   /// 服务端已按收件人的可见范围裁剪过：私密目标与伪装标记不会出现在这里。
   late final Map<String, dynamic>? payload;
+  late final List<ChatReference> references;
+}
+
+class ReferenceItem {
+  ReferenceItem.fromJson(Object? value) : raw = jsonObject(value, 'reference') {
+    type = jsonString(raw['type'], 'reference.type');
+    id = jsonString(raw['id'], 'reference.id');
+    label = jsonString(raw['label'], 'reference.label');
+    text = jsonString(raw['text'], 'reference.text');
+    imageId = raw['image_id']?.toString();
+    roleId = raw['role_id']?.toString();
+  }
+
+  final Map<String, dynamic> raw;
+  late final String type, id, label, text;
+  late final String? imageId, roleId;
+}
+
+class ChatReference {
+  const ChatReference(this.start, this.end, this.item);
+
+  final int start, end;
+  final ReferenceItem item;
+
+  ChatReference shifted(int amount) => ChatReference(start + amount, end + amount, item);
+  Map<String, dynamic> toJson() => {
+    'start': start, 'end': end, 'type': item.type, 'id': item.id,
+  };
+}
+
+List<ChatReference> _messageReferences(
+    String kind, bool recalled, String text, Map<String, dynamic>? payload) {
+  if (kind != 'chat' || recalled || payload?['type'] != 'references' ||
+      payload?['items'] is! List) {
+    return const [];
+  }
+  final result = <ChatReference>[];
+  var previous = 0;
+  for (final value in payload!['items'] as List) {
+    if (value is! Map || value['start'] is! int || value['end'] is! int ||
+        value['type'] is! String || value['id'] is! String ||
+        value['label'] is! String || value['text'] is! String ||
+        !['event', 'role', 'skill'].contains(value['type'])) {
+      return const [];
+    }
+    final start = value['start'] as int;
+    final end = value['end'] as int;
+    if (start < previous || end <= start || end > text.length ||
+        text.substring(start, end) != '#${value['label']}') {
+      return const [];
+    }
+    result.add(ChatReference(start, end, ReferenceItem.fromJson(value)));
+    previous = end;
+  }
+  return result;
 }
 
 /// 角色目录条目：服务端的公开信息，用于角色详情与魔典说明。
@@ -419,6 +475,9 @@ class RoleInfo {
     normal = raw['normal']?.toString() ?? '';
     witch = raw['witch']?.toString() ?? '';
     avatar = raw['avatar']?.toString();
+    skills = raw['skills'] is List
+        ? (raw['skills'] as List).map((entry) => jsonObject(entry, 'skill')).toList()
+        : const [];
   }
 
   final Map<String, dynamic> raw;
@@ -427,6 +486,7 @@ class RoleInfo {
   late final String normal;
   late final String witch;
   late final String? avatar;
+  late final List<Map<String, dynamic>> skills;
 }
 
 /// 成就定义：主持人自定义的名称、内容与稀有度（1-10，数字越大越稀有）。

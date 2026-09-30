@@ -563,6 +563,7 @@ def death_batch(game, events, preview):
                 notice,
                 alert=True,
                 payload=death_card_payload(game, [entry]),
+                reference_title="出局公告",
             )
             # 白天死亡当场公示，下层牌立即登场并取得本阶段的行动。
             lower = current(game, s)

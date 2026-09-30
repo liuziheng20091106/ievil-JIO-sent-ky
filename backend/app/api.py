@@ -1180,6 +1180,87 @@ async def seat_view(game_id: str, seat_id: str, request: Request):
             }
 
 
+def reference_rules():
+    roles = [
+        {
+            "type": "role",
+            "id": role["id"],
+            "label": role["name"],
+            "text": f"普通：{role['normal']}\n魔女化：{role['witch']}",
+        }
+        for role in CATALOG
+    ]
+    skills = [
+        {
+            "type": "skill",
+            "id": f"{role['id']}:{skill['id']}",
+            "role_id": role["id"],
+            "label": f"{role['name']}·{skill['name']}",
+            "text": skill["text"],
+        }
+        for role in CATALOG
+        for skill in role["skills"]
+    ]
+    return roles, skills
+
+
+def chat_references(db, game_id, text, references):
+    if not references:
+        return None
+    rules, skills = reference_rules()
+    public_rules = {(item["type"], item["id"]): item for item in [*rules, *skills]}
+    try:
+        encoded = text.encode("utf-16-le")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(422, "引用正文编码无效") from exc
+    size = len(encoded) // 2
+    previous = 0
+    items = []
+    for ref in references:
+        if not previous <= ref.start < ref.end <= size:
+            raise HTTPException(422, "引用偏移越界或重叠")
+        if ref.type == "event":
+            if not re.fullmatch(r"[0-9]+", ref.id):
+                raise HTTPException(422, "证物编号无效")
+            matching = storage.reference_events(db, game_id, int(ref.id))
+            item = matching[0] if matching and matching[0]["id"] == ref.id else None
+        else:
+            item = public_rules.get((ref.type, ref.id))
+        try:
+            label = encoded[ref.start * 2 : ref.end * 2].decode("utf-16-le", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(422, "引用偏移不是完整字符") from exc
+        if not item or label != f"#{item['label']}":
+            raise HTTPException(422, "引用标签与公开资料不符")
+        items.append(
+            {
+                "start": ref.start,
+                "end": ref.end,
+                **{
+                    key: item[key]
+                    for key in ("type", "id", "label", "text", "image_id")
+                    if key in item
+                },
+            }
+        )
+        previous = ref.end
+    return {"type": "references", "items": items}
+
+
+@router.get("/games/{game_id}/references")
+async def get_references(game_id: str, request: Request):
+    async with realtime.lock:
+        with storage.connect() as db:
+            auth.require_actor(db, request, game_id)
+            require_game(db, game_id)
+            roles, skills = reference_rules()
+            return {
+                "events": storage.reference_events(db, game_id),
+                "roles": roles,
+                "skills": skills,
+            }
+
+
 @router.get("/games/{game_id}/messages")
 async def get_messages(
     game_id: str,
@@ -1310,6 +1391,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                     ).fetchone()
                     if target and target["active"] and not target["blocked"]:
                         mention_ids.append(target_id)
+            references_payload = chat_references(db, game_id, body.text, body.references)
             seat = seat_for(game, actor["seat_id"]) if actor["seat_id"] else None
             row = storage.add_message(
                 db,
@@ -1324,6 +1406,7 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                 text=body.text,
                 audience=audience,
                 mention_ids=mention_ids,
+                payload=references_payload,
             )
             # 顺序发言：本人发言后30秒倒计时重新开始。只改公开倒计时、不抬版本号，
             # 但要把新状态推给全场，否则别人看到的还是旧截止时间（见 touch_speech_timer）。

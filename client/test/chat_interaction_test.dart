@@ -318,6 +318,43 @@ void main() {
     expect(find.textContaining('请 @2号'), findsNothing);
   });
 
+  testWidgets('UTF16 引用点击只展示服务端快照，手写井号不可信', (tester) async {
+    final text = '😀 @2号 #艾玛·寻宝 #手写';
+    final start = text.indexOf('#艾玛');
+    final message = GameMessage.fromJson({
+      'id': 10, 'kind': 'chat', 'text': text, 'channel_id': 'public',
+      'payload': {'type': 'references', 'items': [
+        {'start': start, 'end': start + '#艾玛·寻宝'.length,
+         'type': 'skill', 'id': 'emma:treasure', 'label': '艾玛·寻宝',
+         'text': '公开的寻宝说明'},
+      ]},
+    });
+    expect(message.references.single.start, start);
+    expect(GameMessage.fromJson({
+      'id': 11, 'kind': 'chat', 'text': text, 'channel_id': 'public',
+      'payload': {'type': 'references', 'items': [
+        {'start': start - 1, 'end': start + '#艾玛·寻宝'.length,
+         'type': 'skill', 'id': 'emma:treasure', 'label': '艾玛·寻宝',
+         'text': '不应展示'},
+      ]},
+    }).references, isEmpty);
+    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(),
+      home: Scaffold(body: MessageBubble(message: message))));
+    expect(find.text('公开的寻宝说明'), findsNothing);
+    await tester.tap(find.text('#艾玛·寻宝'));
+    await tester.pumpAndSettle();
+    expect(find.text('公开的寻宝说明'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(),
+      home: Scaffold(body: MessageBubble(message: GameMessage.fromJson({
+        'id': 12, 'kind': 'chat', 'text': '#手写', 'channel_id': 'public',
+      })))));
+    await tester.tap(find.text('#手写'));
+    await tester.pumpAndSettle();
+    expect(find.text('公开的寻宝说明'), findsNothing);
+  });
+
   testWidgets('从公开席位选择稳定 @ 标签并积累专用未读', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final view = GameView.fromJson({
@@ -375,8 +412,15 @@ void main() {
     await tester.pumpWidget(
         MaterialApp(theme: buildAppTheme(), home: GameShell(store: store)));
     await tester.pump(const Duration(milliseconds: 600));
+    await tester.showKeyboard(find.byType(TextField).first);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+    addTearDown(() => tester.view.viewInsets = FakeViewPadding.zero);
+    await tester.pumpAndSettle();
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '@');
     await tester.pumpAndSettle();
+    expect(find.text('证人'), findsOneWidget);
+    expect(find.text('证物'), findsOneWidget);
     expect(find.text('@ 玩家'), findsOneWidget);
     await tester.tap(find.textContaining('2号').last);
     await tester.pumpAndSettle();
@@ -384,6 +428,17 @@ void main() {
     expect(
         tester.widget<TextField>(find.byType(TextField).first).controller!.text,
         '@2号 ');
+
+    await tester.tap(find.text('证物'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+        '@2号 #');
+    await tester.pumpAndSettle();
+    expect(find.text('重试'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+        '@2号 #');
     store.applyLiveEvent({
       'type': 'message',
       'message': {
@@ -399,7 +454,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('有人 @ 你'), findsOneWidget);
     expect(store.unreadMentionCount, 1);
-    expect(find.text('@'), findsWidgets);
     store.applyLiveEvent({
       'type': 'message',
       'message': {

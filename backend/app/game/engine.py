@@ -606,13 +606,16 @@ def advance(game, events):
                 events,
                 f"第{game['day']}夜：" + "".join(game["queued_notices"]),
                 alert=True,
+                reference_title="夜终公告",
                 # half 显式写成 night：这句话在天亮时说，但公布的是昨夜出局。
                 payload=death_card_payload(game, queued_deaths, half="night")
                 if queued_deaths
                 else None,
             )
         else:
-            notify(game, events, f"第{game['day']}夜是平安夜。", alert=True)
+            notify(
+                game, events, f"第{game['day']}夜是平安夜。", alert=True, reference_title="夜终公告"
+            )
         # 夜间的被动技能播报也在这一刻补发（替死 / 爱人庇护 / 转爱自己）：
         # 死亡公告之前发会提前泄露夜里的结算，所以统一压到天亮。
         publish_night_passives(game, events)
@@ -821,6 +824,7 @@ def resolve_pending(game, events, data):
                     recipients,
                     "遗留证物",
                     item.get("image_id"),
+                    reference_title="遗留证物" if recipients is None else None,
                 )
     elif kind == "codex":
         if data["outcome"] == "convert":
@@ -1149,6 +1153,7 @@ def host_command(game, events, action, data):
             data["reason"],
             None if data.get("public") else [owner(game, cid)["id"]],
             "主持人状态裁定",
+            reference_title="主持人状态裁定" if data.get("public") else None,
         )
         if game["phase"] == "night_review":
             prepare_night_preview(game, events)
@@ -1156,7 +1161,15 @@ def host_command(game, events, action, data):
         recipients = None if data.get("public") else data.get("recipients", [])
         require(recipients is None or recipients, "请选择公开或指定接收者")
         require(data.get("text") or data.get("image_id"), "信息需要正文或图像")
-        notify(game, events, data.get("text", ""), recipients, data["title"], data.get("image_id"))
+        notify(
+            game,
+            events,
+            data.get("text", ""),
+            recipients,
+            data["title"],
+            data.get("image_id"),
+            reference_title="主持人公开信息" if recipients is None else None,
+        )
     elif action == "host.madness":
         pending(game, "madness", data["reason"], seat_id=data["seat_id"])
     elif action == "host.rewind":

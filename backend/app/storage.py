@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, UTC
@@ -49,7 +50,7 @@ def initialize():
             sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, avatar_role_id TEXT,
             channel_id TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
             audience TEXT, image_id TEXT, payload TEXT, recalled_at TEXT,
-            mention_ids TEXT NOT NULL DEFAULT '[]'
+            reference_title TEXT, mention_ids TEXT NOT NULL DEFAULT '[]'
         );
         CREATE INDEX IF NOT EXISTS message_game_id ON messages(game_id, id);
         CREATE TABLE IF NOT EXISTS evidence (
@@ -99,6 +100,8 @@ def initialize():
             db.execute("ALTER TABLE messages ADD COLUMN recalled_at TEXT")
         if "mention_ids" not in message_columns:
             db.execute("ALTER TABLE messages ADD COLUMN mention_ids TEXT NOT NULL DEFAULT '[]'")
+        if "reference_title" not in message_columns:
+            db.execute("ALTER TABLE messages ADD COLUMN reference_title TEXT")
         # 原游戏没有成就设计：清掉历史对局里残留的占位字段，免得状态查看器继续显示它。
         for row in db.execute("SELECT id,state FROM games").fetchall():
             state = json.loads(row["state"])
@@ -235,12 +238,13 @@ def add_message(
     image_id=None,
     payload=None,
     mention_ids=None,
+    reference_title=None,
 ):
     created_at = now_text()
     cursor = db.execute(
         """INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,
-           channel_id,text,created_at,audience,image_id,payload,mention_ids)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+           channel_id,text,created_at,audience,image_id,payload,mention_ids,reference_title)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             game_id,
             kind,
@@ -254,6 +258,7 @@ def add_message(
             image_id,
             None if payload is None else dumps(payload),
             dumps(mention_ids or []),
+            reference_title,
         ),
     )
     return dict(db.execute("SELECT * FROM messages WHERE id=?", (cursor.lastrowid,)).fetchone())
@@ -281,6 +286,7 @@ def add_events(db, game_id, events):
                 audience=audience,
                 image_id=event.get("image_id"),
                 payload=event.get("payload"),
+                reference_title=event.get("reference_title") if audience is None else None,
                 channel_id=event.get("channel_id", "public" if audience is None else "information"),
                 sender_id=event.get("sender_id", "host"),
                 sender_name=event.get("sender_name", "主持人"),
@@ -288,6 +294,41 @@ def add_events(db, game_id, events):
             )
         )
     return rows
+
+
+def reference_events(db, game_id, message_id=None):
+    """公开事件目录和发送校验共用的同一条来源判据。"""
+    rows = db.execute(
+        """SELECT id, text, image_id, reference_title, kind, payload FROM messages
+           WHERE game_id=? AND audience IS NULL AND kind!='chat'
+           AND (reference_title IS NOT NULL OR (kind='alert' AND
+               (text GLOB '第[0-9]*夜[：是]*' OR
+                (json_valid(payload) AND json_extract(payload,'$.type')='death'))))
+           AND (? IS NULL OR id=?) ORDER BY id""",
+        (game_id, message_id, message_id),
+    ).fetchall()
+    result = []
+    for row in rows:
+        title = row["reference_title"]
+        if not title:
+            if row["kind"] != "alert":
+                continue
+            if re.match(r"^第[0-9]+夜[：是]", row["text"]):
+                title = "夜终公告"
+            elif row["payload"] and json.loads(row["payload"]).get("type") == "death":
+                title = "出局公告"
+            else:
+                continue
+        item = {
+            "type": "event",
+            "id": str(row["id"]),
+            "label": f"{title}·{row['text'][:40].replace(chr(10), ' ')}·{row['id']}",
+            "text": row["text"],
+        }
+        if row["image_id"]:
+            item["image_id"] = row["image_id"]
+        result.append(item)
+    return result
 
 
 def visible_message(row, actor):
@@ -342,13 +383,13 @@ def message_view(row, actor):
     result["sender_name"] = display_player_name(result["sender_name"])
     # 结构化播报按收件人裁剪：同一行消息，不同的人拿到的细节不同。
     if "payload" in row.keys() and row["payload"]:  # noqa: SIM118 - 同上，不能用 `in row`
-        projected = project_message_payload(row["payload"], actor)
+        projected = project_message_payload(row["payload"], actor, row["kind"])
         if projected:
             result["payload"] = projected
     return result
 
 
-def project_message_payload(raw, actor):
+def project_message_payload(raw, actor, kind=None):
     """把消息里的结构化载荷裁剪成该身份可见的细节。
 
     技能播报（主动与被动）与角色卡死亡两类载荷走这里。技能名与介绍是公开规则，
@@ -367,6 +408,19 @@ def project_message_payload(raw, actor):
         return None
     if not isinstance(payload, dict):
         return None
+    if payload.get("type") == "references":
+        if kind != "chat" or not isinstance(payload.get("items"), list):
+            return None
+        fields = ("start", "end", "type", "id", "label", "text", "image_id")
+        return {
+            "type": "references",
+            "items": [
+                {key: item[key] for key in fields if key in item}
+                for item in payload["items"]
+                if isinstance(item, dict)
+            ],
+        }
+
     if payload.get("type") == "death":
         return {key: payload[key] for key in ("type", "day", "half", "deaths") if key in payload}
     if payload.get("type") == "plugin":
