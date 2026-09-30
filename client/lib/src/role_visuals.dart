@@ -126,8 +126,7 @@ const roleVisuals = <RoleVisual>[
   RoleVisual('arisa', '亚里沙'),
   RoleVisual('marg', '玛格'),
   RoleVisual('leia', '蕾雅'),
-  // 穗乃香没有立绘，按规则用「穗」字占位。
-  RoleVisual('honoka', '穗乃香', hasArt: false),
+  RoleVisual('honoka', '穗乃香'),
 ];
 
 RoleVisual? roleVisual(String? roleId) {
