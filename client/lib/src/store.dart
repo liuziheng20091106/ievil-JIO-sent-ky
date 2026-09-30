@@ -284,10 +284,21 @@ class GameStore extends ChangeNotifier {
 
   Set<String>? _actionBaseline;
   Set<String>? _tutorialBaseline;
+  final Set<String> _viewedActionTutorialIds = {};
   final List<ActionDescriptor> _pendingActionTutorials = [];
 
-  ActionDescriptor? takeActionTutorial() =>
-      _pendingActionTutorials.isEmpty ? null : _pendingActionTutorials.removeAt(0);
+  ActionDescriptor? takeActionTutorial() {
+    if (_pendingActionTutorials.isEmpty) return null;
+    final action = _pendingActionTutorials.removeAt(0);
+    if (_viewedActionTutorialIds.add(action.id)) {
+      unawaited(preferences.setStringList(
+        _preferenceKey('action_tutorials_seen'),
+        _viewedActionTutorialIds.toList(),
+      ));
+    }
+    return action;
+  }
+
   String? _privateStateBaseline;
   String? _loadedPhaseKey;
   String? _ownCardBaseline;
@@ -1114,6 +1125,7 @@ class GameStore extends ChangeNotifier {
     _actionBaseline = null;
     _tutorialBaseline = null;
     _pendingActionTutorials.clear();
+    _viewedActionTutorialIds.clear();
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
     pendingRoleId = null;
@@ -1251,6 +1263,7 @@ class GameStore extends ChangeNotifier {
       _clearTyping();
       _tutorialBaseline = null;
       _pendingActionTutorials.clear();
+      _viewedActionTutorialIds.clear();
     }
     // 「确认进入管理界面」一律以服务端为准：本局这个账号只要确认过一次
     // （换令牌、重新登录、重开应用都算），服务端就不再要求确认，客户端直接展开
@@ -1266,15 +1279,30 @@ class GameStore extends ChangeNotifier {
         next.self['seat_id']?.toString() != actor!.seatId) {
       unawaited(_reconcileActor());
     }
+    if (_tutorialBaseline == null) {
+      _viewedActionTutorialIds.addAll(
+        preferences.getStringList(_preferenceKey('action_tutorials_seen')) ??
+            const [],
+      );
+    }
     final actionKeys = next.allActions.map((item) => item.protocolKey).toSet();
     if (recovering || _tutorialBaseline == null || next.status == 'ended') {
       _pendingActionTutorials.clear();
     } else {
-      final seen = preferences.getStringList(_preferenceKey('actions_seen'))?.toSet() ?? <String>{};
+      final seen =
+          preferences.getStringList(_preferenceKey('actions_seen'))?.toSet() ??
+              <String>{};
       for (final action in next.allActions) {
         if (!_tutorialBaseline!.contains(action.protocolKey) &&
             !seen.contains(action.protocolKey) &&
-            !_pendingActionTutorials.any((item) => item.protocolKey == action.protocolKey)) {
+            !_viewedActionTutorialIds.contains(action.id) &&
+            !const {
+              'room.open_join',
+              'lobby.ready',
+              'host.auto',
+              'host.hanna_witch'
+            }.contains(action.id) &&
+            !_pendingActionTutorials.any((item) => item.id == action.id)) {
           _pendingActionTutorials.add(action);
         }
       }
@@ -2086,6 +2114,7 @@ class GameStore extends ChangeNotifier {
     _actionBaseline = null;
     _tutorialBaseline = null;
     _pendingActionTutorials.clear();
+    _viewedActionTutorialIds.clear();
     _privateStateBaseline = null;
     _loadedPhaseKey = null;
     pendingRoleId = null;

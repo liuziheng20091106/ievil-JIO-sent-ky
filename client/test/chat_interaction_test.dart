@@ -10,7 +10,7 @@ import 'package:seven_double_client/src/store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  testWidgets('新增行动只在基线之后显示服务端说明', (tester) async {
+  testWidgets('新增行动只弹一次服务端说明，描述变化不重弹', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final base = {
       'ui_version': 1,
@@ -76,7 +76,95 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('新的服务端行动说明。'), findsOneWidget);
+    expect(find.text('新的服务端行动说明。'), findsNothing);
+  });
+
+  test('本局已看行动不重弹，准备和房间开关不弹', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    final actor = Actor.fromJson({
+      'id': 'p1',
+      'account_id': 'a1',
+      'kind': 'player',
+      'seat_id': '1',
+      'name': '一号',
+    });
+    final endpoint = ServerEndpoint.parse('http://127.0.0.1:8000');
+    Map<String, dynamic> state(String id, List<Map<String, dynamic>> actions) =>
+        {
+          'ui_version': 1,
+          'id': id,
+          'version': 1,
+          'status': 'lobby',
+          'day': 1,
+          'half': 'night',
+          'phase': 'lobby',
+          'phase_label': '候场',
+          'seats': <dynamic>[],
+          'self': {'seat_id': '1'},
+          'actions': actions,
+          'public': <String, dynamic>{},
+          'channels': <dynamic>[],
+        };
+    Map<String, dynamic> action(String id, String label) => {
+          'id': id,
+          'label': label,
+          'short_label': '操作',
+          'description': '行动说明',
+          'ui_version': 1,
+        };
+    final empty = GameView.fromJson(state('game-1', []));
+    final store = GameStore.forPreview(
+      preferences: preferences,
+      endpoint: endpoint,
+      actor: actor,
+      view: empty,
+      gameId: 'game-1',
+    );
+    store.applyView(empty);
+    final ready = action('lobby.ready', '准备发牌');
+    final open = action('room.open_join', '允许加入');
+    store.applyView(GameView.fromJson(state('game-1', [ready, open])));
+    expect(store.takeActionTutorial(), isNull);
+    store.applyView(GameView.fromJson(state('game-1', [
+      action('lobby.ready', '取消准备'),
+      action('room.open_join', '禁止加入'),
+      action('host.auto', '暂停自动推进'),
+      action('host.hanna_witch', '汉娜魔化：已开启'),
+    ])));
+    expect(store.takeActionTutorial(), isNull);
+
+    final speech = action('speech.done', '结束发言');
+    store.applyView(GameView.fromJson(state('game-1', [speech])));
+    expect(store.takeActionTutorial()?.id, 'speech.done');
+    store.applyView(GameView.fromJson(state('game-1', [])));
+    store.applyView(GameView.fromJson(state('game-1', [
+      {...speech, 'description': '变化后的说明'},
+    ])));
+    expect(store.takeActionTutorial(), isNull);
+
+    final resumed = GameStore.forPreview(
+      preferences: preferences,
+      endpoint: endpoint,
+      actor: actor,
+      view: empty,
+      gameId: 'game-1',
+    );
+    resumed.applyView(empty);
+    resumed.applyView(GameView.fromJson(state('game-1', [speech])));
+    expect(resumed.takeActionTutorial(), isNull);
+
+    final otherGame = GameView.fromJson(state('game-2', []));
+    final newStore = GameStore.forPreview(
+      preferences: preferences,
+      endpoint: endpoint,
+      actor: actor,
+      view: otherGame,
+      gameId: 'game-2',
+    );
+    newStore.applyView(otherGame);
+    newStore.applyView(GameView.fromJson(state('game-2', [speech])));
+    expect(newStore.takeActionTutorial()?.id, 'speech.done');
   });
 
   testWidgets('公开顺序与当前席位随服务端状态更新', (tester) async {
