@@ -5,6 +5,7 @@ import 'design.dart';
 import 'history_pages.dart';
 import 'models.dart';
 import 'participant_menu.dart';
+import 'predictive_sheet.dart';
 import 'role_visuals.dart';
 import 'store.dart';
 
@@ -218,6 +219,133 @@ class SkillCastCard extends StatelessWidget {
                             ),
                           ),
                       ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 开局插件公告沿用技能播报卡片外观；说明只在点开后展示。
+class PluginCastCard extends StatelessWidget {
+  const PluginCastCard({super.key, required this.payload});
+
+  final Map<String, dynamic> payload;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final name = payload['name'] as String;
+    final version = payload['version'].toString();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Material(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () => showPredictiveSheet<void>(
+                context: context,
+                useSafeArea: true,
+                isScrollControlled: true,
+                builder: (context) => SafeArea(
+                  top: false,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.xl,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.extension_outlined, size: 38,
+                                color: palette.accent),
+                            const SizedBox(width: AppSpacing.md),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('规则插件详情', style: TextStyle(
+                                      fontSize: 12, color: palette.accent)),
+                                  Text(name, style: TextStyle(fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      color: palette.text)),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '关闭',
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(Icons.close, size: 20),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Text('版本 v$version', style: TextStyle(
+                            fontSize: 13, color: palette.textSecondary)),
+                        const SizedBox(height: AppSpacing.lg),
+                        Text('规则介绍', style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600,
+                            color: palette.accent)),
+                        const SizedBox(height: AppSpacing.sm),
+                        Text(payload['description'] as String,
+                            style: TextStyle(fontSize: 15, height: 1.5,
+                                color: palette.text)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                  border: Border.all(
+                    color: palette.accent.withValues(alpha: .45), width: 1.2,
+                  ),
+                ),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.extension_outlined, size: 38,
+                            color: palette.accent),
+                        const SizedBox(width: AppSpacing.sm),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('本局规则插件', style: TextStyle(
+                                  fontSize: 12, color: palette.textTertiary)),
+                              const SizedBox(height: 3),
+                              Text('$name · v$version',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: palette.accent)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('点击查看规则详细', style: TextStyle(
+                          fontSize: 11, color: palette.accent)),
                     ),
                   ],
                 ),

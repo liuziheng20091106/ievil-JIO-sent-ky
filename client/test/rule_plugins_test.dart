@@ -91,7 +91,7 @@ void main() {
         FilledButton, '确认插件（2）')).onPressed, isNotNull);
   });
 
-  testWidgets('插件公告显示公开名称、版本和说明，损坏载荷回退原正文', (tester) async {
+  testWidgets('插件公告以卡片展示，介绍仅在点击详情后显示，损坏载荷回退正文', (tester) async {
     GameMessage announcement(Map<String, dynamic>? payload) => GameMessage.fromJson({
       'id': 1,
       'kind': 'alert',
@@ -112,10 +112,17 @@ void main() {
       'category': '规则',
       'module_path': 'private/server/module.py',
     });
-    expect(find.textContaining('投票平衡 · v2'), findsOneWidget);
-    expect(find.textContaining('傀儡不参与普通投票。'), findsOneWidget);
-    expect(find.textContaining('原有公告正文'), findsNothing);
-    expect(find.textContaining('private/server/module.py'), findsNothing);
+    expect(find.text('投票平衡 · v2'), findsOneWidget);
+    expect(find.text('本局规则插件'), findsOneWidget);
+    expect(find.text('傀儡不参与普通投票。'), findsNothing);
+    expect(find.text('原有公告正文'), findsNothing);
+    await tester.tap(find.text('点击查看规则详细'));
+    await tester.pumpAndSettle();
+    expect(find.text('傀儡不参与普通投票。'), findsOneWidget);
+    expect(find.text('private/server/module.py'), findsNothing);
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('傀儡不参与普通投票。'), findsNothing);
     await render({'type': 'plugin', 'name': '投票平衡', 'version': 2});
     expect(find.text('原有公告正文'), findsOneWidget);
     await render(null);
