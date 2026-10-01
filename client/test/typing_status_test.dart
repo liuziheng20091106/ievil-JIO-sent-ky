@@ -73,7 +73,13 @@ Actor actorJson() => Actor.fromJson({
 
 /// 记录 sendTyping 调用的 LiveConnection 假体：start/stop 都不动真 socket。
 class RecordingLive extends LiveConnection {
-  RecordingLive() : super(endpoint: ServerEndpoint.parse('http://127.0.0.1:1'), token: 't', onEvent: (_) {}, onConnected: () async {}, onStatus: (_) {});
+  RecordingLive()
+      : super(
+            endpoint: ServerEndpoint.parse('http://127.0.0.1:1'),
+            token: 't',
+            onEvent: (_) {},
+            onConnected: () async {},
+            onStatus: (_) {});
 
   final frames = <({String channelId, bool active})>[];
 
@@ -102,8 +108,7 @@ Future<GameStore> previewStore({
   return store;
 }
 
-TypingUser typingUser(String id, {bool active = true}) =>
-    TypingUser.fromJson({
+TypingUser typingUser(String id, {bool active = true}) => TypingUser.fromJson({
       'participant_id': id,
       'name': '玩家$id',
       'kind': 'player',
@@ -253,7 +258,8 @@ void main() {
         view: viewJson(publicSendable: false, privateSendable: false),
       );
       store.applyView(
-        GameView.fromJson(viewJson(publicSendable: false, privateSendable: false)),
+        GameView.fromJson(
+            viewJson(publicSendable: false, privateSendable: false)),
       );
       expect(store.selectedChannelId, 'public');
     });
@@ -270,7 +276,7 @@ void main() {
           theme: buildAppTheme(),
           home: Builder(builder: (context) {
             // 与 shell.dart 同一取数路径：指示器只渲染当前频道的输入者，
-            // 头像上限 3、超出显示「…」，随后是「正在输入」。
+            // 头像上限 3、超出显示「…」，随后是「输入中」。
             final users = store.typingUsersIn('public');
             return Directionality(
               textDirection: TextDirection.ltr,
@@ -290,7 +296,7 @@ void main() {
                               ),
                             ),
                           if (users.length > 3) const Text('…'),
-                          const Text('正在输入'),
+                          const Text('输入中'),
                         ],
                       ),
               ),
@@ -301,7 +307,7 @@ void main() {
       await tester.pump();
       expect(find.byType(RoleAvatar), findsNWidgets(3));
       expect(find.text('…'), findsOneWidget);
-      expect(find.text('正在输入'), findsOneWidget);
+      expect(find.text('输入中'), findsOneWidget);
       // 收掉 sweep 周期 Timer，避免测试结束时留下 pending timer。
       store.dispose();
     });

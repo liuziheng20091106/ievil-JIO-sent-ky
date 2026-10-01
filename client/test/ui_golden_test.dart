@@ -459,7 +459,9 @@ Future<GameStore> previewStore({
     endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
     actor: actorJson(host: host),
     view: GameView.fromJson(
-      host ? hostViewJson(hostEntryRequired: hostEntryRequired) : playerViewJson(),
+      host
+          ? hostViewJson(hostEntryRequired: hostEntryRequired)
+          : playerViewJson(),
     ),
     gameId: 'game-demo',
     messages: messagesJson(),
@@ -713,16 +715,18 @@ void main() {
     await withClock(Clock.fixed(fixedNow), () async {
       final store = await previewStore(host: false);
       await pumpAt(tester, store, const Size(420, 880));
-      expect(find.text('证人'), findsNothing);
-      expect(find.text('证物'), findsNothing);
+      final shortcuts = find.descendant(
+        of: find.byType(TextFieldTapRegion),
+        matching: find.byType(TextButton),
+      );
+      expect(shortcuts, findsNothing);
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(FilterChip), findsWidgets);
 
       // 模拟软键盘弹出：物理像素与逻辑像素在 pumpAt 里是 1:1。
       tester.view.viewInsets = const FakeViewPadding(bottom: 320);
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('证人'), findsOneWidget);
-      expect(find.text('证物'), findsOneWidget);
+      expect(shortcuts, findsNWidgets(2));
       final witnessX = tester.getTopLeft(find.text('证人')).dx;
       final evidenceX = tester.getTopLeft(find.text('证物')).dx;
       expect(witnessX, lessThan(evidenceX));
@@ -732,17 +736,25 @@ void main() {
         matchesGoldenFile('goldens/player_chat_keyboard.png'),
       );
       store.noteTyping(TypingUser.fromJson({
-        'participant_id': 'p2', 'name': 'kiwi', 'kind': 'player',
-        'seat_id': '2', 'avatar_role_id': 'hiro',
-        'active': true, 'channel_id': 'public',
+        'participant_id': 'p2',
+        'name': 'kiwi',
+        'kind': 'player',
+        'seat_id': '2',
+        'avatar_role_id': 'hiro',
+        'active': true,
+        'channel_id': 'public',
       }));
       await tester.pump();
       expect(tester.getTopLeft(find.text('证人')).dx, witnessX);
       expect(tester.getTopLeft(find.text('证物')).dx, evidenceX);
       store.noteTyping(TypingUser.fromJson({
-        'participant_id': 'p2', 'name': 'kiwi', 'kind': 'player',
-        'seat_id': '2', 'avatar_role_id': 'hiro',
-        'active': false, 'channel_id': 'public',
+        'participant_id': 'p2',
+        'name': 'kiwi',
+        'kind': 'player',
+        'seat_id': '2',
+        'avatar_role_id': 'hiro',
+        'active': false,
+        'channel_id': 'public',
       }));
       await tester.pump();
       expect(tester.getTopLeft(find.text('证人')).dx, witnessX);
@@ -759,8 +771,7 @@ void main() {
       // 收起键盘后回到原来的完整布局。
       tester.view.viewInsets = FakeViewPadding.zero;
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('证人'), findsNothing);
-      expect(find.text('证物'), findsNothing);
+      expect(shortcuts, findsNothing);
       expect(find.byType(AppBar), findsOneWidget);
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(FilterChip), findsWidgets);
@@ -856,8 +867,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(position.pixels, closeTo(position.maxScrollExtent, 1),
           reason: '历史到达后要停在最底部');
-      expect(find.text('第 159 条公屏讨论内容'), findsOneWidget,
-          reason: '最新一条要看得见');
+      expect(find.text('第 159 条公屏讨论内容'), findsOneWidget, reason: '最新一条要看得见');
 
       // 手动往上拖要跟手，不能被拽回旧锚点。
       final before = position.pixels;

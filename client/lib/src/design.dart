@@ -142,13 +142,14 @@ class AppSpacing {
   static const xl = 24.0;
   static const xxl = 32.0;
 
-  /// 悬浮底栏占位，避免内容被遮住。
-  static const bottomBar = 104.0;
+  /// 紧凑悬浮底栏占位，避免内容被遮住。
+  static const bottomBar = 88.0;
 }
 
 /// 语义色主题：浅色与深色共用同一套结构，界面跟随系统深色开关。
 ThemeData buildAppTheme([Brightness brightness = Brightness.light]) {
-  final palette = brightness == Brightness.dark ? AppPalette.dark : AppPalette.light;
+  final palette =
+      brightness == Brightness.dark ? AppPalette.dark : AppPalette.light;
   final scheme = ColorScheme.fromSeed(
     seedColor: palette.accent,
     brightness: brightness,
@@ -334,8 +335,7 @@ ThemeData buildAppTheme([Brightness brightness = Brightness.light]) {
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.chip)),
     ),
-    progressIndicatorTheme:
-        ProgressIndicatorThemeData(color: palette.accent),
+    progressIndicatorTheme: ProgressIndicatorThemeData(color: palette.accent),
     textTheme: base.textTheme.apply(
       fontFamily: kAppFontFamily,
       bodyColor: palette.text,
@@ -376,7 +376,7 @@ class SectionTitle extends StatelessWidget {
                     ),
                   ),
                   if (subtitle != null) ...[
-                     SizedBox(height: AppSpacing.xs),
+                    SizedBox(height: AppSpacing.xs),
                     Text(
                       subtitle!,
                       style: TextStyle(
@@ -394,7 +394,7 @@ class SectionTitle extends StatelessWidget {
 
 /// 小标签。
 class Tag extends StatelessWidget {
-   Tag(this.text, {super.key, this.color, this.background, this.icon});
+  Tag(this.text, {super.key, this.color, this.background, this.icon});
 
   final String text;
   final Color? color;
@@ -406,25 +406,25 @@ class Tag extends StatelessWidget {
     final color = this.color ?? context.palette.accent;
     final background = this.background ?? context.palette.accentSoft;
     return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(AppRadius.chip),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 13, color: color),
-              const SizedBox(width: 4),
-            ],
-            Text(
-              text,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: color),
-            ),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(AppRadius.chip),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 4),
           ],
-        ),
+          Text(
+            text,
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: color),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -441,7 +441,7 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
         child: Padding(
-          padding:  EdgeInsets.all(AppSpacing.xl),
+          padding: EdgeInsets.all(AppSpacing.xl),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -449,11 +449,12 @@ class EmptyState extends StatelessWidget {
                 width: 64,
                 height: 64,
                 decoration: BoxDecoration(
-                    color: context.palette.surfaceMuted, shape: BoxShape.circle),
-                child: Icon(icon,
-                    size: 30, color: context.palette.textTertiary),
+                    color: context.palette.surfaceMuted,
+                    shape: BoxShape.circle),
+                child:
+                    Icon(icon, size: 30, color: context.palette.textTertiary),
               ),
-               SizedBox(height: AppSpacing.lg),
+              SizedBox(height: AppSpacing.lg),
               Text(
                 title,
                 textAlign: TextAlign.center,
@@ -463,7 +464,7 @@ class EmptyState extends StatelessWidget {
                     color: context.palette.text),
               ),
               if (detail != null) ...[
-                 SizedBox(height: AppSpacing.sm),
+                SizedBox(height: AppSpacing.sm),
                 Text(
                   detail!,
                   textAlign: TextAlign.center,

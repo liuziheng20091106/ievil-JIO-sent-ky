@@ -5,6 +5,7 @@ __pycache__/
 node_modules/
 frontend/dist/
 data/
+resources/
 # 对局库的手工备份（含账号、消息等真实用户数据），一律不入库。
 backup-*.sqlite3
 *.tsbuildinfo

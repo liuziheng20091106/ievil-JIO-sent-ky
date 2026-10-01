@@ -6,6 +6,19 @@ set(EPHEMERAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ephemeral")
 # Configuration provided via flutter tool.
 include(${EPHEMERAL_DIR}/generated_config.cmake)
 
+# 版本只用于 Windows 资源版本号；不把它喂给 Dart AOT，否则只改版本也会让 app.so 失去缓存。
+# Flutter 默认把 FLUTTER_BUILD_NAME 放在 DART_DEFINES 的第一项，同时单独传 BUILD_NAME。
+set(_flutter_tool_environment)
+foreach(_flutter_environment ${FLUTTER_TOOL_ENVIRONMENT})
+  if(_flutter_environment MATCHES "^DART_DEFINES=(.*)")
+    string(REGEX REPLACE "^[^,]*," "" _flutter_dart_defines "${CMAKE_MATCH_1}")
+    list(APPEND _flutter_tool_environment "DART_DEFINES=${_flutter_dart_defines}")
+  elseif(NOT _flutter_environment MATCHES "^BUILD_NAME=")
+    list(APPEND _flutter_tool_environment "${_flutter_environment}")
+  endif()
+endforeach()
+set(FLUTTER_TOOL_ENVIRONMENT "${_flutter_tool_environment}")
+
 # TODO: Move the rest of this into files in ephemeral. See
 # https://github.com/flutter/flutter/issues/57146.
 set(WRAPPER_ROOT "${EPHEMERAL_DIR}/cpp_client_wrapper")

@@ -66,7 +66,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     if (widget.store.pendingMarksTutorial) {
       WidgetsBinding.instance.addPostFrameCallback((_) => onStoreChanged());
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => maybeShowActionTutorial());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => maybeShowActionTutorial());
   }
 
   @override
@@ -236,82 +237,86 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         return Scaffold(
           key: _scaffold,
           extendBody: !twoPane,
-          appBar: focusTyping ? null : AppBar(
-            title: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  ended ? '本局已落幕' : view.phaseLabel,
-                  style:  TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                      color: context.palette.text),
-                ),
-                Text(
-                  ended
-                      ? '结局可只读查看'
-                      : '第 ${view.day} 日 · ${view.half == 'night' ? '夜间' : '白天'}',
-                  style:  TextStyle(
-                      fontSize: 12, color: context.palette.textTertiary),
-                ),
-              ],
-            ),
-            actions: [
-              if (ended)
-                Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.sm),
-                  child: TextButton.icon(
-                    onPressed: store.writeBusy
-                        ? null
-                        : () => returnToLobby(context, store),
-                    icon: const Icon(Icons.meeting_room_outlined, size: 18),
-                    label: const Text('返回大厅'),
-                  ),
-                ),
-              // 两栏时「我的/管理」收进右侧抽屉，入口保留该页的待办角标。
-              if (twoPane && !threePane)
-                Padding(
-                  padding:  EdgeInsets.only(right: AppSpacing.sm),
-                  child: IconButton(
-                    tooltip: labels[2],
-                    onPressed: () => _scaffold.currentState?.openEndDrawer(),
-                    icon: Badge.count(
-                      count: counts[2],
-                      isLabelVisible: counts[2] > 0,
-                      backgroundColor: context.palette.accent,
-                      child: Icon(icons[2], color: context.palette.text),
-                    ),
-                  ),
-                ),
-              Padding(
-                padding: const EdgeInsets.only(right: AppSpacing.lg),
-                child: Center(
-                  child: Tooltip(
-                    message: '连接状态：${store.connectionStatus}',
-                    child: Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: store.connectionStatus == '已连接'
-                            ? context.palette.successSoft
-                            : context.palette.warningSoft,
-                        shape: BoxShape.circle,
+          appBar: focusTyping
+              ? null
+              : AppBar(
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ended ? '本局已落幕' : view.phaseLabel,
+                        style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            color: context.palette.text),
                       ),
-                      child: Icon(
-                        store.connectionStatus == '已连接'
-                            ? Icons.cloud_done_outlined
-                            : Icons.cloud_off_outlined,
-                        size: 18,
-                        color: store.connectionStatus == '已连接'
-                            ? context.palette.success
-                            : context.palette.warning,
+                      Text(
+                        ended
+                            ? '结局可只读查看'
+                            : '第 ${view.day} 日 · ${view.half == 'night' ? '夜间' : '白天'}',
+                        style: TextStyle(
+                            fontSize: 12, color: context.palette.textTertiary),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    if (ended)
+                      Padding(
+                        padding: const EdgeInsets.only(right: AppSpacing.sm),
+                        child: TextButton.icon(
+                          onPressed: store.writeBusy
+                              ? null
+                              : () => returnToLobby(context, store),
+                          icon:
+                              const Icon(Icons.meeting_room_outlined, size: 18),
+                          label: const Text('返回大厅'),
+                        ),
+                      ),
+                    // 两栏时「我的/管理」收进右侧抽屉，入口保留该页的待办角标。
+                    if (twoPane && !threePane)
+                      Padding(
+                        padding: EdgeInsets.only(right: AppSpacing.sm),
+                        child: IconButton(
+                          tooltip: labels[2],
+                          onPressed: () =>
+                              _scaffold.currentState?.openEndDrawer(),
+                          icon: Badge.count(
+                            count: counts[2],
+                            isLabelVisible: counts[2] > 0,
+                            backgroundColor: context.palette.accent,
+                            child: Icon(icons[2], color: context.palette.text),
+                          ),
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.only(right: AppSpacing.lg),
+                      child: Center(
+                        child: Tooltip(
+                          message: '连接状态：${store.connectionStatus}',
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: store.connectionStatus == '已连接'
+                                  ? context.palette.successSoft
+                                  : context.palette.warningSoft,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              store.connectionStatus == '已连接'
+                                  ? Icons.cloud_done_outlined
+                                  : Icons.cloud_off_outlined,
+                              size: 18,
+                              color: store.connectionStatus == '已连接'
+                                  ? context.palette.success
+                                  : context.palette.warning,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ),
-            ],
-          ),
           endDrawer: twoPane && !threePane
               ? Drawer(
                   width: 380,
@@ -422,7 +427,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           bottomNavigationBar: (twoPane || focusTyping)
               ? null
               : SafeArea(
-                  minimum:  EdgeInsets.fromLTRB(20, 0, 20, 14),
+                  minimum: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                   child: Material(
                     elevation: 10,
                     shadowColor: Colors.black.withValues(alpha: .10),
@@ -430,8 +435,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                     borderRadius: BorderRadius.circular(AppRadius.sheet),
                     clipBehavior: Clip.antiAlias,
                     child: NavigationBar(
-                      backgroundColor: Colors.transparent,
-                      elevation: 0,
+                      height: 68,
                       selectedIndex: index,
                       onDestinationSelected: (value) {
                         setState(() => index = value);
@@ -496,8 +500,8 @@ class PaneFrame extends StatelessWidget {
         children: [
           Container(
             height: 46,
-            padding:  EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-            decoration:  BoxDecoration(
+            padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            decoration: BoxDecoration(
               color: context.palette.background,
               border: Border(bottom: BorderSide(color: context.palette.border)),
             ),
@@ -505,18 +509,21 @@ class PaneFrame extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style:  TextStyle(
+                  style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: context.palette.textSecondary),
                 ),
-                 Spacer(),
+                Spacer(),
                 if (count > 0)
                   Tag(
                     '$count',
-                    color: urgent ? context.palette.danger : context.palette.accent,
-                    background:
-                        urgent ? context.palette.dangerSoft : context.palette.accentSoft,
+                    color: urgent
+                        ? context.palette.danger
+                        : context.palette.accent,
+                    background: urgent
+                        ? context.palette.dangerSoft
+                        : context.palette.accentSoft,
                   ),
                 if (trailing != null) trailing!,
               ],
@@ -532,7 +539,7 @@ class PaneDivider extends StatelessWidget {
   const PaneDivider({super.key});
 
   @override
-  Widget build(BuildContext context) =>  VerticalDivider(
+  Widget build(BuildContext context) => VerticalDivider(
         width: 1,
         thickness: 1,
         color: context.palette.border,
@@ -638,16 +645,14 @@ class _PhaseOverlayState extends State<PhaseOverlay> {
     return Positioned.fill(
       child: AnimatedOpacity(
         opacity: shown ? 1 : 0,
-        duration:
-            reduceMotion ? Duration.zero :  Duration(milliseconds: 260),
+        duration: reduceMotion ? Duration.zero : Duration(milliseconds: 260),
         child: ColoredBox(
           color: context.palette.surface,
           child: Center(
             child: AnimatedScale(
               scale: shown ? 1 : .92,
-              duration: reduceMotion
-                  ? Duration.zero
-                  :  Duration(milliseconds: 340),
+              duration:
+                  reduceMotion ? Duration.zero : Duration(milliseconds: 340),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -655,33 +660,36 @@ class _PhaseOverlayState extends State<PhaseOverlay> {
                     width: 88,
                     height: 88,
                     decoration: BoxDecoration(
-                      color: night ? context.palette.accentSoft : context.palette.hostSoft,
+                      color: night
+                          ? context.palette.accentSoft
+                          : context.palette.hostSoft,
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       night ? Icons.nightlight_round : Icons.wb_sunny_outlined,
                       size: 40,
-                      color: night ? context.palette.accent : context.palette.host,
+                      color:
+                          night ? context.palette.accent : context.palette.host,
                     ),
                   ),
-                   SizedBox(height: AppSpacing.xl),
+                  SizedBox(height: AppSpacing.xl),
                   Text(
                     '第 ${view.day} 日',
-                    style:  TextStyle(
+                    style: TextStyle(
                         fontSize: 15, color: context.palette.textTertiary),
                   ),
-                   SizedBox(height: AppSpacing.sm),
+                  SizedBox(height: AppSpacing.sm),
                   Text(
                     view.phaseLabel,
-                    style:  TextStyle(
+                    style: TextStyle(
                         fontSize: 30,
                         fontWeight: FontWeight.w700,
                         color: context.palette.text),
                   ),
-                   SizedBox(height: AppSpacing.sm),
+                  SizedBox(height: AppSpacing.sm),
                   Text(
                     night ? '夜间' : '白天',
-                    style:  TextStyle(
+                    style: TextStyle(
                         fontSize: 14, color: context.palette.textSecondary),
                   ),
                 ],
@@ -722,15 +730,20 @@ final _mentionToken = RegExp(r'@[1-7]号');
 
 class _MentionEditingController extends EmojiEditingController {
   @override
-  TextSpan buildTextSpan({required BuildContext context, TextStyle? style,
+  TextSpan buildTextSpan(
+      {required BuildContext context,
+      TextStyle? style,
       required bool withComposing}) {
     if (withComposing || !_mentionToken.hasMatch(text)) {
-      return super.buildTextSpan(context: context, style: style,
-          withComposing: withComposing);
+      return super.buildTextSpan(
+          context: context, style: style, withComposing: withComposing);
     }
-    return TextSpan(style: style, children: _chatSpans(
-      text, Theme.of(context).colorScheme.primary,
-    ));
+    return TextSpan(
+        style: style,
+        children: _chatSpans(
+          text,
+          Theme.of(context).colorScheme.primary,
+        ));
   }
 }
 
@@ -750,27 +763,32 @@ class _ChatActionPageState extends State<ChatActionPage> {
   bool _restoringDraft = false;
 
   (String?, String?, String?, String) get _currentDraftKey => (
-    widget.store.gameId, widget.store.actor?.id,
-    widget.store.activeAsSeat, widget.store.activeChannelId,
-  );
+        widget.store.gameId,
+        widget.store.actor?.id,
+        widget.store.activeAsSeat,
+        widget.store.activeChannelId,
+      );
 
   void _trackEdits() {
     if (_restoringDraft || message.text == _previousText) return;
     final old = _previousText;
     final next = message.text;
     var prefix = 0;
-    while (prefix < old.length && prefix < next.length && old[prefix] == next[prefix]) {
+    while (prefix < old.length &&
+        prefix < next.length &&
+        old[prefix] == next[prefix]) {
       prefix++;
     }
     var suffix = 0;
-    while (suffix < old.length - prefix && suffix < next.length - prefix &&
+    while (suffix < old.length - prefix &&
+        suffix < next.length - prefix &&
         old[old.length - 1 - suffix] == next[next.length - 1 - suffix]) {
       suffix++;
     }
     final oldEnd = old.length - suffix;
     final shift = next.length - old.length;
-    editingReferences.removeWhere((ref) =>
-        ref.start < oldEnd && ref.end > prefix);
+    editingReferences
+        .removeWhere((ref) => ref.start < oldEnd && ref.end > prefix);
     for (var i = 0; i < editingReferences.length; i++) {
       if (editingReferences[i].start >= oldEnd) {
         editingReferences[i] = editingReferences[i].shifted(shift);
@@ -787,13 +805,13 @@ class _ChatActionPageState extends State<ChatActionPage> {
     _draftKey = key;
     final saved = _drafts[key];
     _restoringDraft = true;
-    editingReferences..clear()..addAll(saved?.$2 ?? const []);
+    editingReferences
+      ..clear()
+      ..addAll(saved?.$2 ?? const []);
     message.value = saved?.$1 ?? const TextEditingValue();
     _previousText = message.text;
     _restoringDraft = false;
   }
-
-
 
   /// 距底部多少像素内仍算「停在最新消息」：约三条消息的高度。
   /// 只有停在最新消息附近才自动跟随滚动；往上翻历史时，
@@ -1105,7 +1123,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
     final seats = view.seats;
     final result = <Map<String, dynamic>>[];
     for (final id in order) {
-      final matches = seats.where((seat) => seat['id']?.toString() == id.toString());
+      final matches =
+          seats.where((seat) => seat['id']?.toString() == id.toString());
       if (matches.isEmpty) return const [];
       final seat = matches.first;
       if (seat['avatar_role_id'] == null) return const [];
@@ -1120,15 +1139,64 @@ class _ChatActionPageState extends State<ChatActionPage> {
     final speaker = view.public['speaker']?.toString();
     if (speaker == null) return null;
     for (final seat in view.seats) {
-      if (seat['id']?.toString() == speaker && seat['avatar_role_id'] != null) return seat;
+      if (seat['id']?.toString() == speaker && seat['avatar_role_id'] != null) {
+        return seat;
+      }
     }
     return null;
   }
 
-  /// 消息列表本体：空范围给空状态，否则渲染惰性列表。
-  Widget _messageList(GameStore store) {
+  List<_SpeechMessageRow> _speechRows(GameStore store) {
+    final messages = store.messages;
+    final seats = _speechSeats;
+    if (seats.isEmpty) {
+      return [
+        for (final message in messages) _SpeechMessageRow.message(message)
+      ];
+    }
+
+    final shownSeats = <String>{};
+    final dividers = <int, Map<String, dynamic>>{};
+    for (var index = 0; index < messages.length; index++) {
+      final message = messages[index];
+      if (message.channelId != 'public' || message.senderId == null) {
+        continue;
+      }
+      for (final seat in seats) {
+        final seatId = seat['id']?.toString();
+        final participantId = seat['participant_id']?.toString();
+        if (seatId == null ||
+            participantId == null ||
+            participantId != message.senderId ||
+            !shownSeats.add(seatId)) {
+          continue;
+        }
+        dividers[index] = seat;
+        break;
+      }
+    }
+    final rows = <_SpeechMessageRow>[];
+    for (var index = 0; index < messages.length; index++) {
+      final seat = dividers[index];
+      if (seat != null) {
+        rows.add(_SpeechMessageRow.divider(seat));
+      }
+      rows.add(_SpeechMessageRow.message(messages[index]));
+    }
     final speaker = _speakerSeat;
-    if (store.messages.isEmpty && speaker == null) {
+    final speakerId = speaker?['id']?.toString();
+    if (speaker != null &&
+        speakerId != null &&
+        !shownSeats.contains(speakerId)) {
+      rows.add(_SpeechMessageRow.divider(speaker));
+    }
+    return rows;
+  }
+
+  /// 消息列表本体：顺序发言的分隔线跟随每个席位的首条公屏发言。
+  Widget _messageList(GameStore store) {
+    final rows = _speechRows(store);
+    if (rows.isEmpty) {
       return const EmptyState(
         icon: Icons.chat_bubble_outline,
         title: '当前筛选范围没有消息',
@@ -1142,8 +1210,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
         key: _listKey,
         controller: scroll,
         padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.sm),
-        itemCount: store.messages.length + header + (speaker == null ? 0 : 1),
+            AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.lg),
+        itemCount: rows.length + header,
         itemBuilder: (context, index) {
           if (header == 1 && index == 0) {
             return Center(
@@ -1153,16 +1221,19 @@ class _ChatActionPageState extends State<ChatActionPage> {
               ),
             );
           }
-          if (speaker != null && index == store.messages.length + header) {
-            return _SpeechTurnDivider(seat: speaker);
+          final row = rows[index - header];
+          final seat = row.seat;
+          if (seat != null) {
+            return _SpeechTurnDivider(seat: seat);
           }
-          final item = store.messages[index - header];
+          final item = row.message!;
           return MessageBubble(
             message: item,
             self: store.activeAsSeat == null
                 ? store.actor?.id
                 : store.view!.seats
-                    .where((seat) => seat['id']?.toString() == store.activeAsSeat)
+                    .where(
+                        (seat) => seat['id']?.toString() == store.activeAsSeat)
                     .map((seat) => seat['participant_id']?.toString())
                     .firstOrNull,
             store: store,
@@ -1181,19 +1252,24 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 
   Future<void> pickMention() async {
-    if (_pickingMention || !composerFocus.hasFocus ||
+    if (_pickingMention ||
+        !composerFocus.hasFocus ||
         widget.store.actor?.isSpectator == true) {
       return;
     }
     final channel = widget.store.selectedChannel;
     if (channel?.canSend != true || channel?.id == 'spectator') return;
     final cursor = message.selection.baseOffset;
-    if (cursor < 1 || message.text[cursor - 1] != '@') return;
-    final members = channel!.members.map((member) => member['id']?.toString()).toSet();
+    if (cursor < 1 || message.text[cursor - 1] != '@') {
+      return;
+    }
+    final members =
+        channel!.members.map((member) => member['id']?.toString()).toSet();
     final seats = [
       for (final seat in widget.store.view!.seats)
         if (seat['occupied'] == true &&
-            (channel.id == 'public' || members.contains(seat['participant_id']?.toString())))
+            (channel.id == 'public' ||
+                members.contains(seat['participant_id']?.toString())))
           {
             'id': seat['id'],
             'name': seat['name'],
@@ -1204,16 +1280,21 @@ class _ChatActionPageState extends State<ChatActionPage> {
     if (seats.isEmpty) return;
     final options = [
       for (final seat in seats)
-        {'value': seat['id'], 'label': '${seat['id']}号 · ${seat['name'] ?? '玩家'}'},
+        {
+          'value': seat['id'],
+          'label': '${seat['id']}号 · ${seat['name'] ?? '玩家'}'
+        },
     ];
     _pickingMention = true;
     try {
-      final picked = await showPlayerPicker(context,
+      final picked = await showPlayerPicker(
+        context,
         title: '@ 玩家',
         players: playersFromOptions(options, seats: seats, byRole: true),
       );
       if (!mounted || picked == null || picked.isEmpty) return;
-      if (cursor > message.text.length || message.text[cursor - 1] != '@') return;
+      if (cursor > message.text.length || message.text[cursor - 1] != '@')
+        return;
       final token = '@${picked.first}号 ';
       message.value = TextEditingValue(
         text: message.text.replaceRange(cursor - 1, cursor, token),
@@ -1224,7 +1305,6 @@ class _ChatActionPageState extends State<ChatActionPage> {
       _pickingMention = false;
     }
   }
-
 
   void insertShortcut(String token) {
     final selection = message.selection;
@@ -1243,13 +1323,16 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 
   Future<void> pickEvidence() async {
-    if (_pickingEvidence || widget.store.actor?.isSpectator == true ||
+    if (_pickingEvidence ||
+        widget.store.actor?.isSpectator == true ||
         widget.store.selectedChannel?.canSend != true ||
         widget.store.selectedChannel?.id == 'spectator') {
       return;
     }
     final cursor = message.selection.baseOffset;
-    if (cursor < 1 || cursor > message.text.length || message.text[cursor - 1] != '#') return;
+    if (cursor < 1 ||
+        cursor > message.text.length ||
+        message.text[cursor - 1] != '#') return;
     final draftKey = _draftKey;
     _pickingEvidence = true;
     try {
@@ -1257,8 +1340,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
       final chosen = await showPredictiveSheet<ReferenceItem>(
         context: context,
         useSafeArea: true,
-        builder: (sheet) => StatefulBuilder(builder: (sheet, refreshSheet) =>
-          SizedBox(
+        builder: (sheet) => StatefulBuilder(
+          builder: (sheet, refreshSheet) => SizedBox(
             height: MediaQuery.sizeOf(sheet).height * .68,
             child: FutureBuilder<void>(
               future: load,
@@ -1268,35 +1351,52 @@ class _ChatActionPageState extends State<ChatActionPage> {
                 }
                 final store = widget.store;
                 if (store.referenceError != null) {
-                  return Center(child: Column(mainAxisSize: MainAxisSize.min,
-                    children: [Text(store.referenceError!), TextButton(
-                      onPressed: () => refreshSheet(() { load = store.loadReferences(refresh: true); }),
-                      child: const Text('重试'),
-                    )],
+                  return Center(
+                      child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(store.referenceError!),
+                      TextButton(
+                        onPressed: () => refreshSheet(() {
+                          load = store.loadReferences(refresh: true);
+                        }),
+                        child: const Text('重试'),
+                      )
+                    ],
                   ));
                 }
                 return ListView(children: [
                   const ListTile(title: Text('本局公开信息')),
                   for (final item in store.referenceEvents)
-                    ListTile(title: Text(item.label), subtitle: Text(item.text, maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                      onTap: () => Navigator.of(sheet).pop(item)),
+                    ListTile(
+                        title: Text(item.label),
+                        subtitle: Text(item.text,
+                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                        onTap: () => Navigator.of(sheet).pop(item)),
                   if (store.referenceEvents.isEmpty)
                     const ListTile(title: Text('暂无公开游戏事件')),
                   const Divider(),
                   const ListTile(title: Text('游戏规则')),
-                  for (final item in [...store.referenceRoles, ...store.referenceSkills])
-                    ListTile(title: Text(item.label), subtitle: Text(item.text, maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                      onTap: () => Navigator.of(sheet).pop(item)),
+                  for (final item in [
+                    ...store.referenceRoles,
+                    ...store.referenceSkills
+                  ])
+                    ListTile(
+                        title: Text(item.label),
+                        subtitle: Text(item.text,
+                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                        onTap: () => Navigator.of(sheet).pop(item)),
                 ]);
               },
             ),
           ),
         ),
       );
-      if (!mounted || chosen == null || draftKey != _draftKey ||
-          cursor > message.text.length || message.text[cursor - 1] != '#') {
+      if (!mounted ||
+          chosen == null ||
+          draftKey != _draftKey ||
+          cursor > message.text.length ||
+          message.text[cursor - 1] != '#') {
         return;
       }
       final token = '#${chosen.label}';
@@ -1304,7 +1404,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
         text: message.text.replaceRange(cursor - 1, cursor, '$token '),
         selection: TextSelection.collapsed(offset: cursor + token.length),
       );
-      editingReferences.add(ChatReference(cursor - 1, cursor - 1 + token.length, chosen));
+      editingReferences
+          .add(ChatReference(cursor - 1, cursor - 1 + token.length, chosen));
       composerFocus.requestFocus();
     } finally {
       _pickingEvidence = false;
@@ -1330,7 +1431,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
               children: [
                 for (final entry in scopes.entries)
                   Padding(
-                    padding:  EdgeInsets.only(right: AppSpacing.sm),
+                    padding: EdgeInsets.only(right: AppSpacing.sm),
                     child: FilterChip(
                       avatar: Icon(
                         entry.value.$2,
@@ -1446,8 +1547,9 @@ class _ChatActionPageState extends State<ChatActionPage> {
     setState(() => sendError = null);
     try {
       final draftKey = _draftKey;
-      await widget.store.sendMessage(text, references: List.of(editingReferences)..sort(
-        (a, b) => a.start.compareTo(b.start)));
+      await widget.store.sendMessage(text,
+          references: List.of(editingReferences)
+            ..sort((a, b) => a.start.compareTo(b.start)));
       if (draftKey == _draftKey && message.text == text) {
         message.clear();
         editingReferences.clear();
@@ -1458,6 +1560,14 @@ class _ChatActionPageState extends State<ChatActionPage> {
       if (mounted) setState(() => sendError = failure.message);
     }
   }
+}
+
+class _SpeechMessageRow {
+  const _SpeechMessageRow.message(this.message) : seat = null;
+  const _SpeechMessageRow.divider(this.seat) : message = null;
+
+  final GameMessage? message;
+  final Map<String, dynamic>? seat;
 }
 
 class _SpeechOrderStrip extends StatelessWidget {
@@ -1483,19 +1593,26 @@ class _SpeechOrderStrip extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(AppRadius.chip),
                 border: Border.all(
-                  color: current ? context.palette.accent : context.palette.border,
+                  color:
+                      current ? context.palette.accent : context.palette.border,
                 ),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('${index + 1}. $id号', style: TextStyle(
-                  color: current ? context.palette.accent : context.palette.textSecondary,
-                )),
+                Text(id,
+                    style: TextStyle(
+                      color: current
+                          ? context.palette.accent
+                          : context.palette.textSecondary,
+                    )),
                 const SizedBox(width: 4),
                 RoleAvatar(roleId: role, size: 25),
                 const SizedBox(width: 4),
-                Text(roleVisual(role)?.name ?? role, style: TextStyle(
-                  color: current ? context.palette.accent : context.palette.textSecondary,
-                )),
+                Text(roleVisual(role)?.name ?? role,
+                    style: TextStyle(
+                      color: current
+                          ? context.palette.accent
+                          : context.palette.textSecondary,
+                    )),
               ]),
             );
           },
@@ -1511,6 +1628,7 @@ class _SpeechTurnDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     final role = seat['avatar_role_id'].toString();
     return Padding(
+      key: ValueKey('speech-divider-${seat['id']}'),
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(children: [
         Expanded(child: Divider(color: context.palette.accent)),
@@ -1631,9 +1749,8 @@ class _Composer extends StatelessWidget {
     return Material(
       color: context.palette.surface,
       child: SafeArea(
-        top: false,
         minimum: EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.sm, AppSpacing.md, bottomInset),
+            AppSpacing.md, AppSpacing.xs, AppSpacing.md, bottomInset),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1641,15 +1758,15 @@ class _Composer extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: _ChannelButton(store: store, channel: channel)),
-                const SizedBox(width: AppSpacing.sm),
+                const SizedBox(width: AppSpacing.xs),
                 _SettingsButton(store: store),
-                const SizedBox(width: AppSpacing.sm),
+                const SizedBox(width: AppSpacing.xs),
                 _EmojiButton(
                   enabled: canSend,
                   open: emojiOpen,
                   onTap: onToggleEmoji,
                 ),
-                const SizedBox(width: AppSpacing.sm),
+                const SizedBox(width: AppSpacing.xs),
                 // 桌面端点在输入框以外的地方会让输入框失焦（EditableText 默认的
                 // onTapOutside）：发送按钮属于输入框自己的一部分，包进 tap region，
                 // 点发送不会把焦点带走，发完可以接着打下一条。
@@ -1658,7 +1775,7 @@ class _Composer extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.sm),
+            const SizedBox(height: AppSpacing.xs),
             TextField(
               controller: controller,
               focusNode: focusNode,
@@ -1666,12 +1783,10 @@ class _Composer extends StatelessWidget {
               maxLength: 2000,
               minLines: 1,
               maxLines: 4,
-              keyboardType: enterSends
-                  ? TextInputType.text
-                  : TextInputType.multiline,
-              textInputAction: enterSends
-                  ? TextInputAction.send
-                  : TextInputAction.newline,
+              keyboardType:
+                  enterSends ? TextInputType.text : TextInputType.multiline,
+              textInputAction:
+                  enterSends ? TextInputAction.send : TextInputAction.newline,
               // 发出后不收键盘：给了 onEditingComplete，框架就不再自动失焦，
               // 可以接着打下一条（发送本身仍走 onSubmitted）。
               onEditingComplete: enterSends ? () {} : null,
@@ -1681,7 +1796,7 @@ class _Composer extends StatelessWidget {
                 counterText: '',
                 isDense: true,
                 contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
               ),
               onTap: onTapField,
               onChanged: onChanged,
@@ -1689,16 +1804,16 @@ class _Composer extends StatelessWidget {
             ),
             if (!channelSendable && (channel?.reason.isNotEmpty ?? false))
               Padding(
-                padding:  EdgeInsets.only(top: AppSpacing.sm),
+                padding: EdgeInsets.only(top: AppSpacing.sm),
                 child: Row(
                   children: [
-                     Icon(Icons.info_outline,
+                    Icon(Icons.info_outline,
                         size: 14, color: context.palette.textTertiary),
-                     SizedBox(width: AppSpacing.xs),
+                    SizedBox(width: AppSpacing.xs),
                     Expanded(
                       child: Text(
                         channel!.reason,
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 12, color: context.palette.textTertiary),
                       ),
                     ),
@@ -1707,37 +1822,74 @@ class _Composer extends StatelessWidget {
               ),
             if (typing || actions.isNotEmpty || typers.isNotEmpty) ...[
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
+                padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
                 child: DashedDivider(),
               ),
               SizedBox(
-                height: 42,
+                height: 38,
                 child: Row(
                   children: [
                     if (typing) ...[
-                      TextFieldTapRegion(child: TextButton(
-                        onPressed: channelSendable ? () => onShortcut('@') : null,
-                        child: const Text('证人'))),
-                      TextFieldTapRegion(child: TextButton(
-                        onPressed: channelSendable ? () => onShortcut('#') : null,
-                        child: const Text('证物'))),
+                      TextFieldTapRegion(
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            minimumSize: Size.zero,
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed:
+                              channelSendable ? () => onShortcut('@') : null,
+                          child: const Text('证人'),
+                        ),
+                      ),
+                      TextFieldTapRegion(
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            minimumSize: Size.zero,
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed:
+                              channelSendable ? () => onShortcut('#') : null,
+                          child: const Text('证物'),
+                        ),
+                      ),
                     ],
                     if (actions.isNotEmpty)
-                      Flexible(child: typing
-                        ? Align(alignment: Alignment.centerLeft,
-                            child: Badge.count(count: actions.length,
-                              child: FilledButton.tonal(
-                                onPressed: () => openActionPicker(context, store, actions),
-                                child: const Text('行动'))))
-                        : ListView.separated(scrollDirection: Axis.horizontal,
-                            itemCount: actions.length,
-                            separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
-                            itemBuilder: (context, index) => ActionChipButton(
-                              action: actions[index], busy: store.writeBusy,
-                              onTap: () => showActionForm(context, store, actions[index])))),
-
+                      Flexible(
+                        child: typing
+                            ? Align(
+                                alignment: Alignment.centerLeft,
+                                child: Badge.count(
+                                  count: actions.length,
+                                  child: FilledButton.tonal(
+                                    onPressed: () => openActionPicker(
+                                        context, store, actions),
+                                    child: const Text('行动'),
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: actions.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(width: AppSpacing.xs),
+                                itemBuilder: (context, index) =>
+                                    ActionChipButton(
+                                  action: actions[index],
+                                  busy: store.writeBusy,
+                                  onTap: () => showActionForm(
+                                      context, store, actions[index]),
+                                ),
+                              ),
+                      ),
                     if (typers.isNotEmpty)
-                      Flexible(child: ClipRect(child: _TypingIndicator(typers: typers))),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ClipRect(
+                          child: _TypingIndicator(typers: typers),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1830,8 +1982,8 @@ class _EmojiButton extends StatelessWidget {
   Widget build(BuildContext context) => Tooltip(
         message: open ? '收起表情' : '表情',
         child: SizedBox(
-          width: 46,
-          height: 46,
+          width: 42,
+          height: 42,
           child: Material(
             color: open
                 ? context.palette.accentSoft
@@ -1855,7 +2007,6 @@ class _EmojiButton extends StatelessWidget {
       );
 }
 
-/// 聊天设置开关：与表情按钮同尺寸同圆角，贴在表情按钮左侧。
 class _SettingsButton extends StatelessWidget {
   const _SettingsButton({required this.store});
 
@@ -1865,8 +2016,8 @@ class _SettingsButton extends StatelessWidget {
   Widget build(BuildContext context) => Tooltip(
         message: '聊天设置',
         child: SizedBox(
-          width: 46,
-          height: 46,
+          width: 42,
+          height: 42,
           child: Material(
             color: context.palette.surfaceMuted,
             borderRadius: BorderRadius.circular(AppRadius.field),
@@ -2000,9 +2151,9 @@ class _TypingIndicatorState extends State<_TypingIndicator> {
           Padding(
             padding: const EdgeInsets.only(left: 4),
             child: _TypingDots(
-              prefix: '正在输入',
-              style: TextStyle(
-                  fontSize: 12, color: context.palette.textTertiary),
+              prefix: '输入中',
+              style:
+                  TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ),
         ],
@@ -2069,21 +2220,25 @@ class _TypingDotsState extends State<_TypingDots> {
 
 class _SendButton extends StatelessWidget {
   const _SendButton({required this.enabled, required this.onSend});
+
   final bool enabled;
   final VoidCallback onSend;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-        width: 46,
-        height: 46,
-        child: FilledButton(
-          onPressed: enabled ? onSend : null,
-          style: FilledButton.styleFrom(
-            padding: EdgeInsets.zero,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppRadius.field)),
+  Widget build(BuildContext context) => Tooltip(
+        message: '发送',
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: FilledButton(
+            onPressed: enabled ? onSend : null,
+            style: FilledButton.styleFrom(
+              padding: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.field)),
+            ),
+            child: const Icon(Icons.arrow_upward_rounded, size: 20),
           ),
-          child: const Icon(Icons.arrow_upward_rounded, size: 20),
         ),
       );
 }
@@ -2133,18 +2288,18 @@ class _ChannelButton extends StatelessWidget {
                   size: 16,
                   color: context.palette.textSecondary,
                 ),
-                 SizedBox(width: 6),
+                SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     label.replaceFirst('私密 · ', ''),
                     overflow: TextOverflow.ellipsis,
-                    style:  TextStyle(
+                    style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                         color: context.palette.text),
                   ),
                 ),
-                 Icon(Icons.expand_more,
+                Icon(Icons.expand_more,
                     size: 16, color: context.palette.textTertiary),
               ],
             ),
@@ -2174,9 +2329,8 @@ class _PuppetNoticeCard extends StatelessWidget {
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: Row(
             children: [
-               Icon(Icons.smart_toy_outlined,
-                  color: context.palette.danger),
-               SizedBox(width: AppSpacing.md),
+              Icon(Icons.smart_toy_outlined, color: context.palette.danger),
+              SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Text(
                   '你当前是傀儡，由魔女梅露露代为行动',
@@ -2201,9 +2355,8 @@ class _DiscussionProgressCard extends StatelessWidget {
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: Row(
             children: [
-               Icon(Icons.how_to_vote_outlined,
-                  color: context.palette.accent),
-               SizedBox(width: AppSpacing.md),
+              Icon(Icons.how_to_vote_outlined, color: context.palette.accent),
+              SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Text(
                   '已有 ${view.discussionEndRequests.length}/${view.discussionEndRequired} 名玩家请求结束自由发言'
@@ -2243,7 +2396,8 @@ class _PuppetActionPanel extends StatelessWidget {
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: panel.actions.length,
-                separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
+                separatorBuilder: (_, __) =>
+                    const SizedBox(width: AppSpacing.sm),
                 itemBuilder: (context, index) {
                   final action = panel.actions[index];
                   return ActionChipButton(
@@ -2277,7 +2431,7 @@ class _ChannelSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-             Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(
                   AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
               child: Text(
@@ -2315,7 +2469,7 @@ class _ChannelSheet extends StatelessWidget {
                               : target.channel.reason),
                       trailing: target.channel.id == store.activeChannelId &&
                               target.asSeat == store.activeAsSeat
-                          ?  Icon(Icons.check, color: context.palette.accent)
+                          ? Icon(Icons.check, color: context.palette.accent)
                           : null,
                       enabled: target.channel.canSend,
                       onTap: () => Navigator.pop(context, target),
@@ -2422,7 +2576,8 @@ class _QuickTool {
 
   Widget build(BuildContext context, GameStore store) {
     final danger = action.raw['danger'] == true;
-    final tint = danger ? context.palette.danger : context.palette.textSecondary;
+    final tint =
+        danger ? context.palette.danger : context.palette.textSecondary;
     final enabled = !store.writeBusy && action.unsupportedReason == null;
     return Material(
       color: context.palette.surfaceMuted,
@@ -2431,19 +2586,22 @@ class _QuickTool {
         borderRadius: BorderRadius.circular(AppRadius.chip),
         onTap: enabled ? () => showActionForm(context, store, action) : null,
         child: Padding(
-          padding:  EdgeInsets.symmetric(horizontal: 12),
+          padding: EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon,
-                  size: 15, color: enabled ? tint : context.palette.textTertiary),
-               SizedBox(width: 6),
+                  size: 15,
+                  color: enabled ? tint : context.palette.textTertiary),
+              SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: enabled ? context.palette.text : context.palette.textTertiary,
+                  color: enabled
+                      ? context.palette.text
+                      : context.palette.textTertiary,
                 ),
               ),
             ],
@@ -2481,15 +2639,15 @@ class ActionChipButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadius.chip),
           onTap: busy || unsupported != null ? null : onTap,
           child: Padding(
-            padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (unsupported != null)
-                   Icon(Icons.block, size: 16, color: context.palette.danger)
+                  Icon(Icons.block, size: 16, color: context.palette.danger)
                 else
                   ActionIcon(actionId: action.id, size: 17, color: tint),
-                 SizedBox(width: 7),
+                const SizedBox(width: 5),
                 Text(
                   action.shortLabel,
                   style: TextStyle(
@@ -2517,7 +2675,8 @@ Future<void> openActionPicker(
   GameStore store,
   List<ActionDescriptor> actions,
 ) async {
-  final picked = await showActionPicker(context, actions: actions, title: '当前可用行动');
+  final picked =
+      await showActionPicker(context, actions: actions, title: '当前可用行动');
   if (picked == null || !context.mounted) return;
   await showActionForm(context, store, picked);
 }
@@ -2571,31 +2730,39 @@ Future<void> _showMessageMenu(BuildContext context, GameMessage message,
   }
 }
 
-Future<void> _showReference(BuildContext context, GameStore? store,
-    ReferenceItem item) async {
-  await showPredictiveSheet<void>(context: context, useSafeArea: true,
-    builder: (sheet) => SafeArea(top: false, child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: SingleChildScrollView(child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(item.label, style: Theme.of(sheet).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          Text(item.text),
-          if (item.imageId != null && store?.api != null && store?.gameId != null)
-            FutureBuilder<List<int>>(
-              future: store!.api!.evidence(store.gameId!, item.imageId!),
-              builder: (context, result) {
-                if (result.hasError) return const Text('取图失败，请稍后重试');
-                if (!result.hasData) return const CircularProgressIndicator();
-                return Image.memory(Uint8List.fromList(result.data!),
-                  height: 320, fit: BoxFit.contain);
-              },
-            ),
-        ],
-      )),
-    )),
+Future<void> _showReference(
+    BuildContext context, GameStore? store, ReferenceItem item) async {
+  await showPredictiveSheet<void>(
+    context: context,
+    useSafeArea: true,
+    builder: (sheet) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(
+              child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(item.label, style: Theme.of(sheet).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Text(item.text),
+              if (item.imageId != null &&
+                  store?.api != null &&
+                  store?.gameId != null)
+                FutureBuilder<List<int>>(
+                  future: store!.api!.evidence(store.gameId!, item.imageId!),
+                  builder: (context, result) {
+                    if (result.hasError) return const Text('取图失败，请稍后重试');
+                    if (!result.hasData)
+                      return const CircularProgressIndicator();
+                    return Image.memory(Uint8List.fromList(result.data!),
+                        height: 320, fit: BoxFit.contain);
+                  },
+                ),
+            ],
+          )),
+        )),
   );
 }
 
@@ -2605,16 +2772,21 @@ List<InlineSpan> _referenceSpans(BuildContext context, GameMessage message,
   final spans = <InlineSpan>[];
   var offset = 0;
   for (final ref in message.references) {
-    spans.addAll(_chatSpans(message.text.substring(offset, ref.start), mentionColor));
-    spans.add(WidgetSpan(alignment: PlaceholderAlignment.middle, child: GestureDetector(
-      onTap: () => _showReference(context, store, ref.item),
-      child: DecoratedBox(
-        decoration: BoxDecoration(color: mentionColor.withValues(alpha: .16),
-          borderRadius: BorderRadius.circular(4)),
-        child: Text(message.text.substring(ref.start, ref.end),
-          style: TextStyle(color: mentionColor, fontWeight: FontWeight.bold)),
-      ),
-    )));
+    spans.addAll(
+        _chatSpans(message.text.substring(offset, ref.start), mentionColor));
+    spans.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: GestureDetector(
+          onTap: () => _showReference(context, store, ref.item),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+                color: mentionColor.withValues(alpha: .16),
+                borderRadius: BorderRadius.circular(4)),
+            child: Text(message.text.substring(ref.start, ref.end),
+                style: TextStyle(
+                    color: mentionColor, fontWeight: FontWeight.bold)),
+          ),
+        )));
     offset = ref.end;
   }
   spans.addAll(_chatSpans(message.text.substring(offset), mentionColor));
@@ -2626,9 +2798,12 @@ List<InlineSpan> _chatSpans(String text, Color mentionColor) {
   var cursor = 0;
   for (final match in _mentionToken.allMatches(text)) {
     spans.addAll(emojiSpans(text.substring(cursor, match.start)));
-    spans.add(TextSpan(text: match.group(0), style: TextStyle(
-      color: mentionColor, fontWeight: FontWeight.bold,
-    )));
+    spans.add(TextSpan(
+        text: match.group(0),
+        style: TextStyle(
+          color: mentionColor,
+          fontWeight: FontWeight.bold,
+        )));
     cursor = match.end;
   }
   spans.addAll(emojiSpans(text.substring(cursor)));
@@ -2672,8 +2847,10 @@ class MessageBubble extends StatelessWidget {
         final payload = message.payload!;
         final name = payload['name'];
         final version = payload['version'];
-        if (name is String && name.isNotEmpty &&
-            (version is String || version is int) && '$version'.isNotEmpty &&
+        if (name is String &&
+            name.isNotEmpty &&
+            (version is String || version is int) &&
+            '$version'.isNotEmpty &&
             payload['description'] is String) {
           return PluginCastCard(payload: payload);
         }
@@ -2682,24 +2859,25 @@ class MessageBubble extends StatelessWidget {
       if (message.kind == 'information') return _privateInfoCard(context);
       final alert = message.kind == 'alert';
       return Padding(
-        padding:  EdgeInsets.symmetric(vertical: 3),
+        padding: EdgeInsets.symmetric(vertical: 3),
         child: Center(
           child: Container(
-            constraints:  BoxConstraints(maxWidth: 460),
-            padding:  EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            constraints: BoxConstraints(maxWidth: 460),
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
               color: alert
                   ? context.palette.dangerSoft
                   : context.palette.surfaceMuted,
               borderRadius: BorderRadius.circular(AppRadius.chip),
               border: alert
-                  ? Border.all(color: context.palette.danger.withValues(alpha: .55))
+                  ? Border.all(
+                      color: context.palette.danger.withValues(alpha: .55))
                   : null,
             ),
             child: Text(
               _systemText,
               textAlign: TextAlign.center,
-              style:  TextStyle(
+              style: TextStyle(
                   fontSize: alert ? 13 : 12.5,
                   fontWeight: alert ? FontWeight.w600 : null,
                   color: alert
@@ -2791,12 +2969,13 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ),
                 Container(
-                  padding:
-                       EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
-                    color: mine ? context.palette.accent : context.palette.surface,
+                    color:
+                        mine ? context.palette.accent : context.palette.surface,
                     borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: mine ? null : Border.all(color: context.palette.border),
+                    border:
+                        mine ? null : Border.all(color: context.palette.border),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2838,17 +3017,30 @@ class MessageBubble extends StatelessWidget {
                       if (message.recalled)
                         Text(
                           mine ? '你撤回了一条消息' : '对方撤回了一条消息',
-                          style: TextStyle(color: mine
-                              ? context.palette.onAccent : context.palette.textTertiary),
+                          style: TextStyle(
+                              color: mine
+                                  ? context.palette.onAccent
+                                  : context.palette.textTertiary),
                         )
                       else
                         GestureDetector(
-                          onLongPress: () => _showMessageMenu(context, message, mine, store),
+                          onLongPress: () =>
+                              _showMessageMenu(context, message, mine, store),
                           child: Text.rich(
-                            TextSpan(children: _referenceSpans(context, message,
-                                mine ? Colors.white : context.palette.accent, store)),
-                            style: TextStyle(fontSize: 15, height: 1.35,
-                                color: mine ? context.palette.onAccent : context.palette.text),
+                            TextSpan(
+                                children: _referenceSpans(
+                                    context,
+                                    message,
+                                    mine
+                                        ? Colors.white
+                                        : context.palette.accent,
+                                    store)),
+                            style: TextStyle(
+                                fontSize: 15,
+                                height: 1.35,
+                                color: mine
+                                    ? context.palette.onAccent
+                                    : context.palette.text),
                           ),
                         ),
                     ],
@@ -2864,11 +3056,11 @@ class MessageBubble extends StatelessWidget {
 
   /// 私密信息卡片：只有本人与主持人能看到，用金色描边把「只发给我的情报」顶出来。
   Widget _privateInfoCard(BuildContext context) => Padding(
-        padding:  EdgeInsets.symmetric(vertical: 3),
+        padding: EdgeInsets.symmetric(vertical: 3),
         child: Center(
           child: Container(
-            constraints:  BoxConstraints(maxWidth: 460),
-            padding:  EdgeInsets.fromLTRB(12, 8, 12, 9),
+            constraints: BoxConstraints(maxWidth: 460),
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 9),
             decoration: BoxDecoration(
               color: context.palette.hostSoft,
               borderRadius: BorderRadius.circular(AppRadius.card),
@@ -2881,11 +3073,11 @@ class MessageBubble extends StatelessWidget {
                   children: [
                     Icon(Icons.mark_email_unread_outlined,
                         size: 16, color: context.palette.host),
-                     SizedBox(width: 6),
+                    SizedBox(width: 6),
                     Expanded(
                       child: Text(
                         '私密信息 · 仅你与主持人可见',
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                             letterSpacing: .4,
@@ -2900,10 +3092,10 @@ class MessageBubble extends StatelessWidget {
                       ),
                   ],
                 ),
-                 SizedBox(height: 6),
+                SizedBox(height: 6),
                 Text.rich(
                   TextSpan(children: emojiSpans(message.text)),
-                  style:  TextStyle(
+                  style: TextStyle(
                       fontSize: 15, height: 1.35, color: context.palette.text),
                 ),
               ],
@@ -2940,12 +3132,6 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
     final value = widget.prompt['speech_deadline'];
     if (value is num) return value.toDouble();
     return double.tryParse('$value');
-  }
-
-  double get _totalSeconds {
-    final value = widget.prompt['speech_seconds'];
-    final seconds = value is num ? value.toDouble() : double.tryParse('$value');
-    return seconds == null || seconds <= 0 ? 30 : seconds;
   }
 
   /// 剩余秒数：用 ceil 让「剩余 1 秒」真的走满最后一秒，到点显示 0。
@@ -2987,41 +3173,19 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
     super.dispose();
   }
 
-  Widget _countdown(BuildContext context, int remaining, double total) {
+  Widget _countdown(BuildContext context, int remaining) {
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Icon(Icons.timer_outlined, size: 15, color: context.palette.danger),
-              const SizedBox(width: 4),
-              Text(
-                remaining > 0 ? '剩余 $remaining 秒' : '时间到，正在轮到下一位…',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: context.palette.danger),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '发言或继续输入会重新计时',
-                  style: TextStyle(fontSize: 11, color: context.palette.textSecondary),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: (remaining / total).clamp(0.0, 1.0),
-              minHeight: 4,
-              backgroundColor: context.palette.surfaceStrong,
-              color: context.palette.danger,
-            ),
+          Icon(Icons.timer_outlined, size: 15, color: context.palette.danger),
+          const SizedBox(width: 4),
+          Text(
+            remaining > 0 ? '剩余 $remaining 秒' : '时间到，正在轮到下一位…',
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: context.palette.danger),
           ),
         ],
       ),
@@ -3034,11 +3198,11 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
     final hint = prompt['hint']?.toString();
     final deadline = _deadline;
     return Padding(
-      padding:  EdgeInsets.fromLTRB(
-          AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      padding:
+          EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
       child: Container(
         width: double.infinity,
-        padding:  EdgeInsets.fromLTRB(14, 12, 14, 12),
+        padding: EdgeInsets.fromLTRB(14, 12, 14, 12),
         decoration: BoxDecoration(
           color: context.palette.dangerSoft,
           borderRadius: BorderRadius.circular(AppRadius.card),
@@ -3055,14 +3219,14 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(Icons.error_outline, size: 26, color: context.palette.danger),
-             SizedBox(width: AppSpacing.sm),
+            SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     prompt['title']?.toString() ?? '请求操作',
-                    style:  TextStyle(
+                    style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
                         color: context.palette.danger),
@@ -3072,14 +3236,13 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
                       padding: const EdgeInsets.only(top: 3),
                       child: Text(
                         prompt['text'].toString(),
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 13,
                             height: 1.4,
                             color: context.palette.text),
                       ),
                     ),
-                  if (deadline != null)
-                    _countdown(context, _remaining, _totalSeconds),
+                  if (deadline != null) _countdown(context, _remaining),
                   if (hint != null && hint.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
@@ -3088,11 +3251,11 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
                         children: [
                           Icon(Icons.lock_outline,
                               size: 14, color: context.palette.danger),
-                           SizedBox(width: 4),
+                          SizedBox(width: 4),
                           Expanded(
                             child: Text(
                               hint,
-                              style:  TextStyle(
+                              style: TextStyle(
                                   fontSize: 12.5,
                                   fontWeight: FontWeight.w600,
                                   color: context.palette.danger),
@@ -3125,11 +3288,11 @@ class _PrivateInfoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding:  EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+        padding:
+            EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
         child: Container(
           width: double.infinity,
-          padding:  EdgeInsets.fromLTRB(12, 10, 6, 10),
+          padding: EdgeInsets.fromLTRB(12, 10, 6, 10),
           decoration: BoxDecoration(
             color: context.palette.hostSoft,
             borderRadius: BorderRadius.circular(AppRadius.card),
@@ -3140,25 +3303,25 @@ class _PrivateInfoBanner extends StatelessWidget {
             children: [
               Icon(Icons.mark_email_unread_outlined,
                   size: 20, color: context.palette.host),
-               SizedBox(width: AppSpacing.sm),
+              SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       '新的私密信息',
-                      style:  TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           letterSpacing: .4,
                           color: context.palette.host),
                     ),
-                     SizedBox(height: 3),
+                    SizedBox(height: 3),
                     Text(
                       message.text,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style:  TextStyle(
+                      style: TextStyle(
                           fontSize: 13.5,
                           height: 1.4,
                           color: context.palette.text),
@@ -3230,10 +3393,12 @@ class _BoardPageState extends State<BoardPage> {
 
   Widget _inviteTrailing(BuildContext context, OnlineAccount account) {
     final actor = store.actor;
-    final canInvite =
-        actor != null && !actor.isSpectator && account.available && !account.invited;
+    final canInvite = actor != null &&
+        !actor.isSpectator &&
+        account.available &&
+        !account.invited;
     if (account.invited) {
-      return  Tag('已邀请');
+      return Tag('已邀请');
     }
     if (!canInvite) {
       return Tag(
@@ -3277,7 +3442,7 @@ class _BoardPageState extends State<BoardPage> {
       children: [
         Card(
           child: Padding(
-            padding:  EdgeInsets.all(AppSpacing.lg),
+            padding: EdgeInsets.all(AppSpacing.lg),
             child: Row(
               children: [
                 Container(
@@ -3305,15 +3470,15 @@ class _BoardPageState extends State<BoardPage> {
                     children: [
                       Text(
                         '第 ${view.day} 日 · ${view.phaseLabel}',
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: context.palette.text),
                       ),
-                       SizedBox(height: 2),
+                      SizedBox(height: 2),
                       Text(
                         '已准备 ${view.raw['ready_count'] ?? 0} 人 · 连接${store.connectionStatus}',
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 12, color: context.palette.textTertiary),
                       ),
                     ],
@@ -3368,8 +3533,7 @@ class _BoardPageState extends State<BoardPage> {
           ),
         ),
         if (view.status != 'ended') ...[
-          const SectionTitle('在线玩家',
-              subtitle: '邀请在线账号入席；对方需等主持人开放加入后才能接受。'),
+          const SectionTitle('在线玩家', subtitle: '邀请在线账号入席；对方需等主持人开放加入后才能接受。'),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.md),
@@ -3377,7 +3541,7 @@ class _BoardPageState extends State<BoardPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (_others().isEmpty)
-                     Padding(
+                    Padding(
                       padding: EdgeInsets.all(AppSpacing.sm),
                       child: Text(
                         '当前没有其他人在线。',
@@ -3401,24 +3565,24 @@ class _BoardPageState extends State<BoardPage> {
           ),
         ],
         if (result is Map && result.isNotEmpty) ...[
-           SectionTitle('结算'),
+          SectionTitle('结算'),
           Card(
             color: context.palette.hostSoft,
             child: Padding(
-              padding:  EdgeInsets.all(AppSpacing.lg),
+              padding: EdgeInsets.all(AppSpacing.lg),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                       Icon(Icons.emoji_events_outlined,
+                      Icon(Icons.emoji_events_outlined,
                           color: context.palette.host),
-                       SizedBox(width: AppSpacing.md),
+                      SizedBox(width: AppSpacing.md),
                       Expanded(
                         child: Text(
                           _resultTitle(result),
-                          style:  TextStyle(
+                          style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: context.palette.text,
@@ -3428,11 +3592,13 @@ class _BoardPageState extends State<BoardPage> {
                     ],
                   ),
                   if (result['reason']?.toString().isNotEmpty == true) ...[
-                     SizedBox(height: AppSpacing.sm),
+                    SizedBox(height: AppSpacing.sm),
                     Text(
                       result['reason'].toString(),
-                      style:  TextStyle(
-                          fontSize: 14, height: 1.5, color: context.palette.text),
+                      style: TextStyle(
+                          fontSize: 14,
+                          height: 1.5,
+                          color: context.palette.text),
                     ),
                   ],
                   // 对局终止或分出胜负后，本局只读；这里给出回到主界面的入口。
@@ -3442,11 +3608,11 @@ class _BoardPageState extends State<BoardPage> {
                       onPressed: store.writeBusy
                           ? null
                           : () => returnToLobby(context, store),
-                      icon:  Icon(Icons.meeting_room_outlined, size: 18),
-                      label:  Text('返回主界面（大厅）'),
+                      icon: Icon(Icons.meeting_room_outlined, size: 18),
+                      label: Text('返回主界面（大厅）'),
                     ),
-                     SizedBox(height: AppSpacing.sm),
-                     Text(
+                    SizedBox(height: AppSpacing.sm),
+                    Text(
                       '本局记录在主持人开启下一局前仍可只读查看；返回大厅后，主持人可建立新一局。',
                       style: TextStyle(
                           fontSize: 12, color: context.palette.textTertiary),
@@ -3528,12 +3694,12 @@ class SeatCard extends StatelessWidget {
                       children: [
                         Text(
                           '${seat['id']} 号',
-                          style:  TextStyle(
+                          style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
                               color: context.palette.text),
                         ),
-                         SizedBox(width: AppSpacing.sm),
+                        SizedBox(width: AppSpacing.sm),
                         Flexible(
                           child: Text(
                             name.isNotEmpty ? name : (occupied ? '等待命名' : '空席'),
@@ -3542,15 +3708,13 @@ class SeatCard extends StatelessWidget {
                               fontSize: 14,
                               color: playerMarkColorOf(context, mark) ??
                                   context.palette.textSecondary,
-                              fontWeight: mark == null
-                                  ? null
-                                  : FontWeight.w600,
+                              fontWeight: mark == null ? null : FontWeight.w600,
                             ),
                           ),
                         ),
                       ],
                     ),
-                     SizedBox(height: AppSpacing.xs),
+                    SizedBox(height: AppSpacing.xs),
                     Wrap(
                       spacing: AppSpacing.sm,
                       runSpacing: AppSpacing.xs,
@@ -3565,9 +3729,9 @@ class SeatCard extends StatelessWidget {
                               : context.palette.surfaceMuted,
                         ),
                         if (seat['online'] == true)
-                           Tag('在线', icon: Icons.wifi_tethering),
+                          Tag('在线', icon: Icons.wifi_tethering),
                         if (seat['ready'] == true)
-                           Tag('已准备', icon: Icons.check),
+                          Tag('已准备', icon: Icons.check),
                         for (final label in witches)
                           Tag('$label · 魔女',
                               color: context.palette.danger,
@@ -3578,7 +3742,7 @@ class SeatCard extends StatelessWidget {
                 ),
               ),
               if (onTap != null)
-                 Icon(
+                Icon(
                   Icons.chevron_right,
                   size: 20,
                   color: context.palette.textTertiary,
@@ -3706,7 +3870,7 @@ class _LayeredAvatar extends StatelessWidget {
                   BoxShadow(
                       color: Colors.black.withValues(alpha: .10),
                       blurRadius: 6,
-                      offset:  Offset(0, 2))
+                      offset: Offset(0, 2))
                 ]
               : null,
         ),
@@ -3778,19 +3942,19 @@ class ProfilePage extends StatelessWidget {
                     children: [
                       Text(
                         actor.name,
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.w600,
                             color: context.palette.text),
                       ),
-                       SizedBox(height: 2),
+                      SizedBox(height: 2),
                       Text(
                         actor.isHost
                             ? '主持人'
                             : actor.isSpectator
                                 ? '观战者 · 只读牌桌'
                                 : '${actor.seatId ?? '-'} 号玩家',
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 13, color: context.palette.textTertiary),
                       ),
                     ],
@@ -3801,7 +3965,7 @@ class ProfilePage extends StatelessWidget {
           ),
         ),
         if (view.statuses.isNotEmpty) ...[
-           SectionTitle('当前状态', subtitle: '状态与权限由服务器实时计算。'),
+          SectionTitle('当前状态', subtitle: '状态与权限由服务器实时计算。'),
           for (final status in view.statuses)
             Card(
               color: switch (status['tone']?.toString()) {
@@ -3837,31 +4001,32 @@ class ProfilePage extends StatelessWidget {
               Card(
                 child: ListTile(
                   title: Text('${raw['seat_id']}号 · ${raw['label'] ?? ''}'),
-                  subtitle: Text('${raw['summary'] ?? ''} · ${raw['status'] == 'open' ? '可质疑' : '已停止'}'),
+                  subtitle: Text(
+                      '${raw['summary'] ?? ''} · ${raw['status'] == 'open' ? '可质疑' : '已停止'}'),
                 ),
               ),
-           SizedBox(height: AppSpacing.sm),
+          SizedBox(height: AppSpacing.sm),
         ],
         // 当日目击名单：服务端只在白天到投票结束前后发给当事人与主持人，常驻卡片显示。
         // 名单的触发条件是「被魔女袭击指到」：夜间死者与遭刀却未出局的人都算当事人。
         if (view.raw['witness'] is Map) ...[
-           SectionTitle(
+          SectionTitle(
             '当日目击名单',
             subtitle: '昨夜死者与被魔女袭击者的目击结果，投票结束前常驻。',
           ),
           Card(
             color: context.palette.accentSoft,
             child: Padding(
-              padding:  EdgeInsets.all(AppSpacing.lg),
+              padding: EdgeInsets.all(AppSpacing.lg),
               child: Row(
                 children: [
-                   Icon(Icons.visibility_outlined,
+                  Icon(Icons.visibility_outlined,
                       size: 20, color: context.palette.accent),
-                   SizedBox(width: AppSpacing.md),
+                  SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
                       view.raw['witness']['text']?.toString() ?? '',
-                      style:  TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color: context.palette.text,
@@ -3897,7 +4062,8 @@ class ProfilePage extends StatelessWidget {
                     context,
                     store,
                     raw['role_id']?.toString() ?? '',
-                    headerLabel: '双牌教程 · ${raw['id']?.toString() == currentId ? '当前上层' : '下层牌'}',
+                    headerLabel:
+                        '双牌教程 · ${raw['id']?.toString() == currentId ? '当前上层' : '下层牌'}',
                     footerText: raw['id']?.toString() == currentId
                         ? '这张是你当前使用的上层牌；上层牌出局后，你才开始使用下层牌。'
                         : '这张是你的下层牌；上层牌出局后，你才开始使用它的技能。',
@@ -3926,10 +4092,10 @@ class ProfilePage extends StatelessWidget {
                   children: [
                     Icon(Icons.mark_email_unread_outlined,
                         size: 16, color: context.palette.host),
-                     SizedBox(width: 6),
+                    SizedBox(width: 6),
                     Text(
                       '只发给你的情报',
-                      style:  TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: context.palette.host),
@@ -3946,7 +4112,7 @@ class ProfilePage extends StatelessWidget {
                         children: [
                           Text(
                             raw['title']?.toString() ?? '游戏信息',
-                            style:  TextStyle(
+                            style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
                                 color: context.palette.host),
@@ -3954,7 +4120,7 @@ class ProfilePage extends StatelessWidget {
                           if (raw['text']?.toString().isNotEmpty == true)
                             Text(
                               raw['text'].toString(),
-                              style:  TextStyle(
+                              style: TextStyle(
                                   fontSize: 14, color: context.palette.text),
                             ),
                         ],
@@ -3981,14 +4147,14 @@ class ProfilePage extends StatelessWidget {
                         contentPadding: EdgeInsets.zero,
                         title: Text(
                           '${raw['seat_id']}号 ${raw['name']}',
-                          style:  TextStyle(
+                          style: TextStyle(
                               fontSize: 14, color: context.palette.text),
                         ),
                         trailing: Text(
                           roleVisual(raw['role_id']?.toString())?.name ??
                               raw['role_id']?.toString() ??
                               '未知',
-                          style:  TextStyle(
+                          style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
                               color: context.palette.accent),
@@ -4000,20 +4166,20 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
         if (self['warning_deadline'] != null) ...[
-           SizedBox(height: AppSpacing.md),
+          SizedBox(height: AppSpacing.md),
           Card(
             color: context.palette.dangerSoft,
             child: Padding(
-              padding:  EdgeInsets.all(AppSpacing.lg),
+              padding: EdgeInsets.all(AppSpacing.lg),
               child: Row(
                 children: [
-                   Icon(Icons.timer_outlined, color: context.palette.danger),
-                   SizedBox(width: AppSpacing.md),
+                  Icon(Icons.timer_outlined, color: context.palette.danger),
+                  SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
                       '主持人已警告，请在 ${_deadlineText(self['warning_deadline'])} 前完成操作。',
                       style:
-                           TextStyle(fontSize: 13, color: context.palette.text),
+                          TextStyle(fontSize: 13, color: context.palette.text),
                     ),
                   ),
                 ],
@@ -4025,9 +4191,8 @@ class ProfilePage extends StatelessWidget {
         // 观战席不占席位，可以自己退出回大厅（占席玩家的退出仍由主持人裁量）。
         if (actor.isSpectator) ...[
           OutlinedButton.icon(
-            onPressed: store.writeBusy
-                ? null
-                : () => leaveSpectating(context, store),
+            onPressed:
+                store.writeBusy ? null : () => leaveSpectating(context, store),
             icon: const Icon(Icons.meeting_room_outlined, size: 18),
             label: const Text('退出观战（返回大厅）'),
           ),
@@ -4069,62 +4234,63 @@ class _OwnCard extends StatelessWidget {
           ),
           padding: const EdgeInsets.all(AppSpacing.md),
           child: Row(
-          children: [
-            RoleAvatar(
-                roleId: card['role_id']?.toString(), size: 56, dead: !alive),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        role?.name ?? card['role_id']?.toString() ?? '未知',
-                        style:  TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: context.palette.text),
-                      ),
-                      const SizedBox(width: AppSpacing.sm),
-                      if (isCurrent) Tag('当前上层'),
-                    ],
-                  ),
-                   SizedBox(height: AppSpacing.xs),
-                  Wrap(
-                    spacing: AppSpacing.sm,
-                    runSpacing: AppSpacing.xs,
-                    children: [
-                      Tag(
-                        alive ? '存活' : '已出局',
-                        color:
-                            alive ? context.palette.success : context.palette.textSecondary,
-                        background: alive
-                            ? context.palette.successSoft
-                            : context.palette.surfaceMuted,
-                      ),
-                      if (card['witch'] == true)
-                         Tag('魔女化',
-                            color: context.palette.danger,
-                            background: context.palette.dangerSoft),
-                      if (card['injured'] == true)
-                         Tag('负伤',
-                            color: context.palette.warning,
-                            background: context.palette.warningSoft),
-                      if (uses is Map && uses.isNotEmpty)
-                        Tag(
-                          uses.entries
-                              .map((e) => '${e.key} ${e.value}')
-                              .join(' · '),
-                          color: context.palette.textSecondary,
-                          background: context.palette.surfaceMuted,
+            children: [
+              RoleAvatar(
+                  roleId: card['role_id']?.toString(), size: 56, dead: !alive),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          role?.name ?? card['role_id']?.toString() ?? '未知',
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: context.palette.text),
                         ),
-                    ],
-                  ),
-                ],
+                        const SizedBox(width: AppSpacing.sm),
+                        if (isCurrent) Tag('当前上层'),
+                      ],
+                    ),
+                    SizedBox(height: AppSpacing.xs),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.xs,
+                      children: [
+                        Tag(
+                          alive ? '存活' : '已出局',
+                          color: alive
+                              ? context.palette.success
+                              : context.palette.textSecondary,
+                          background: alive
+                              ? context.palette.successSoft
+                              : context.palette.surfaceMuted,
+                        ),
+                        if (card['witch'] == true)
+                          Tag('魔女化',
+                              color: context.palette.danger,
+                              background: context.palette.dangerSoft),
+                        if (card['injured'] == true)
+                          Tag('负伤',
+                              color: context.palette.warning,
+                              background: context.palette.warningSoft),
+                        if (uses is Map && uses.isNotEmpty)
+                          Tag(
+                            uses.entries
+                                .map((e) => '${e.key} ${e.value}')
+                                .join(' · '),
+                            color: context.palette.textSecondary,
+                            background: context.palette.surfaceMuted,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
           ),
         ),
       ),
@@ -4219,7 +4385,8 @@ class _HostEntryGateState extends State<HostEntryGate> {
                     ),
                     child: Text(
                       store.hostAdminNotice!,
-                      style: TextStyle(fontSize: 13, color: context.palette.text),
+                      style:
+                          TextStyle(fontSize: 13, color: context.palette.text),
                     ),
                   ),
                 ],
@@ -4227,7 +4394,8 @@ class _HostEntryGateState extends State<HostEntryGate> {
                   const SizedBox(height: AppSpacing.md),
                   Text(
                     error!,
-                    style: TextStyle(fontSize: 13, color: context.palette.danger),
+                    style:
+                        TextStyle(fontSize: 13, color: context.palette.danger),
                   ),
                 ],
                 const SizedBox(height: AppSpacing.lg),
@@ -4239,7 +4407,8 @@ class _HostEntryGateState extends State<HostEntryGate> {
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.admin_panel_settings_outlined, size: 18),
+                      : const Icon(Icons.admin_panel_settings_outlined,
+                          size: 18),
                   label: Text(busy ? '正在进入' : '确认进入管理界面'),
                 ),
                 const SizedBox(height: AppSpacing.md),
@@ -4395,7 +4564,8 @@ class _HostManagementPageState extends State<HostManagementPage> {
                   Expanded(
                     child: Text(
                       store.hostAdminNotice!,
-                      style: TextStyle(fontSize: 13, color: context.palette.text),
+                      style:
+                          TextStyle(fontSize: 13, color: context.palette.text),
                     ),
                   ),
                 ],
@@ -4405,16 +4575,20 @@ class _HostManagementPageState extends State<HostManagementPage> {
           const SizedBox(height: AppSpacing.md),
         ],
         Card(
-          color: blocking > 0 ? context.palette.dangerSoft : context.palette.successSoft,
+          color: blocking > 0
+              ? context.palette.dangerSoft
+              : context.palette.successSoft,
           child: Padding(
-            padding:  EdgeInsets.all(AppSpacing.lg),
+            padding: EdgeInsets.all(AppSpacing.lg),
             child: Row(
               children: [
                 Icon(
                   blocking > 0
                       ? Icons.pending_actions_outlined
                       : Icons.check_circle_outline,
-                  color: blocking > 0 ? context.palette.danger : context.palette.success,
+                  color: blocking > 0
+                      ? context.palette.danger
+                      : context.palette.success,
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
@@ -4423,15 +4597,15 @@ class _HostManagementPageState extends State<HostManagementPage> {
                     children: [
                       Text(
                         '${view.phaseLabel} · 第 ${view.day} 日',
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: context.palette.text),
                       ),
-                       SizedBox(height: 2),
+                      SizedBox(height: 2),
                       Text(
                         blocking > 0 ? '有 $blocking 项待办阻塞推进' : '没有阻塞项，可以推进',
-                        style:  TextStyle(
+                        style: TextStyle(
                             fontSize: 13, color: context.palette.textSecondary),
                       ),
                     ],
@@ -4448,9 +4622,9 @@ class _HostManagementPageState extends State<HostManagementPage> {
         ),
         Card(
           child: Padding(
-            padding:  EdgeInsets.all(AppSpacing.md),
+            padding: EdgeInsets.all(AppSpacing.md),
             child: codex.isEmpty
-                ?  Text('未读取到魔典名单',
+                ? Text('未读取到魔典名单',
                     style: TextStyle(color: context.palette.textTertiary))
                 : Wrap(
                     spacing: AppSpacing.sm,
@@ -4469,7 +4643,7 @@ class _HostManagementPageState extends State<HostManagementPage> {
           SectionTitle(group),
           if (group == '当前待办')
             if (tasks.isEmpty)
-               Card(
+              Card(
                 child: Padding(
                   padding: EdgeInsets.all(AppSpacing.lg),
                   child: Text('当前没有待办。',
@@ -4502,16 +4676,15 @@ class _HostManagementPageState extends State<HostManagementPage> {
               ],
             )
           else if (group != '当前待办')
-             Padding(
+            Padding(
               padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
               child: Text('当前无可用操作',
-                  style:
-                      TextStyle(color: context.palette.textTertiary, fontSize: 13)),
+                  style: TextStyle(
+                      color: context.palette.textTertiary, fontSize: 13)),
             ),
         ],
         SectionTitle('对局日志', subtitle: '仅主持人可见；按时间记录全部关键操作。'),
-        if (view.host['log'] is List &&
-            (view.host['log'] as List).isNotEmpty)
+        if (view.host['log'] is List && (view.host['log'] as List).isNotEmpty)
           Card(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.md),
@@ -4526,7 +4699,7 @@ class _HostManagementPageState extends State<HostManagementPage> {
                           children: [
                             Text(
                               '第${raw['day']}天',
-                              style:  TextStyle(
+                              style: TextStyle(
                                   fontSize: 12,
                                   color: context.palette.textTertiary),
                             ),
@@ -4537,8 +4710,8 @@ class _HostManagementPageState extends State<HostManagementPage> {
                                 style: TextStyle(
                                   fontSize: 13,
                                   height: 1.45,
-                                  color: _logColor(context,
-                                      raw['kind']?.toString()),
+                                  color: _logColor(
+                                      context, raw['kind']?.toString()),
                                 ),
                               ),
                             ),
@@ -4550,7 +4723,7 @@ class _HostManagementPageState extends State<HostManagementPage> {
             ),
           )
         else
-           Card(
+          Card(
             child: Padding(
               padding: EdgeInsets.all(AppSpacing.lg),
               child: Text('还没有日志记录。',
@@ -4576,9 +4749,9 @@ class _HostManagementPageState extends State<HostManagementPage> {
                         ),
                     ],
                   )
-                :  Text('本局还没有可以代操作的席位。',
-                    style:
-                        TextStyle(fontSize: 13, color: context.palette.textTertiary)),
+                : Text('本局还没有可以代操作的席位。',
+                    style: TextStyle(
+                        fontSize: 13, color: context.palette.textTertiary)),
           ),
         ),
       ],
@@ -4603,10 +4776,10 @@ class _HostManagementPageState extends State<HostManagementPage> {
   /// 都要能在动作 payload 里取到）会让 payload 为空的行动永远匹配不上——
   /// `host.warn` 就是这种，于是所有警告类待办被误判成「该待办已变化」。
   Future<void> _runTask(String actionId, Map<String, dynamic> payload) async {
-    final candidates = (widget.store.view?.allActions ??
-            const <ActionDescriptor>[])
-        .where((item) => item.id == actionId)
-        .toList();
+    final candidates =
+        (widget.store.view?.allActions ?? const <ActionDescriptor>[])
+            .where((item) => item.id == actionId)
+            .toList();
     ActionDescriptor? matched;
     for (final action in candidates) {
       final matches = action.payload.entries.every(
@@ -4739,7 +4912,7 @@ class _SeatActionTile extends StatelessWidget {
                   color: context.palette.surfaceMuted,
                   border: Border.all(color: context.palette.border, width: 1.5),
                 ),
-                child:  Text('?',
+                child: Text('?',
                     style: TextStyle(
                         fontSize: _avatarSize * .45,
                         fontWeight: FontWeight.w600,
@@ -4777,12 +4950,14 @@ class _SeatActionTile extends StatelessWidget {
             onTap: onTap,
             child: Container(
               width: width,
-              padding:  EdgeInsets.symmetric(
+              padding: EdgeInsets.symmetric(
                   horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(AppRadius.field),
                 border: Border.all(
-                  color: enabled ? context.palette.border : context.palette.borderStrong,
+                  color: enabled
+                      ? context.palette.border
+                      : context.palette.borderStrong,
                 ),
               ),
               child: Column(
@@ -4798,26 +4973,26 @@ class _SeatActionTile extends StatelessWidget {
                                 ? context.palette.text
                                 : context.palette.textTertiary,
                           )),
-                       Spacer(),
+                      Spacer(),
                       if (loading)
-                         SizedBox(
+                        SizedBox(
                           width: 12,
                           height: 12,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       else if (count == 0)
-                         Icon(Icons.check_rounded,
+                        Icon(Icons.check_rounded,
                             size: 13, color: context.palette.textTertiary)
                       else if (count != null)
                         Container(
-                          padding:  EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
+                          padding:
+                              EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
                             color: context.palette.accentSoft,
                             borderRadius: BorderRadius.circular(AppRadius.chip),
                           ),
                           child: Text('$count',
-                              style:  TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
                                 color: context.palette.accent,
@@ -4845,14 +5020,15 @@ class _SeatActionTile extends StatelessWidget {
                       ),
                     ],
                   ),
-                   SizedBox(height: 6),
+                  SizedBox(height: 6),
                   Text(value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: enabled ? valueColor : context.palette.textTertiary,
+                        color:
+                            enabled ? valueColor : context.palette.textTertiary,
                       )),
                 ],
               ),
@@ -4894,16 +5070,16 @@ class _TaskCard extends StatelessWidget {
                 children: [
                   Text(
                     task['title']?.toString() ?? '',
-                    style:  TextStyle(
+                    style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: context.palette.text),
                   ),
                   if (task['detail']?.toString().isNotEmpty == true) ...[
-                     SizedBox(height: 2),
+                    SizedBox(height: 2),
                     Text(
                       task['detail'].toString(),
-                      style:  TextStyle(
+                      style: TextStyle(
                           fontSize: 12, color: context.palette.textTertiary),
                     ),
                   ],
@@ -4911,10 +5087,11 @@ class _TaskCard extends StatelessWidget {
               ),
             ),
             if (blocking)
-               Padding(
+              Padding(
                 padding: EdgeInsets.only(right: AppSpacing.md),
                 child: Tag('阻塞',
-                    color: context.palette.danger, background: context.palette.dangerSoft),
+                    color: context.palette.danger,
+                    background: context.palette.dangerSoft),
               ),
             TextButton(
               onPressed: actionId.isEmpty || store.writeBusy

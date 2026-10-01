@@ -46,7 +46,8 @@ Map<String, dynamic> viewJson({Map<String, dynamic>? prompt}) => {
     };
 
 /// 当前发言人的催办框：服务端在顺序发言阶段会带上公开倒计时。
-Map<String, dynamic> promptJson({required double deadline, int seconds = 30}) => {
+Map<String, dynamic> promptJson({required double deadline, int seconds = 30}) =>
+    {
       'title': '轮到你顺序发言',
       'text': '发言、打断，或点「本轮不发言」跳过你的顺序。',
       'hint': null,
@@ -105,7 +106,7 @@ void main() {
       await pumpShell(tester, store);
       expect(find.text('轮到你顺序发言'), findsOneWidget);
       expect(find.text('剩余 30 秒'), findsOneWidget);
-      expect(find.text('发言或继续输入会重新计时'), findsOneWidget);
+      expect(find.text('发言或继续输入会重新计时'), findsNothing);
 
       // 本地时钟走到第 7 秒：只靠横幅自己的定时刷新，服务端没有再推状态。
       now = base.add(const Duration(seconds: 7));

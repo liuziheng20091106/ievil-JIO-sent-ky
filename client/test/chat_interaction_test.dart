@@ -189,8 +189,18 @@ void main() {
         'phase': 'speech',
         'phase_label': '顺序发言',
         'seats': [
-          {'id': '1', 'avatar_role_id': 'anna', 'occupied': true},
-          {'id': '2', 'avatar_role_id': 'millia', 'occupied': true},
+          {
+            'id': '1',
+            'participant_id': 'p1',
+            'avatar_role_id': 'anna',
+            'occupied': true
+          },
+          {
+            'id': '2',
+            'participant_id': 'p2',
+            'avatar_role_id': 'millia',
+            'occupied': true
+          },
         ],
         'self': {'seat_id': '1'},
         'actions': [],
@@ -216,10 +226,114 @@ void main() {
     await tester.pumpWidget(
         MaterialApp(theme: buildAppTheme(), home: GameShell(store: store)));
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('1. 2号'), findsOneWidget);
-    expect(find.text('2. 1号'), findsOneWidget);
+    expect(find.text('1. 2号'), findsNothing);
+    expect(find.text('2. 1号'), findsNothing);
     expect(find.text('2号'), findsWidgets);
     expect(find.byType(RoleAvatar), findsWidgets);
+  });
+  testWidgets('席位号不显示额外顺序序号，分隔符位于本轮首条发言前', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final messages = [
+      GameMessage.fromJson({
+        'id': 1,
+        'kind': 'chat',
+        'text': '希罗：我先说到这里',
+        'sender_id': 'p2',
+        'sender_name': '二号',
+        'channel_id': 'public',
+      }),
+      GameMessage.fromJson({
+        'id': 2,
+        'kind': 'chat',
+        'text': '安安：这是我说的话',
+        'sender_id': 'p1',
+        'sender_name': '一号',
+        'channel_id': 'public',
+      }),
+      GameMessage.fromJson({
+        'id': 3,
+        'kind': 'chat',
+        'text': '安安：114514',
+        'sender_id': 'p1',
+        'sender_name': '一号',
+        'channel_id': 'public',
+      }),
+    ];
+    final store = GameStore.forPreview(
+      preferences: await SharedPreferences.getInstance(),
+      endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
+      actor: Actor.fromJson({
+        'id': 'p1',
+        'account_id': 'a1',
+        'kind': 'player',
+        'seat_id': '1',
+        'name': '一号',
+      }),
+      view: GameView.fromJson({
+        'ui_version': 1,
+        'id': 'game-1',
+        'version': 1,
+        'status': 'playing',
+        'day': 1,
+        'half': 'day',
+        'phase': 'speech',
+        'phase_label': '顺序发言',
+        'seats': [
+          {
+            'id': '1',
+            'participant_id': 'p1',
+            'avatar_role_id': 'anna',
+            'occupied': true
+          },
+          {
+            'id': '2',
+            'participant_id': 'p2',
+            'avatar_role_id': 'millia',
+            'occupied': true
+          },
+        ],
+        'self': {'seat_id': '1'},
+        'actions': [],
+        'public': {
+          'speech_order': ['2', '1'],
+          'speaker': '1'
+        },
+        'channels': [
+          {
+            'id': 'public',
+            'label': '公开讨论',
+            'status': 'active',
+            'can_send': true,
+            'reason': '',
+            'actions': [],
+          },
+        ],
+      }),
+      gameId: 'game-1',
+      messages: messages,
+    );
+    await tester.binding.setSurfaceSize(const Size(420, 880));
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+        MaterialApp(theme: buildAppTheme(), home: GameShell(store: store)));
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.text('1. 2号'), findsNothing);
+    expect(find.text('2. 1号'), findsNothing);
+    expect(find.text('2号'), findsWidgets);
+    expect(find.byKey(const ValueKey('speech-divider-2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('speech-divider-1')), findsOneWidget);
+    final hiroDivider =
+        tester.getTopLeft(find.byKey(const ValueKey('speech-divider-2')));
+    final hiroMessage = tester.getTopLeft(find.text('希罗：我先说到这里'));
+    final annaDivider =
+        tester.getTopLeft(find.byKey(const ValueKey('speech-divider-1')));
+    final annaMessage = tester.getTopLeft(find.text('安安：这是我说的话'));
+    final annaSecondMessage = tester.getTopLeft(find.text('安安：114514'));
+    expect(hiroDivider.dy, lessThan(hiroMessage.dy));
+    expect(annaDivider.dy, lessThan(annaMessage.dy));
+    expect(annaDivider.dy, greaterThan(hiroMessage.dy));
+    expect(annaSecondMessage.dy, greaterThan(annaMessage.dy));
   });
   testWidgets('正文长按区分本人菜单，复制与撤回占位', (tester) async {
     String? copied;
@@ -322,34 +436,65 @@ void main() {
     final text = '😀 @2号 #艾玛·寻宝 #手写';
     final start = text.indexOf('#艾玛');
     final message = GameMessage.fromJson({
-      'id': 10, 'kind': 'chat', 'text': text, 'channel_id': 'public',
-      'payload': {'type': 'references', 'items': [
-        {'start': start, 'end': start + '#艾玛·寻宝'.length,
-         'type': 'skill', 'id': 'emma:treasure', 'label': '艾玛·寻宝',
-         'text': '公开的寻宝说明'},
-      ]},
+      'id': 10,
+      'kind': 'chat',
+      'text': text,
+      'channel_id': 'public',
+      'payload': {
+        'type': 'references',
+        'items': [
+          {
+            'start': start,
+            'end': start + '#艾玛·寻宝'.length,
+            'type': 'skill',
+            'id': 'emma:treasure',
+            'label': '艾玛·寻宝',
+            'text': '公开的寻宝说明'
+          },
+        ]
+      },
     });
     expect(message.references.single.start, start);
-    expect(GameMessage.fromJson({
-      'id': 11, 'kind': 'chat', 'text': text, 'channel_id': 'public',
-      'payload': {'type': 'references', 'items': [
-        {'start': start - 1, 'end': start + '#艾玛·寻宝'.length,
-         'type': 'skill', 'id': 'emma:treasure', 'label': '艾玛·寻宝',
-         'text': '不应展示'},
-      ]},
-    }).references, isEmpty);
-    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(),
-      home: Scaffold(body: MessageBubble(message: message))));
+    expect(
+        GameMessage.fromJson({
+          'id': 11,
+          'kind': 'chat',
+          'text': text,
+          'channel_id': 'public',
+          'payload': {
+            'type': 'references',
+            'items': [
+              {
+                'start': start - 1,
+                'end': start + '#艾玛·寻宝'.length,
+                'type': 'skill',
+                'id': 'emma:treasure',
+                'label': '艾玛·寻宝',
+                'text': '不应展示'
+              },
+            ]
+          },
+        }).references,
+        isEmpty);
+    await tester.pumpWidget(MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(body: MessageBubble(message: message))));
     expect(find.text('公开的寻宝说明'), findsNothing);
     await tester.tap(find.text('#艾玛·寻宝'));
     await tester.pumpAndSettle();
     expect(find.text('公开的寻宝说明'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(),
-      home: Scaffold(body: MessageBubble(message: GameMessage.fromJson({
-        'id': 12, 'kind': 'chat', 'text': '#手写', 'channel_id': 'public',
-      })))));
+    await tester.pumpWidget(MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+            body: MessageBubble(
+                message: GameMessage.fromJson({
+          'id': 12,
+          'kind': 'chat',
+          'text': '#手写',
+          'channel_id': 'public',
+        })))));
     await tester.tap(find.text('#手写'));
     await tester.pumpAndSettle();
     expect(find.text('公开的寻宝说明'), findsNothing);
@@ -431,13 +576,15 @@ void main() {
 
     await tester.tap(find.text('证物'));
     await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+    expect(
+        tester.widget<TextField>(find.byType(TextField).first).controller!.text,
         '@2号 #');
     await tester.pumpAndSettle();
     expect(find.text('重试'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+    expect(
+        tester.widget<TextField>(find.byType(TextField).first).controller!.text,
         '@2号 #');
     store.applyLiveEvent({
       'type': 'message',
