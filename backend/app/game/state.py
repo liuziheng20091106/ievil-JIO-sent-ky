@@ -840,13 +840,13 @@ def deal_cards(game):
         s["cards"] = order[i * 2 : i * 2 + 2]
         s["ready"] = False
     # 开局即定本局魔女阵营：A、B 两个不同的命运席位。第1天 A 的当前牌魔女化，
-    # 第2天 B 的当前牌魔女化，第3天由 A、B 中可选的一位接替。艾玛所在席位、
-    # 以及另一牌是米莉亚或亚里沙的席位不能进命运，从其余席位里抽。
+    # 第2天 B 的当前牌魔女化，第3天由 A、B 中可选的一位接替。持有艾玛、
+    # 米莉亚、亚里沙或雪莉的席位不能进命运，从其余席位里抽。
     emma_seat = order.index("emma") // 2
     ineligible = {
         i
         for i in range(7)
-        if i == emma_seat or {order[i * 2], order[i * 2 + 1]} & {"millia", "arisa"}
+        if i == emma_seat or {order[i * 2], order[i * 2 + 1]} & {"millia", "arisa", "sherry"}
     }
     eligible_seats = [i for i in range(7) if i not in ineligible]
     first = rng.sample(eligible_seats, 2) if len(eligible_seats) >= 2 else eligible_seats
