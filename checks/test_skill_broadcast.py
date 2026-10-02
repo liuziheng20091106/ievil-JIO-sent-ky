@@ -148,13 +148,12 @@ class PayloadProjection(unittest.TestCase):
     def test_unknown_payload_types_are_host_only(self):
         payload = {"type": "future", "secret": "只有主持人该看到"}
         self.assertIsNone(storage.project_message_payload(payload, self.other))
-        self.assertEqual(
-            storage.project_message_payload(payload, HOST), payload
-        )
+        self.assertEqual(storage.project_message_payload(payload, HOST), payload)
 
     def test_message_view_only_attaches_payload_when_present(self):
         row = {
             "id": 1,
+            "game_id": "skill-game",
             "kind": "alert",
             "sender_id": "host",
             "sender_name": "主持人",

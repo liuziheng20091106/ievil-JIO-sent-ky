@@ -1,14 +1,20 @@
 游戏动画资源介绍
 
-本目录存放游戏动画使用的角色半身立绘素材。本步只统一角色目录名并说明对应关系，尚未接入动画播放。
+本目录存放游戏动画使用的角色半身立绘、Lottie 动画脚本及脚本图片。角色与状态目录已统一，图片按状态目录编号，资源由后端独立分发；对局动画由后端的技能卡与发言轮次消息附带配置触发。
 角色目录名与 backend/app/game/catalog.py 的角色 id、client/lib/src/role_visuals.dart 的客户端角色 id 保持一致；不修改项目现有角色名称或游戏规则。
 
 目录约定
 - normal/：普通状态的半身立绘。
 - EX/：魔女化后的半身立绘。EX 是素材状态分类，不改变角色在游戏规则中能否魔女化的限制。
-- 同一状态下的图片保留原始文件名，不依据文件名推断表情、动作或播放顺序。
+- 每个角色的 normal/、EX/ 内分别从 1.png 开始连续编号，如 millia/normal/1.png、millia/normal/2.png。数字是资源索引，不定义表情含义或播放顺序。
 - honoka/ 当前只有 EX/，不补造 normal/ 素材。
 - warden-portrait.png：暂按“系统”立绘理解，保留原文件名；不是玩家角色目录，也不在本步重新定义为主持人立绘。
+- scripts/*.json：标准 Lottie 动画数据，可包含图层、位置/缩放/旋转/透明度关键帧、形状、遮罩和包内图片；不是可执行 JavaScript。
+- scripts/images/：动画图层使用的透明 PNG，发光、纹理和字体外观可以烘焙在图片里。图片引用相对于对应 JSON 的目录，必须随包发布；不允许外部 URL、内嵌图片或路径越界。
+- scripts/interrogation-start.json：参考审问开始工程的4秒视觉复刻。
+- scripts/skill-cut-in.json：所有主动/被动技能展示框的默认模板。后端指定 skill-portrait 图片槽、role-title 与 skill-name 文字槽；模板只画主体，半透明全窗口蒙版由客户端单独绘制。
+- 动画配置只含 script、images、texts，角色图片覆盖路径从 animation 包根目录开始。魔女本人和已确认主持拿 EX＋魔女标识，其他收件人只拿 normal＋普通标识；私密技能对未获准者不下发动画配置。当前 honoka 没有 normal 素材，缺少该动画实际所需图片的客户端直接跳过，不改用 EX 泄漏身份。
+- 客户端仅响应本局新的实时消息：刷新历史、首次同步和断线重连不补播；新动画到达立即终止旧动画，不排队。脚本或实际依赖缺失、损坏时不显示动画或空蒙版，不自动联网下载。
 
 角色对应表（原资源目录 -> 当前目录 / 项目角色）
 ema -> emma / 艾玛
@@ -26,5 +32,5 @@ margo -> marg / 玛格
 leia -> leia / 蕾雅
 jailer -> honoka / 穗乃香（用户所说的 hnk，项目实际角色 id 为 honoka）
 
-本步仅重命名上述不一致的角色目录，保留 normal/、EX/ 以及所有 PNG 文件名和内容。
+目录 normal/、EX/ 保持不变，角色图片改为数字文件名，PNG 内容不变。根目录的 manifest.json 是资源分发清单，由 tools/update-resource-manifests.py 生成；说明文字不进入资源包。animation 包只额外发布 scripts/ 下的动画 JSON（不发布 manifest.json），memes 不发布 JSON。更新脚本或图片后刷新清单，客户端按 MD5 增量更新即可，无需重新编译已安装播放器的 App。
 资源图片继续遵循项目 resources/ 的 Git 忽略规则；本介绍文件单独纳入版本管理。

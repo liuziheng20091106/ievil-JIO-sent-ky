@@ -25,6 +25,7 @@ from . import (
     history_storage,
     hosts_api,
     realtime,
+    resources_api,
     storage,
 )
 from .game import GameError
@@ -61,6 +62,7 @@ app.include_router(hosts_api.router)
 app.include_router(history_api.router)
 app.include_router(downloads_api.router)
 app.include_router(downloads_api.releases_router)
+app.include_router(resources_api.router)
 
 
 @app.middleware("http")

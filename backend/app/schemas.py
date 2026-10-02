@@ -1,7 +1,15 @@
 """Validated transport inputs; game commands remain domain-validated."""
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
-from typing import Literal
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StringConstraints,
+    model_validator,
+)
+from typing import Annotated, Literal
 
 
 class Input(BaseModel):
@@ -79,13 +87,22 @@ class Chat(Input):
     channel_id: str = Field(min_length=1, max_length=100)
     text: str = Field(default="", max_length=2000)
     image: str | None = Field(default=None, max_length=136_559)
+    sticker_md5: (
+        Annotated[
+            str, StringConstraints(strict=True, strip_whitespace=False, pattern=r"^[0-9a-f]{32}$")
+        ]
+        | None
+    ) = None
     as_seat: str | None = Field(default=None, max_length=4)
     references: list[ChatReference] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def require_content(self):
-        if not self.text and not self.image:
-            raise ValueError("请填写消息文字或选择图片")
+        if self.sticker_md5 is not None:
+            if self.text or self.image or self.references:
+                raise ValueError("表情必须单独发送，不能包含文字、图片或引用")
+        elif not self.text and not self.image:
+            raise ValueError("请填写消息文字或选择图片或表情")
         return self
 
 

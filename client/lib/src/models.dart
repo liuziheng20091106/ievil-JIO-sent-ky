@@ -378,7 +378,32 @@ class PuppetPanel {
   late final List<GameChannel> channels;
 }
 
+class GameAnimationRequest {
+  GameAnimationRequest(this.id, this.gameId, Object? value) {
+    final raw = jsonObject(value, 'animation');
+    if (raw.length != 3 || !raw.keys.toSet().containsAll(['script', 'images', 'texts'])) {
+      throw const FormatException('animation 必须包含 script、images、texts');
+    }
+    script = jsonString(raw['script'], 'animation.script');
+    images = _strings(raw['images'], 'animation.images');
+    texts = _strings(raw['texts'], 'animation.texts');
+  }
+
+  static Map<String, String> _strings(Object? value, String name) {
+    final raw = jsonObject(value, name);
+    return Map.unmodifiable(raw.map((key, value) =>
+        MapEntry(key, jsonString(value, '$name.$key'))));
+  }
+
+  final int id;
+  final String gameId;
+  late final String script;
+  late final Map<String, String> images;
+  late final Map<String, String> texts;
+}
+
 class GameMessage {
+  static final _stickerHash = RegExp(r'^[0-9a-f]{32}$');
   GameMessage.fromJson(Object? value) : raw = jsonObject(value, 'message') {
     id = jsonInt(raw['id'], 'message.id');
     kind = raw['kind']?.toString() ?? 'chat';
@@ -400,6 +425,12 @@ class GameMessage {
     image = imageUrl is String
         ? base64Decode(imageUrl.substring(imageUrl.indexOf(',') + 1))
         : null;
+    final sticker = recalled ? null : raw['sticker_md5'];
+    if (sticker != null &&
+        (sticker is! String || !_stickerHash.hasMatch(sticker))) {
+      throw const FormatException('message.sticker_md5 不合法');
+    }
+    stickerMd5 = sticker as String?;
   }
 
   final Map<String, dynamic> raw;
@@ -414,6 +445,7 @@ class GameMessage {
   late final bool recalled;
   late final List<String> mentionIds;
   late final Uint8List? image;
+  late final String? stickerMd5;
 
   /// 结构化播报载荷（例如技能声明的技能名、介绍与目标）。
   /// 服务端已按收件人的可见范围裁剪过：私密目标与伪装标记不会出现在这里。

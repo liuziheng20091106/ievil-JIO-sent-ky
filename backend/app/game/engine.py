@@ -17,6 +17,7 @@ from .actions import (
     night_abilities,
     outstanding_seats,
 )
+from .animations import skill_animation_snapshot, speech_animation
 from .catalog import (
     ABILITY_INTRO,
     ABILITY_NAMES,
@@ -291,6 +292,7 @@ def publish_speech_turn(game, events, seat_id):
                 "day": game["day"],
                 "seat_id": seat_id,
                 "avatar_role_id": s["avatar_role_id"],
+                "animation": speech_animation(),
             },
         }
     )
@@ -939,6 +941,12 @@ def skill_broadcast_payload(game, declaration):
         "intro": ABILITY_INTRO.get(ability, ""),
         "seat_id": sid,
         "actor_participant_id": (seat or {}).get("occupant_id"),
+        "_animation": skill_animation_snapshot(
+            role_id,
+            ability,
+            ABILITY_NAMES.get(ability, DAY_ABILITIES[ability][1]),
+            game["cards"][declaration["card_id"]]["witch"],
+        ),
         "actor_name": display_player_name((seat or {}).get("name", "")),
         "challengeable": challengeable(game, declaration),
         "target_public": ability in PUBLIC_TARGET_ABILITIES,
@@ -1410,8 +1418,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             )
         sync_declarations(game)
         suffix = "该技能不可质疑。" if ability in {"photo", "love", "gaze"} else "其他玩家可质疑。"
-        # 播报带上结构化载荷：技能名、介绍与目标由 storage.message_view 按收件人裁剪，
-        # 文本保留给不支持载荷的旧客户端与历史搜索。
+        # 文本与结构化载荷共同保留在历史；按收件人的裁剪在 storage.message_view 完成。
         notify(
             game,
             events,

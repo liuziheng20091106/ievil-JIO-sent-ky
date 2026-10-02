@@ -66,6 +66,11 @@ class GameApi {
   Future<Map<String, dynamic>> health() async =>
       jsonObject(await _request('GET', '/api/health'));
 
+  Future<Map<String, dynamic>> resourceManifest(String pack) async =>
+      jsonObject(await _request(
+        'GET', '/api/resources/${Uri.encodeComponent(pack)}/manifest',
+      ));
+
   /// 用户协议（Markdown）：客户端首次连接服务器时展示；服务端未配置时正文为空。
   Future<Agreement> agreement() async =>
       Agreement.fromJson(await _request('GET', '/api/agreement'));
@@ -268,6 +273,7 @@ class GameApi {
     String text, {
     String? asSeat,
     String? image,
+    String? stickerMd5,
     List<ChatReference> references = const [],
   }) async =>
       GameMessage.fromJson(await _request(
@@ -275,8 +281,9 @@ class GameApi {
         '/api/games/${Uri.encodeComponent(gameId)}/messages',
         body: {
           'channel_id': channelId,
-          'text': text,
+          if (stickerMd5 == null) 'text': text,
           if (image != null) 'image': image,
+          if (stickerMd5 != null) 'sticker_md5': stickerMd5,
           if (asSeat != null) 'as_seat': asSeat,
           if (references.isNotEmpty)
             'references': [for (final ref in references) ref.toJson()],

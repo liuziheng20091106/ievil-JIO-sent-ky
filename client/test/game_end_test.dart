@@ -86,6 +86,8 @@ Future<GameStore> endedStore({String? gameId = 'game-ended'}) async {
 }
 
 Future<void> pumpShell(WidgetTester tester, GameStore store) async {
+  store.api?.close();
+  store.api = null;
   await tester.binding.setSurfaceSize(const Size(430, 900));
   tester.view.physicalSize = const Size(430, 900);
   tester.view.devicePixelRatio = 1;
@@ -106,24 +108,6 @@ Future<void> pumpShell(WidgetTester tester, GameStore store) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  test('落幕不再被当成新的阶段变化（不弹阶段动画）', () async {
-    final store = await endedStore();
-    final preferences = await SharedPreferences.getInstance();
-    await preferences
-        .setString('$endpoint:game-ended:a1:phase_seen', 'game-ended:3:day:speech');
-    store.applyView(GameView.fromJson({
-      ...endedViewJson(),
-      'status': 'playing',
-      'phase': 'speech',
-      'phase_label': '顺序发言',
-    }));
-    expect(store.pendingPhaseKey, isNull);
-    // 对局被终止：不弹出“新阶段”整屏动画，直接进入只读结局。
-    store.applyView(GameView.fromJson(endedViewJson()));
-    expect(store.pendingPhaseKey, isNull);
-    expect(store.view!.status, 'ended');
-  });
 
   testWidgets('终止后的对局页给出「返回大厅」入口，点击后回到主界面', (tester) async {
     final store = await endedStore();

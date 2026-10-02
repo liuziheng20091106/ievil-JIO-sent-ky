@@ -74,6 +74,7 @@ class DisplayPlayerNameTest(unittest.TestCase):
         message = storage.message_view(
             {
                 "id": 1,
+                "game_id": "names-game",
                 "kind": "chat",
                 "sender_id": "p1",
                 "sender_name": LONG,
@@ -91,6 +92,7 @@ class DisplayPlayerNameTest(unittest.TestCase):
             storage.message_view(
                 {
                     "id": 2,
+                    "game_id": "names-game",
                     "kind": "chat",
                     "sender_id": "host",
                     "sender_name": host_display_name(LONG),
@@ -104,9 +106,7 @@ class DisplayPlayerNameTest(unittest.TestCase):
             )["sender_name"],
             "主持人(" + shown + ")",
         )
-        summary = participant_summary(
-            {"id": "p1", "name": LONG, "kind": "player", "seat_id": "3"}
-        )
+        summary = participant_summary({"id": "p1", "name": LONG, "kind": "player", "seat_id": "3"})
         self.assertEqual(summary["name"], shown)
 
 
@@ -137,9 +137,7 @@ class PlayerNameProjectionTest(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.host, _ = self.login("10001", LONG, host=True)
-        created = self.client.post(
-            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX}
-        )
+        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
         created.raise_for_status()
         self.game_id = created.json()["id"]
         self.root = f"/api/games/{self.game_id}"

@@ -355,6 +355,7 @@ def message_view(row, actor):
         key: row[key]
         for key in (
             "id",
+            "game_id",
             "kind",
             "sender_id",
             "sender_name",
@@ -386,6 +387,8 @@ def message_view(row, actor):
         projected = project_message_payload(row["payload"], actor, row["kind"])
         if projected:
             result["payload"] = projected
+            if projected.get("type") == "sticker":
+                result["sticker_md5"] = projected["md5"]
     return result
 
 
@@ -397,6 +400,8 @@ def project_message_payload(raw, actor, kind=None):
     私密目标只有声明者本人（按 ``access_ids``，与其它「挂在自己名下的私密情报」同一判据）
     与主持人能看到；被动技能的结果同理由 ``effect_public`` 决定；``fake``（伪装声明）
     与牌 id 只给主持人——伪装声明在其他人眼里必须与真声明完全一致，判据只能在服务端。
+    动画使用消息创建时的 ``_animation`` 快照：本人/已确认主持人拿 owner 分支，其他人
+    只拿 public 分支；私密被动与不公开目标的 information 即使直接调用投影也不下发动画。
 
     死亡卡片是另一回事：载荷由 ``state.death_card_entry`` 按白名单构造，里面本来就只有
     公开信息（席位、展示名、公开头像、是否13水），因此对每个收件人原样下发；
@@ -408,6 +413,11 @@ def project_message_payload(raw, actor, kind=None):
         return None
     if not isinstance(payload, dict):
         return None
+    if payload.get("type") == "sticker":
+        md5 = payload.get("md5")
+        if kind != "chat" or not isinstance(md5, str) or not re.fullmatch(r"[0-9a-f]{32}", md5):
+            return None
+        return {"type": "sticker", "md5": md5}
     if payload.get("type") == "references":
         if kind != "chat" or not isinstance(payload.get("items"), list):
             return None
@@ -425,7 +435,7 @@ def project_message_payload(raw, actor, kind=None):
     if kind == "speech_turn" and payload.get("type") == "speech_turn":
         return {
             key: payload[key]
-            for key in ("type", "day", "seat_id", "avatar_role_id")
+            for key in ("type", "day", "seat_id", "avatar_role_id", "animation")
             if key in payload
         }
     if payload.get("type") == "death":
@@ -440,6 +450,7 @@ def project_message_payload(raw, actor, kind=None):
         return payload if host_capable(actor) else None
     host = host_capable(actor)
     access = set(actor.get("access_ids") or [])
+    privileged = host or payload.get("actor_participant_id") in access
     result = {
         key: payload[key]
         for key in (
@@ -459,10 +470,15 @@ def project_message_payload(raw, actor, kind=None):
         )
         if key in payload
     }
-    if result.get("target_public") or host or payload.get("actor_participant_id") in access:
+    if result.get("target_public") or privileged:
         result["target"] = payload.get("target")
-    if result.get("effect_public") or host or payload.get("actor_participant_id") in access:
+    if result.get("effect_public") or privileged:
         result["effect"] = payload.get("effect")
+    private_animation = (payload.get("mode") == "passive" and not payload.get("effect_public")) or (
+        kind == "information" and not payload.get("target_public")
+    )
+    if "_animation" in payload and (privileged or not private_animation):
+        result["animation"] = payload["_animation"]["owner" if privileged else "public"]
     if host:
         result["fake"] = bool(payload.get("fake"))
         result["card_id"] = payload.get("card_id")

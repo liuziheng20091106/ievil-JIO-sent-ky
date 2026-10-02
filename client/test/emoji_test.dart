@@ -25,7 +25,8 @@ void main() {
     expect(emojiFaces.where((face) => !face.superFace).length, 275);
     expect(emojiFaces.where((face) => face.superFace).length, 50);
     expect(emojiFaces.map((face) => face.id).toSet().length, emojiFaces.length);
-    expect(emojiFaces.map((face) => face.name).toSet().length, emojiFaces.length);
+    expect(
+        emojiFaces.map((face) => face.name).toSet().length, emojiFaces.length);
   });
 
   test('每张静态表情都随包提供且可解码', () async {
@@ -43,7 +44,8 @@ void main() {
       // 原图只有 128×128 与 56×56 两种，都必须方正规整，
       // 出现别的尺寸说明取错了文件（比如混进了动画首帧或占位图）。
       expect(frame.image.width, frame.image.height, reason: '${face.id} 不是正方形');
-      expect(frame.image.width, greaterThanOrEqualTo(56), reason: '${face.id} 尺寸过小');
+      expect(frame.image.width, greaterThanOrEqualTo(56),
+          reason: '${face.id} 尺寸过小');
     }
     expect(errors, isEmpty, reason: '解码过程中出现错误：${errors.join(' / ')}');
   });
@@ -101,21 +103,38 @@ void main() {
         ),
       ),
     );
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pump();
     await tester.enterText(find.byType(TextField), '微笑');
     await tester.pump();
-    final cells = find.descendant(
-      of: find.byType(GridView),
-      matching: find.byType(InkWell),
-    );
+    final cells = find.byKey(const ValueKey('all:14'));
     expect(cells, findsOneWidget);
     await tester.tap(cells);
     expect(picked?.name, '微笑');
     expect(recentEmojiIds, ['14']);
 
-    // 分组切换会退出搜索，否则点了分组没有反应。
-    await tester.tap(find.widgetWithText(FilterChip, '超级'));
+    // 回到 QQ 分组会退出搜索。
+    await tester.tap(find.byTooltip('QQ表情'));
     await tester.pump();
-    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, '');
+    expect(find.byType(TextField), findsNothing);
+  });
+
+  testWidgets('合并 QQ 组能搜索并插入超级表情', (tester) async {
+    final face = emojiFaces.firstWhere((face) => face.superFace);
+    final controller = EmojiEditingController(text: 'a');
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: EmojiPicker(
+      onPick: controller.insertFace,
+      height: 300,
+    ))));
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), face.name);
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey('all:${face.id}')));
+    expect(controller.text, 'a${face.token}');
   });
 
   // 返回键绑定到关闭表情面板：面板占的是输入区，玩家按返回想收的只是面板。

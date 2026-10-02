@@ -73,6 +73,50 @@ class GameStore extends ChangeNotifier {
   GameView? view;
   LiveConnection? live;
 
+  final gameAnimation = ValueNotifier<GameAnimationRequest?>(null);
+  final _seenAnimationMessages = <int>{};
+  String? _animationGameId;
+  String? _animationActiveGameId;
+  Object? _animationOwner;
+
+  void activateGameAnimations(Object owner, String id) {
+    _animationOwner = owner;
+    _animationActiveGameId = id;
+    gameAnimation.value = null;
+  }
+
+  void deactivateGameAnimations(Object owner) {
+    if (!identical(owner, _animationOwner)) return;
+    _animationOwner = null;
+    _animationActiveGameId = null;
+    gameAnimation.value = null;
+  }
+
+  void _resetGameAnimations() {
+    _animationGameId = null;
+    _animationActiveGameId = null;
+    _animationOwner = null;
+    _seenAnimationMessages.clear();
+    gameAnimation.value = null;
+  }
+
+  void _noteGameAnimation(GameMessage message) {
+    if (_animationGameId != gameId) {
+      _animationGameId = gameId;
+      _seenAnimationMessages.clear();
+    }
+    if (!_seenAnimationMessages.add(message.id) || message.recalled) return;
+    final id = gameId;
+    final config = message.payload?['animation'];
+    if (id == null || id != _animationActiveGameId || config == null) return;
+    try {
+      gameAnimation.value = GameAnimationRequest(message.id, id, config);
+    } on FormatException {
+      // Invalid optional effects must not prevent the message being displayed.
+      gameAnimation.value = null;
+    }
+  }
+
   /// 返回大厅期间置位：服务器仍把已终止的对局当作当前局返回（被移出者
   /// 的 me() 也可能带旧绑定），此时本地已明确离开，_consumeSession 与
   /// refreshLobby 都不得用服务器的当前局 gameId 把用户拉回对局。
@@ -128,19 +172,13 @@ class GameStore extends ChangeNotifier {
   String messageScope = 'all';
   String selectedChannelId = 'public';
 
-  /// 聊天设置：公开我的输入状态 / 自动切换到可用聊天频道 / 按 Enter 发送 /
-  /// 默认打开表情最近分组。本机全局偏好（同 release.dart 的全局键风格，不属于
-  /// 任何对局数据）；前两项与表情分组默认开启，「按 Enter 发送」的默认值随平台走
-  /// （见 [defaultEnterToSendFor]）。
+  /// 聊天设置是本机全局偏好，不属于任何对局数据。
+  /// 按 Enter 发送的默认值随平台走（见 [defaultEnterToSendFor]）。
   static const _typingPublicKey = 'chat_typing_public';
   static const _autoSwitchKey = 'chat_auto_switch_channel';
   static const _enterToSendKey = 'chat_enter_to_send';
-  static const _emojiRecentFirstKey = 'chat_emoji_recent_first';
   bool typingPublicEnabled = true;
   bool autoSwitchChannel = true;
-
-  /// 打开表情面板时默认落在「最近」分组（没有记录时仍是经典）。
-  bool emojiRecentFirst = true;
 
   /// 「按 Enter 发送」当前的取值：开启时输入框里按 Enter 直接发出。
   bool enterToSendEnabled = true;
@@ -166,8 +204,6 @@ class GameStore extends ChangeNotifier {
     // 没存过就按平台默认：安卓换行、桌面回车发送。
     enterToSendEnabled = preferences.getBool(_enterToSendKey) ??
         defaultEnterToSendFor(defaultTargetPlatform);
-    // 表情面板默认落在「最近」分组（没记录时面板自己退回经典）。
-    emojiRecentFirst = preferences.getBool(_emojiRecentFirstKey) ?? true;
   }
 
   void setTypingPublicEnabled(bool value) {
@@ -195,13 +231,6 @@ class GameStore extends ChangeNotifier {
     if (enterToSendEnabled == value) return;
     enterToSendEnabled = value;
     unawaited(preferences.setBool(_enterToSendKey, value));
-    notifyListeners();
-  }
-
-  void setEmojiRecentFirst(bool value) {
-    if (emojiRecentFirst == value) return;
-    emojiRecentFirst = value;
-    unawaited(preferences.setBool(_emojiRecentFirstKey, value));
     notifyListeners();
   }
 
@@ -245,8 +274,6 @@ class GameStore extends ChangeNotifier {
   int powDifficulty = 0;
   int powAttempts = 0;
   DateTime? powStartedAt;
-
-  String? pendingPhaseKey;
 
   /// 新到的私密信息：由外壳弹一条醒目横幅后清空。
   /// 私密信息不随筛选范围丢弃，登录/刷新时的历史也不重复提醒。
@@ -336,7 +363,6 @@ class GameStore extends ChangeNotifier {
   }
 
   String? _privateStateBaseline;
-  String? _loadedPhaseKey;
   String? _ownCardBaseline;
 
   /// 上一次同步的对局状态：用来认出「候场 → 开局」这一刻（上层牌刚锁定）。
@@ -369,6 +395,8 @@ class GameStore extends ChangeNotifier {
     store.roles = roles;
     store.defaultCodex = defaultCodex;
     store.lobbyGame = lobbyGame;
+    store._animationGameId = gameId;
+    store._seenAnimationMessages.addAll(store.messages.map((message) => message.id));
     store.restoring = false;
     return store;
   }
@@ -988,6 +1016,7 @@ class GameStore extends ChangeNotifier {
     if (api == null) return;
     // 换局要重新确认进入管理界面：上一局的确认不能带到这一局。
     if (gameId != id) {
+      _resetGameAnimations();
       hostAdminEntered = false;
       hostAdminNotice = null;
       // 上一局的标记与教程也不属于这一局。
@@ -1137,6 +1166,7 @@ class GameStore extends ChangeNotifier {
   /// 从已终止的对局返回主界面：断开本局的只读视图与实时连接，回到大厅。
   /// 不改动服务器上的参与身份与记录，主持人建下一局时由服务器统一清空。
   Future<void> returnToLobby() async {
+    _resetGameAnimations();
     await live?.stop();
     live = null;
     // 离开对局即清掉本机残留：草稿是明文（Windows 上还在漫游目录），
@@ -1173,7 +1203,6 @@ class GameStore extends ChangeNotifier {
     unreadMentionCount = 0;
     _mentionedMessageIds.clear();
     _seenMentionMessages.clear();
-    pendingPhaseKey = null;
     pendingPrivateInfo = null;
     _privateInfoCursor = null;
     _actionBaseline = null;
@@ -1181,7 +1210,6 @@ class GameStore extends ChangeNotifier {
     _pendingActionTutorials.clear();
     _viewedActionTutorialIds.clear();
     _privateStateBaseline = null;
-    _loadedPhaseKey = null;
     pendingRoleId = null;
     pendingRoleIntroOpening = false;
     _ownCardBaseline = null;
@@ -1269,6 +1297,8 @@ class GameStore extends ChangeNotifier {
           _applyView(incoming);
         case 'message':
           final message = GameMessage.fromJson(event['message']);
+          if (message.raw['game_id'] != gameId || gameId == null) return;
+          _noteGameAnimation(message);
           // 自己的发言本地已合并且已读，不该再加未读角标。
           if (message.recalled) {
             if (_mentionedMessageIds.remove(message.id)) unreadMentionCount--;
@@ -1313,6 +1343,7 @@ class GameStore extends ChangeNotifier {
   void _applyView(GameView next, {bool recovering = false}) {
     // 换局（或本进程第一次看到这一局）：上一局「稍后」掉的对话框不该压住新局的内容。
     if (view != null && view!.id != next.id) {
+      _resetGameAnimations();
       _dismissedDialogs.clear();
       // 输入状态属于上一局的频道，换局即清空，别把旧局的「正在输入」带进新局。
       _clearTyping();
@@ -1424,24 +1455,6 @@ class GameStore extends ChangeNotifier {
           }
         }
       }
-    }
-
-    final phaseKey = '${next.id}:${next.day}:${next.half}:${next.phase}';
-    final phasePreference = _preferenceKey('phase_seen');
-    final seenPhase = preferences.getString(phasePreference);
-    if (next.status == 'ended') {
-      // 落幕不是新阶段：不再弹出阶段动画，也不留下待确认的阶段性提醒。
-      _loadedPhaseKey = phaseKey;
-      pendingPhaseKey = null;
-      preferences.setString(phasePreference, phaseKey);
-    } else if (seenPhase == null || _loadedPhaseKey == null) {
-      // 首次同步或重连：只建立基线，不把当前阶段当成刚发生的变化。
-      _loadedPhaseKey = phaseKey;
-      if (seenPhase != phaseKey) {
-        preferences.setString(phasePreference, phaseKey);
-      }
-    } else if (seenPhase != phaseKey && pendingPhaseKey != phaseKey) {
-      pendingPhaseKey = phaseKey;
     }
 
     view = next;
@@ -1566,14 +1579,6 @@ class GameStore extends ChangeNotifier {
     pendingMarksTutorial = true;
   }
 
-  Future<void> acknowledgePhase() async {
-    final key = pendingPhaseKey;
-    if (key == null) return;
-    await preferences.setString(_preferenceKey('phase_seen'), key);
-    pendingPhaseKey = null;
-    notifyListeners();
-  }
-
   Future<void> markActionsViewed() async {
     final keys = view?.allActions.map((item) => item.protocolKey).toSet() ?? {};
     _actionBaseline = keys;
@@ -1694,6 +1699,11 @@ class GameStore extends ChangeNotifier {
   /// 所有新到消息的统一入口：记私密信息横幅，并认一下夜终公告。
   /// 三个入口（首次取历史、重连补齐、实时单条）都走这里，筛选范围不影响判定。
   void _noteIncoming(Iterable<GameMessage> incoming) {
+    if (_animationGameId != gameId) {
+      _animationGameId = gameId;
+      _seenAnimationMessages.clear();
+    }
+    _seenAnimationMessages.addAll(incoming.map((message) => message.id));
     _notePrivateInfo(incoming);
     _noteNightReports(incoming);
   }
@@ -1902,15 +1912,35 @@ class GameStore extends ChangeNotifier {
     live!.sendTyping(channelId);
   }
 
+  static final _stickerHash = RegExp(r'^[0-9a-f]{32}$');
+
+  Future<void> sendSticker(String md5) async {
+    if (!_stickerHash.hasMatch(md5)) {
+      throw const ApiException('表情 MD5 不合法');
+    }
+    if (api == null || gameId == null || writeBusy ||
+        selectedChannel?.canSend != true) {
+      throw const ApiException('当前无法发送表情');
+    }
+    await _sendMessage('', stickerMd5: md5);
+  }
+
   Future<void> sendMessage(String text,
-      {String? image, List<ChatReference> references = const []}) async {
+      {String? image, List<ChatReference> references = const []}) =>
+      _sendMessage(text, image: image, references: references);
+
+  Future<void> _sendMessage(String text,
+      {String? image, String? stickerMd5,
+      List<ChatReference> references = const []}) async {
     final id = gameId;
     if (api == null ||
         id == null ||
         writeBusy ||
-        (text.trim().isEmpty && image == null)) {
+        (text.trim().isEmpty && image == null && stickerMd5 == null)) {
       return;
     }
+    final channelId = activeChannelId;
+    final asSeat = puppetSeatId;
     writeBusy = true;
     error = null;
     notifyListeners();
@@ -1922,8 +1952,9 @@ class GameStore extends ChangeNotifier {
           ref.shifted(-prefix),
     ];
     try {
-      final message = await api!.sendMessage(id, activeChannelId, trimmed,
-          asSeat: puppetSeatId, image: image, references: adjusted);
+      final message = await api!.sendMessage(id, channelId, trimmed,
+          asSeat: asSeat, image: image, stickerMd5: stickerMd5,
+          references: adjusted);
       _mergeMessages([message]);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -2102,6 +2133,7 @@ class GameStore extends ChangeNotifier {
       '${endpoint ?? ''}:${gameId ?? ''}:${actor?.accountId ?? ''}:$suffix';
 
   Future<void> logout() async {
+    _resetGameAnimations();
     _challengeGeneration++;
     try {
       await api?.logout();
@@ -2162,6 +2194,7 @@ class GameStore extends ChangeNotifier {
   }
 
   Future<void> _clearSession() async {
+    _resetGameAnimations();
     await live?.stop();
     live = null;
     api?.token = null;
@@ -2189,15 +2222,12 @@ class GameStore extends ChangeNotifier {
     _pendingActionTutorials.clear();
     _viewedActionTutorialIds.clear();
     _privateStateBaseline = null;
-    _loadedPhaseKey = null;
     pendingRoleId = null;
     pendingRoleIntroOpening = false;
     _ownCardBaseline = null;
     _statusBaseline = null;
     _inviteBaseline = null;
-    // 登出后 1.45 秒内重登不该凭空重播旧对局的阶段动画，
-    // 角标计数也不该带着旧对局的残留进入新会话。
-    pendingPhaseKey = null;
+    // Counters must not carry the previous game's unread state into a new session.
     pendingPrivateInfo = null;
     _privateInfoCursor = null;
     newActionCount = 0;
@@ -2229,6 +2259,8 @@ class GameStore extends ChangeNotifier {
 
   @override
   void dispose() {
+    _resetGameAnimations();
+    gameAnimation.dispose();
     _challengeGeneration++;
     _clearTyping();
     live?.stop();

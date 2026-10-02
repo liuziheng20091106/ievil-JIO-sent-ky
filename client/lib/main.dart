@@ -9,6 +9,7 @@ import 'src/achievement_pages.dart';
 import 'src/announcement_pages.dart';
 import 'src/client_version.dart';
 import 'src/design.dart';
+import 'src/game_animation_overlay.dart';
 import 'src/emoji_picker.dart';
 import 'src/history_pages.dart';
 import 'src/host_pages.dart';
@@ -17,6 +18,8 @@ import 'src/picks.dart';
 import 'src/pow_progress.dart';
 import 'src/predictive_sheet.dart';
 import 'src/release.dart';
+import 'src/resource_pack_dialog.dart';
+import 'src/resource_packs.dart';
 import 'src/role_visuals.dart';
 import 'src/shell.dart';
 import 'src/store.dart';
@@ -56,10 +59,12 @@ Future<void> main() async {
 }
 
 class SevenDoubleApp extends StatelessWidget {
-  const SevenDoubleApp({super.key, required this.store, required this.release});
+  const SevenDoubleApp({super.key, required this.store, required this.release,
+    this.resources});
 
   final GameStore store;
   final ReleaseMonitor release;
+  final ResourcePacks? resources;
 
   @override
   Widget build(BuildContext context) => SheetVsyncHost(
@@ -72,20 +77,26 @@ class SevenDoubleApp extends StatelessWidget {
           darkTheme: buildAppTheme(Brightness.dark),
           themeMode: ThemeMode.system,
           navigatorObservers: [PredictiveSheetBack.instance.routeObserver],
+          builder: (context, child) => Stack(children: [
+            Positioned.fill(child: child ?? const SizedBox.shrink()),
+            GameAnimationOverlay(store: store, resources: resources),
+          ]),
           home: AnimatedBuilder(
             animation: store,
-            builder: (context, _) => AppGate(store: store, release: release),
+            builder: (context, _) => AppGate(store: store, release: release,
+                resources: resources),
           ),
         ),
       );
 }
 
 class AppGate extends StatelessWidget {
-  const AppGate({super.key, required this.store, this.release});
+  const AppGate({super.key, required this.store, this.release, this.resources});
 
   final GameStore store;
   // 测试与预览不传：没有发布监控时直接渲染页面本身。
   final ReleaseMonitor? release;
+  final ResourcePacks? resources;
 
   /// 更新提示出现在「已连上服务器、还没进对局」的所有页面：协议门、登录页与大厅。
   /// 登录页是最该提示的位置——版本过旧时用户第一眼就该看到，而不是等登录进大厅
@@ -238,7 +249,12 @@ class AppGate extends StatelessWidget {
         ),
       );
     }
-    return GameShell(store: store);
+    final api = store.api;
+    final game = GameShell(key: ValueKey(store.gameId), store: store,
+        resources: resources);
+    if (api == null) return game;
+    return ResourcePackEntry(api: api, gameId: store.gameId!,
+        resources: resources, child: game);
   }
 }
 
@@ -679,6 +695,7 @@ class _LobbyPageState extends State<LobbyPage> {
   List<String>? codex;
   Timer? _ticker;
   bool _ticking = false;
+  bool _resourceDialogOpen = false;
 
   /// 强制更新时只自动弹一次更新弹窗（弹窗可以关掉，大厅里的入口一直在）。
   bool _mandatoryPrompted = false;
@@ -695,6 +712,17 @@ class _LobbyPageState extends State<LobbyPage> {
   void dispose() {
     _ticker?.cancel();
     super.dispose();
+  }
+
+  Future<void> _openResources() async {
+    final api = widget.store.api;
+    if (api == null || _resourceDialogOpen) return;
+    _resourceDialogOpen = true;
+    try {
+      await showResourcePackDialog(context, api: api);
+    } finally {
+      _resourceDialogOpen = false;
+    }
   }
 
   Future<void> _tick() async {
@@ -771,6 +799,11 @@ class _LobbyPageState extends State<LobbyPage> {
       appBar: AppBar(
         title: const Text('大厅'),
         actions: [
+          IconButton(
+            tooltip: '资源包',
+            onPressed: store.api == null ? null : _openResources,
+            icon: const Icon(Icons.download_outlined),
+          ),
           IconButton(
             onPressed: store.logout,
             tooltip: '退出登录',

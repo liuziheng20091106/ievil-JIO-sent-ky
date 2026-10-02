@@ -5,6 +5,7 @@ from copy import deepcopy
 from random import SystemRandom
 from uuid import uuid4
 
+from .animations import skill_animation_snapshot
 from .catalog import DAY_ABILITIES, NIGHT_ABILITIES, ROLES
 from .roles import emma
 
@@ -318,6 +319,7 @@ def passive_card_payload(game, key, effect, seat_id=None, public=False):
         "ability": key,
         "ability_name": ability_name,
         "role_id": role_id,
+        "_animation": skill_animation_snapshot(role_id, key, ability_name, card["witch"]),
         "role_name": ROLES.get(role_id, {}).get("name", role_id),
         "intro": intro,
         "effect": effect,

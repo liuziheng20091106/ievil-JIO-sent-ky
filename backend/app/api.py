@@ -20,6 +20,7 @@ from . import (
     history_storage,
     pow_guard,
     realtime,
+    resource_packs,
     schemas,
     storage,
     views,
@@ -1403,6 +1404,14 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                     if target and target["active"] and not target["blocked"]:
                         mention_ids.append(target_id)
             references_payload = chat_references(db, game_id, body.text, body.references)
+            if body.sticker_md5 is not None:
+                try:
+                    manifest = resource_packs.load_manifest(resource_packs.RESOURCES_DIR, "memes")
+                except (OSError, resource_packs.ManifestError) as error:
+                    raise HTTPException(503, "表情资源清单不可用，请联系管理员") from error
+                if not any(item["md5"] == body.sticker_md5 for item in manifest["files"]):
+                    raise HTTPException(422, "表情不在当前发布的资源包中")
+                references_payload = {"type": "sticker", "md5": body.sticker_md5}
             if body.image is not None:
                 _, image = evidence.decode_image(body.image)
                 if len(image) > 100 * 1024:

@@ -23,12 +23,15 @@ import 'participant_menu.dart';
 import 'picks.dart';
 import 'player_marks.dart';
 import 'predictive_sheet.dart';
+import 'resource_pack_dialog.dart';
+import 'resource_packs.dart';
 import 'role_visuals.dart';
 import 'store.dart';
 
 class GameShell extends StatefulWidget {
-  const GameShell({super.key, required this.store});
+  const GameShell({super.key, required this.store, this.resources});
   final GameStore store;
+  final ResourcePacks? resources;
 
   @override
   State<GameShell> createState() => _GameShellState();
@@ -41,6 +44,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   int lastWarnings = 0;
   bool _showingActionTutorial = false;
   int lastMentions = 0;
+  bool _resourceDialogOpen = false;
+  int _resourceRefresh = 0;
 
   /// 已经按当前宽屏档位登记过「已查看」的页面；0 表示窄屏单页布局。
   /// 只在档位变化时登记一次，避免每帧写偏好引起重复重建。
@@ -56,6 +61,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    widget.store.activateGameAnimations(this, widget.store.gameId!);
     WidgetsBinding.instance.addObserver(this);
     lastActions = widget.store.newActionCount;
     lastWarnings = widget.store.warningCount;
@@ -74,10 +80,35 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    widget.store.deactivateGameAnimations(this);
     widget.store.removeListener(onStoreChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
+
+  @override
+  void didUpdateWidget(covariant GameShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store) {
+      oldWidget.store.deactivateGameAnimations(this);
+      widget.store.activateGameAnimations(this, widget.store.gameId!);
+      oldWidget.store.removeListener(onStoreChanged);
+      widget.store.addListener(onStoreChanged);
+    }
+  }
+
+  Future<void> _openResources() async {
+    final api = widget.store.api;
+    if (api == null || _resourceDialogOpen) return;
+    _resourceDialogOpen = true;
+    try {
+      await showResourcePackDialog(context, api: api, resources: widget.resources);
+    } finally {
+      _resourceDialogOpen = false;
+      if (mounted) setState(() => _resourceRefresh++);
+    }
+  }
+
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) => lifecycle = state;
@@ -201,7 +232,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           ];
     final counts = [
       store.unreadMessageCount + store.newActionCount + store.warningCount,
-      store.pendingPhaseKey == null ? 0 : 1,
+      0,
       host ? store.newActionCount : store.privateStateCount,
     ];
     final urgent = store.warningCount > 0 || store.newActionCount > 0;
@@ -224,6 +255,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                 : AppSpacing.bottomBar;
         final chat = ChatActionPage(
           store: store,
+          resources: widget.resources,
+          resourceRefresh: _resourceRefresh,
           bottomInset: inset,
           typing: focusTyping,
           onComposerExpanded: (open) {
@@ -262,6 +295,11 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                     ],
                   ),
                   actions: [
+                    IconButton(
+                      tooltip: '资源包',
+                      onPressed: store.api == null ? null : () => _openResources(),
+                      icon: const Icon(Icons.download_outlined),
+                    ),
                     if (ended)
                       Padding(
                         padding: const EdgeInsets.only(right: AppSpacing.sm),
@@ -408,9 +446,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                         child: IndexedStack(
                             index: index, children: [chat, board, third]),
                       ),
-                    // 键盘聚焦时不弹阶段动画：它盖满整屏，会挡住正在输入的内容。
-                    if (!focusTyping && store.pendingPhaseKey != null)
-                      PhaseOverlay(store: store),
                     // 悬浮对话框：重要内容与及时交互（同意/拒绝私信、目击名单、对局结束）。
                     // 键盘弹出时让位，否则会盖在正在输入的内容上。
                     if (!focusTyping && dialogs.isNotEmpty)
@@ -620,95 +655,6 @@ Future<void> confirmLogout(BuildContext context, GameStore store) async {
   if (confirmed == true) await store.logout();
 }
 
-/// 阶段变化的整屏动画；首次进入与重连不重复旧动画。
-class PhaseOverlay extends StatefulWidget {
-  const PhaseOverlay({super.key, required this.store});
-  final GameStore store;
-
-  @override
-  State<PhaseOverlay> createState() => _PhaseOverlayState();
-}
-
-class _PhaseOverlayState extends State<PhaseOverlay> {
-  bool shown = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() => shown = true);
-      Future<void>.delayed(const Duration(milliseconds: 1450), () {
-        if (mounted) widget.store.acknowledgePhase();
-      });
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final view = widget.store.view!;
-    final night = view.half == 'night';
-    return Positioned.fill(
-      child: AnimatedOpacity(
-        opacity: shown ? 1 : 0,
-        duration: reduceMotion ? Duration.zero : Duration(milliseconds: 260),
-        child: ColoredBox(
-          color: context.palette.surface,
-          child: Center(
-            child: AnimatedScale(
-              scale: shown ? 1 : .92,
-              duration:
-                  reduceMotion ? Duration.zero : Duration(milliseconds: 340),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 88,
-                    height: 88,
-                    decoration: BoxDecoration(
-                      color: night
-                          ? context.palette.accentSoft
-                          : context.palette.hostSoft,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      night ? Icons.nightlight_round : Icons.wb_sunny_outlined,
-                      size: 40,
-                      color:
-                          night ? context.palette.accent : context.palette.host,
-                    ),
-                  ),
-                  SizedBox(height: AppSpacing.xl),
-                  Text(
-                    '第 ${view.day} 日',
-                    style: TextStyle(
-                        fontSize: 15, color: context.palette.textTertiary),
-                  ),
-                  SizedBox(height: AppSpacing.sm),
-                  Text(
-                    view.phaseLabel,
-                    style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w700,
-                        color: context.palette.text),
-                  ),
-                  SizedBox(height: AppSpacing.sm),
-                  Text(
-                    night ? '夜间' : '白天',
-                    style: TextStyle(
-                        fontSize: 14, color: context.palette.textSecondary),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 对局页：上方消息、下方输入与行动入口。
 class ChatActionPage extends StatefulWidget {
   const ChatActionPage({
@@ -717,8 +663,12 @@ class ChatActionPage extends StatefulWidget {
     this.bottomInset = AppSpacing.bottomBar,
     this.typing = false,
     this.onComposerExpanded,
+    this.resources,
+    this.resourceRefresh = 0,
   });
   final GameStore store;
+  final ResourcePacks? resources;
+  final int resourceRefresh;
 
   /// 底部为悬浮底栏预留的高度；宽屏没有底栏，由外壳传入更小的值。
   final double bottomInset;
@@ -763,6 +713,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
   bool _pickingMention = false;
   bool _pickingEvidence = false;
   bool _pickingImage = false;
+  ResourcePacks? _resources;
   final List<ChatReference> editingReferences = [];
   final Map<(String?, String?, String?, String),
       (TextEditingValue, List<ChatReference>)> _drafts = {};
@@ -854,12 +805,32 @@ class _ChatActionPageState extends State<ChatActionPage> {
   void initState() {
     super.initState();
     _draftKey = _currentDraftKey;
+    _resources = widget.resources;
+    if (_resources == null && widget.store.api != null) {
+      unawaited(_loadResources());
+    }
     message.addListener(_trackEdits);
     widget.store.addListener(onStore);
     message.addListener(reportTyping);
     lastCount = widget.store.messages.length;
     // 滚到哪变了，「下方还压着几条」就跟着变：滚完在帧末补量一次。
     scroll.addListener(_scheduleJumpCheck);
+  }
+
+  @override
+  void didUpdateWidget(ChatActionPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.resources != widget.resources) {
+      _resources = widget.resources;
+      if (_resources == null && widget.store.api != null) {
+        unawaited(_loadResources());
+      }
+    }
+    if (oldWidget.resourceRefresh != widget.resourceRefresh && _resources != null) {
+      final cache = _resources!;
+      _resources = ResourcePacks(api: cache.api,
+          supportDirectory: cache.supportDirectory);
+    }
   }
 
   @override
@@ -873,6 +844,17 @@ class _ChatActionPageState extends State<ChatActionPage> {
     keys.dispose();
     composerFocus.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadResources() async {
+    try {
+      final resources = await ResourcePacks.create(widget.store.api!);
+      if (mounted && _resources == null && widget.resources == null) {
+        setState(() => _resources = resources);
+      }
+    } catch (_) {
+      // 无可读应用缓存时仍保留 QQ 表情。
+    }
   }
 
   /// 输入框文本变化（含表情面板插入）即上报输入状态：清空或发送后自动补停止。
@@ -1201,6 +1183,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
                     .map((seat) => seat['participant_id']?.toString())
                     .firstOrNull,
             store: store,
+            resources: _resources,
             onAvatar: (senderId) {
               final ref = participantRefFor(store, senderId);
               if (ref != null) showAvatarMenu(context, store, ref);
@@ -1381,6 +1364,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
     final store = widget.store;
     final typing = widget.typing;
     final channel = store.selectedChannel;
+    final draftTarget = _currentDraftKey;
     final body = Column(
       children: [
         // 键盘打开后页内只留输入区：筛选、阶段进度、主持人快捷工具、傀儡面板与
@@ -1467,6 +1451,9 @@ class _ChatActionPageState extends State<ChatActionPage> {
           emojiOpen: emojiOpen,
           onToggleEmoji: () => setEmojiOpen(!emojiOpen),
           onPickEmoji: (face) => message.insertFace(face),
+          resources: _resources,
+          emojiKey: ValueKey(draftTarget),
+          onPickMeme: (md5) => sendSticker(md5, draftTarget),
           onCloseEmoji: () => setEmojiOpen(false),
           onTapField: () => setEmojiOpen(false),
           onSend: send,
@@ -1502,6 +1489,22 @@ class _ChatActionPageState extends State<ChatActionPage> {
     setState(() => emojiOpen = open);
     widget.onComposerExpanded?.call(open);
     if (open) FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  Future<void> sendSticker(
+      String md5, (String?, String?, String?, String) target) async {
+    if (!mounted || target != _currentDraftKey) {
+      throw const ApiException('发送目标已变化，请重新选择表情');
+    }
+    try {
+      await widget.store.sendSticker(md5);
+    } on ApiException catch (failure) {
+      if (mounted) setState(() => sendError = failure.message);
+      rethrow;
+    } on FormatException catch (failure) {
+      if (mounted) setState(() => sendError = failure.message);
+      rethrow;
+    }
   }
 
   Future<void> pickImage() async {
@@ -1703,6 +1706,9 @@ class _Composer extends StatelessWidget {
     required this.emojiOpen,
     required this.onToggleEmoji,
     required this.onPickEmoji,
+    required this.resources,
+    required this.emojiKey,
+    required this.onPickMeme,
     required this.onCloseEmoji,
     required this.onTapField,
     required this.onSend,
@@ -1728,6 +1734,9 @@ class _Composer extends StatelessWidget {
   final bool emojiOpen;
   final VoidCallback onToggleEmoji;
   final ValueChanged<EmojiFace> onPickEmoji;
+  final ResourcePacks? resources;
+  final Key emojiKey;
+  final Future<void> Function(String md5) onPickMeme;
 
   /// 返回键收起表情面板：由 [EmojiPanelScope] 在面板打开期间调用。
   final VoidCallback onCloseEmoji;
@@ -1914,9 +1923,10 @@ class _Composer extends StatelessWidget {
               EmojiPanelScope(
                 onClose: onCloseEmoji,
                 child: EmojiPicker(
+                  key: emojiKey,
+                  resources: resources,
+                  onPickMeme: onPickMeme,
                   onPick: onPickEmoji,
-                  // 本机设置：默认先给最近用过的（没记录时面板自己退回经典）。
-                  recentFirst: store.emojiRecentFirst,
                   // 小屏上给消息列表留出空间：面板最高不超过屏幕的三分之一。
                   height: (MediaQuery.sizeOf(context).height * 0.32)
                       .clamp(150.0, 236.0),
@@ -2055,8 +2065,7 @@ class _SettingsButton extends StatelessWidget {
       );
 }
 
-/// 聊天设置面板：按 Enter 发送 / 公开我的输入状态 / 自动切换到可用聊天频道 /
-/// 默认打开表情最近分组。四个开关都是本机全局偏好，改动立即持久化并即时生效。
+/// 聊天设置面板：按 Enter 发送 / 公开输入状态 / 自动切换频道。
 class _ChatSettingsSheet extends StatelessWidget {
   const _ChatSettingsSheet({required this.store});
 
@@ -2101,12 +2110,6 @@ class _ChatSettingsSheet extends StatelessWidget {
                     onChanged: store.setAutoSwitchChannel,
                     title: const Text('自动切换到可用聊天频道'),
                     subtitle: const Text('当前频道不可发言时自动切到可用频道'),
-                  ),
-                  SwitchListTile(
-                    value: store.emojiRecentFirst,
-                    onChanged: store.setEmojiRecentFirst,
-                    title: const Text('默认打开最近分组'),
-                    subtitle: const Text('表情面板先显示最近用过的；没有记录时仍从经典开始'),
                   ),
                 ],
               ),
@@ -2699,17 +2702,19 @@ Future<void> openActionPicker(
 
 Future<void> _showMessageMenu(BuildContext context, GameMessage message,
     bool mine, GameStore? store) async {
+  if (!mine && message.text.isEmpty) return;
   final choice = await showPredictiveSheet<String>(
     context: context,
     useSafeArea: true,
     builder: (sheet) => SafeArea(
       top: false,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        ListTile(
-          leading: const Icon(Icons.copy_outlined),
-          title: const Text('复制'),
-          onTap: () => Navigator.of(sheet).pop('copy'),
-        ),
+        if (message.text.isNotEmpty)
+          ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('复制'),
+            onTap: () => Navigator.of(sheet).pop('copy'),
+          ),
         if (mine && store != null)
           ListTile(
             leading: const Icon(Icons.undo_outlined),
@@ -2826,6 +2831,54 @@ List<InlineSpan> _chatSpans(String text, Color mentionColor) {
   return spans;
 }
 
+class _StickerImage extends StatefulWidget {
+  const _StickerImage({required this.md5, required this.resources});
+  final String md5;
+  final ResourcePacks? resources;
+
+  @override
+  State<_StickerImage> createState() => _StickerImageState();
+}
+
+class _StickerImageState extends State<_StickerImage> {
+  late Future<File?> file = _load();
+  Future<File?> _load() => widget.resources?.cachedMeme(widget.md5) ??
+      Future<File?>.value();
+
+  @override
+  void didUpdateWidget(_StickerImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.md5 != widget.md5 || oldWidget.resources != widget.resources) {
+      file = _load();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final edge = MediaQuery.sizeOf(context).width < 600 ? 128.0 : 160.0;
+    final decodeEdge = (edge * MediaQuery.devicePixelRatioOf(context)).round();
+    Widget placeholder() => Semantics(
+      label: '表情资源未下载或不可用',
+      child: const Center(child: Icon(Icons.image_not_supported_outlined)),
+    );
+    return SizedBox(
+      width: edge, height: edge,
+      child: FutureBuilder<File?>(
+        future: file,
+        builder: (context, snapshot) => snapshot.data == null
+            ? placeholder()
+            : Image(
+                image: ResizeImage(FileImage(snapshot.data!),
+                    width: decodeEdge, height: decodeEdge,
+                    policy: ResizeImagePolicy.fit),
+                fit: BoxFit.contain,
+                semanticLabel: '聊天表情',
+                errorBuilder: (_, __, ___) => placeholder()),
+      ),
+    );
+  }
+}
+
 /// 消息气泡：自己靠右、他人靠左、系统居中。
 /// 点击头像打开该发送者的快捷菜单（看技能、私信、主持人管理）。
 class MessageBubble extends StatelessWidget {
@@ -2834,6 +2887,7 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     this.self,
     this.store,
+    this.resources,
     this.onAvatar,
     this.onAvatarLongPress,
   });
@@ -2841,6 +2895,7 @@ class MessageBubble extends StatelessWidget {
   final GameMessage message;
   final String? self;
   final GameStore? store;
+  final ResourcePacks? resources;
   final ValueChanged<String?>? onAvatar;
 
   /// 长按头像或昵称：快速标记该玩家。
@@ -3058,6 +3113,13 @@ class MessageBubble extends StatelessWidget {
                                     ? context.palette.onAccent
                                     : context.palette.text),
                           ),
+                        ),
+                      if (!message.recalled && message.stickerMd5 != null)
+                        GestureDetector(
+                          onLongPress: () =>
+                              _showMessageMenu(context, message, mine, store),
+                          child: _StickerImage(
+                            md5: message.stickerMd5!, resources: resources),
                         ),
                       if (!message.recalled && message.image != null)
                         GestureDetector(

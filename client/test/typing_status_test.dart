@@ -166,6 +166,7 @@ void main() {
         'type': 'message',
         'message': {
           'id': 5,
+          'game_id': store.gameId,
           'kind': 'chat',
           'channel_id': 'public',
           'sender_id': 'p2',

@@ -219,6 +219,7 @@ void main() {
     };
     Map<String, dynamic> chat(int id, String sender, String text) => {
           'id': id,
+          'game_id': 'game-1',
           'kind': 'chat',
           'text': text,
           'sender_id': sender,
@@ -229,6 +230,7 @@ void main() {
             {int day = 1}) =>
         {
           'id': id,
+          'game_id': 'game-1',
           'kind': 'speech_turn',
           'text': '$seat号开始顺序发言。',
           'sender_id': 'host',
@@ -607,6 +609,7 @@ void main() {
       'type': 'message',
       'message': {
         'id': 10,
+        'game_id': store.gameId,
         'kind': 'chat',
         'text': '@1号 快看',
         'channel_id': 'public',
@@ -622,6 +625,7 @@ void main() {
       'type': 'message',
       'message': {
         'id': 10,
+        'game_id': store.gameId,
         'kind': 'chat',
         'text': '',
         'recalled': true,

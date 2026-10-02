@@ -921,6 +921,9 @@ void main() {
       expect(find.byType(MessageBubble), findsWidgets, reason: '消息列表仍在');
       expect(find.text('公开讨论'), findsOneWidget, reason: '发送频道入口属于输入区');
 
+      await tester.tap(find.descendant(
+          of: find.byType(EmojiPicker), matching: find.byIcon(Icons.search)));
+      await tester.pump();
       await tester.enterText(
         find.descendant(
           of: find.byType(EmojiPicker),
@@ -929,10 +932,8 @@ void main() {
         '微笑',
       );
       await tester.pump();
-      await tester.tap(find.descendant(
-        of: find.byType(GridView),
-        matching: find.byType(InkWell),
-      ));
+      await tester.ensureVisible(find.byKey(const ValueKey('all:14')));
+      await tester.tap(find.byKey(const ValueKey('all:14')));
       await tester.pump();
       expect(find.text('[/微笑]'), findsOneWidget);
       // 富文本输入的实证：输入框内部把这个 token 真的画成了表情图，
@@ -981,6 +982,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(EmojiPicker), findsOneWidget);
 
+    await tester.tap(find.descendant(
+        of: find.byType(EmojiPicker), matching: find.byIcon(Icons.search)));
+    await tester.pump();
     await tester.enterText(
       find.descendant(
         of: find.byType(EmojiPicker),
@@ -989,10 +993,19 @@ void main() {
       '微笑',
     );
     await tester.pump();
-    await tester.tap(find.descendant(
-      of: find.byType(GridView),
-      matching: find.byType(InkWell),
-    ));
+    await tester.dragUntilVisible(
+      find.byKey(const ValueKey('all:14')),
+      find.descendant(
+          of: find.byType(EmojiPicker),
+          matching: find.byType(CustomScrollView)),
+      const Offset(0, -80),
+    );
+    await Scrollable.ensureVisible(
+      tester.element(find.byKey(const ValueKey('all:14'))),
+      alignment: 0.5,
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('all:14')));
     await tester.pump();
 
     final field = tester.widget<TextFormField>(find.byType(TextFormField));

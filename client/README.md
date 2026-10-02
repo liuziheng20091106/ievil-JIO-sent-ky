@@ -16,9 +16,9 @@ flutter build windows --debug
 
 安卓后台保活：应用启动后拉起前台服务（`KeepAliveService`，常驻低优先级通知 + PARTIAL 唤醒锁）维持 WebSocket 心跳；首次连接服务器后若未加入「忽略电池优化」白名单，大厅顶部横幅可一键跳转授权，也可以点「忽略」不再提示（记在 `shared_preferences`）。
 
-版本检查与应用内更新：所有请求都带 `seven-double-flutter/<版本> (<平台>)` 的 UA（完整发行版本唯一源码是 `lib/src/client_version.dart` 的 `kClientVersion`，当前为 `1.1.0`）。从 1.1.0 起正常补丁发版只改该常量；`pubspec.yaml` 固定 `version: 1.1.0+1`，仅跨 `x.y` 系列才改 `x.y`，`+1` 不动。连接服务器后读 `/api/health` 下发的 `client_latest` / `client_minimum` 与 `update` 详情；大厅每 5 秒轮询 `/api/online`，它回一句「有没有更新」，说有更新时客户端再请求一次 `/api/health` 取版本字段与更新日志（同一服务地址、同一 latest 标签 10 分钟内只查一次）。低于 latest 提示可更新、低于 minimum 强制更新（强制更新时不提供「稍后」，且服务端会拒绝以玩家身份入局，其它功能不受限）。 Flutter 要求三段合法 SemVer，跨系列使用 x.y.0+1；这是固定包基线，并非跟随补丁发行版本同步。
+版本检查与应用内更新：所有请求都带 `seven-double-flutter/<版本> (<平台>)` 的 UA（完整发行版本唯一源码是 `lib/src/client_version.dart` 的 `kClientVersion`，当前为 `1.1.1`）。从 1.1.0 起正常补丁发版只改该常量；`pubspec.yaml` 固定 `version: 1.1.0+1`，仅跨 `x.y` 系列才改 `x.y`，`+1` 不动。连接服务器后读 `/api/health` 下发的 `client_latest` / `client_minimum` 与 `update` 详情；大厅每 5 秒轮询 `/api/online`，它回一句「有没有更新」，说有更新时客户端再请求一次 `/api/health` 取版本字段与更新日志（同一服务地址、同一 latest 标签 10 分钟内只查一次）。低于 latest 提示可更新、低于 minimum 强制更新（强制更新时不提供「稍后」，且服务端会拒绝以玩家身份入局，其它功能不受限）。 Flutter 要求三段合法 SemVer，跨系列使用 x.y.0+1；这是固定包基线，并非跟随补丁发行版本同步。
 
-APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`；Windows runner 系统文件版本同样来自固定包基线。客户端 UA、更新比较、发布清单 `latest`、三条上传对象键与 `Updater.exe --version` 使用完整 `kClientVersion`。更新器 CMake 从 Dart 常量读取版本，将该文件登记到 `CMAKE_CONFIGURE_DEPENDS`，版本宏保持 source scoped；不使用 `--build-name` / `--build-number` 补丁同步，也不做 `flutter clean`，改变 Dart 常量仍正常重编 Dart AOT。本地输出名不变，上传名为「原 stem-完整发行版本.扩展名」（如 `app-release-1.1.0.apk`）。本次仅迁移版本来源，不发布、不改 `data/` 的线上配置。
+APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`；Windows runner 系统文件版本同样来自固定包基线。客户端 UA、更新比较、发布清单 `latest`、三条上传对象键与 `Updater.exe --version` 使用完整 `kClientVersion`。更新器 CMake 从 Dart 常量读取版本，将该文件登记到 `CMAKE_CONFIGURE_DEPENDS`，版本宏保持 source scoped；不使用 `--build-name` / `--build-number` 补丁同步，也不做 `flutter clean`，改变 Dart 常量仍正常重编 Dart AOT。本地输出名不变，上传名为「原 stem-完整发行版本.扩展名」（如 `app-release-1.1.0.apk`）。1.1.0 的版本来源迁移已完成；正式发行按 `docs/客户端编译发行手册.md` 执行。
 
 更新弹窗渲染服务端下发的 Markdown 更新日志，`guide_url` 非空时多一个「打开网页」按钮（打不开就把链接复制到剪切板）。「更新」按钮在更新完成或用户主动关掉弹窗前始终可见——大厅里另有一个常驻的「立即更新」入口，关掉横幅或弹窗都不会让它消失。横幅可以点「知道了」关掉，记的是被关掉的 latest 标签，服务端下发更新的版本才会重新提示。
 
@@ -28,6 +28,13 @@ APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`
 首次连接某个服务地址时会展示服务端下发的用户协议（`/api/agreement`，Markdown），用户可选「同意并继续」或「取消连接」；同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过会重新询问，服务端没配协议则直接进入登录页。协议正文的仓库副本见 `docs/免责声明与用户协议.md`（部署时复制成服务端的 `data/agreement.md`）。
 
 服务地址默认预填 `https://super.tkcloud.online:447`，可以随意修改（不自动连接）。
+
+独立资源包：`animation`（游戏动画素材）与 `memes`（表情素材）由后端分发，不打进安装包。客户端每次进入对局界面前检查版本，有差异时先询问是否下载或更新，两包可以独立选择；选择继续后才显示对局界面，跳过、取消或失败均不阻止对局。恢复登录与换局同样先检查，普通刷新与断线重连不重复询问。大厅和对局标题栏的“资源包”入口支持手动重新检查、下载进度与失败重试。
+
+缓存位于应用数据目录的 `resources/`，资源文件直接以 MD5 命名，不按服务器或包名分目录。`animation.json`、`memes.json` 各自记录原始路径与 MD5，相同内容跨路径与跨包只保存一份；增量下载先验证已有文件，新增内容大小和 MD5 通过后才替换所选包的映射。更新后按服务器两包清单的并集删除未引用文件，不保留服务器已移除的旧资源；另一包可以不下载，但清理必须取得它的清单，网络或清单故障时停止清理并报告。服务端添加、替换或删除素材后运行 `.venv\Scripts\python.exe -X utf8 tools\update-resource-manifests.py`，两包各自的 `manifest.json` 即时生效；单包可加 `--pack animation` 或 `--pack memes`。MD5 用于完整性判断，不替代 HTTPS。
+资源缓存的符号链接校验从系统提供的应用支持目录开始，允许 Android 等系统在该目录上层使用路径别名；应用内的 resources 目录、临时下载目录、清单与 MD5 文件仍拒绝符号链接，不读取或写入缓存之外的文件。
+
+动画播放器采用 `lottie` 3.6.1 的纯 Dart 引擎，资源管理里的“预览动画”可选择已下载的脚本全屏播放、暂停和重播。首次接入播放器需更新一次 App，后续更换 `animation/scripts/*.json` 与包内图片后刷新清单即可更新动画，不再更新 App。同一播放器支持不同 Lottie 样式，不执行下发 JavaScript，不支持直接播放 AEP 或 AE 的任意插件。`AnimationPlayer(resources: ..., scriptPath: ...)` 只读取已校验的 MD5 缓存；图片必须在 animation 包已安装清单中，缺失或损坏时手动预览显示错误，实时效果直接跳过，绝不偷偷下载外链。对局所有主动/被动技能展示框由后端附带默认横幅脚本、当前收件人可见的角色图和文字；魔女本人及已确认主持拿 EX＋魔女，其他获准收件人只拿普通版，私密技能不向他人下发。顺序发言每位发言人起点播放审问开始；新动画立即停止并替换旧动画，不排队，历史/初始同步/重连不补播。效果在根 Navigator 最上层显示，黑色蒙版独立半透明、主体正常绘制，退出对局立即清理。短/长技能名都保持在横幅区域内，缩小字号时同步调整段落纵向偏移。旧客户端猜测阶段的动画接口已删除，不做兼容；后续效果只以原生客户端为准，Web预览服务已停止。
 
 安装包用正式密钥签名：安卓见 `client/android/key.properties`（不入库），Windows 见 `tools/sign-windows.ps1`。
 
@@ -65,7 +72,7 @@ Windows 主持人端禁止重复实例：同一登录会话里重复启动不会
 
 表情面板打开时返回键先收面板：聊天输入区与行动表单里的表情面板（`lib/src/emoji_picker.dart` 的 `EmojiPanelScope`）在展开期间挡住返回，一次返回只收起面板，面板收掉后返回恢复原样（对局外壳上仍然是退出应用）。预测性返回同样让路——面板开着时 `predictive_sheet.dart` 不接管手势，否则整个行动表单会连同已填内容一起被收走。
 
-表情面板的「最近」分组记住本机用过的表情（最多 16 个，最近一次在最前，存在 `shared_preferences` 的 `emoji_recent_ids`）：重启应用、退出登录都不丢，换机器不跟随；表情总表重新生成后认不出的旧 id 直接丢掉。聊天设置（输入框上方的「聊天设置」）里的「默认打开最近分组」默认开启，开启且确有记录时面板先落在「最近」，关掉或还没有记录时仍从经典开始。
+表情面板顶栏提供搜索、合并的 QQ 表情组与各下载目录的首图图标；最近记录仅包含 QQ 表情，固定在可滚动列表上方，与普通 QQ 列表保持相同尺寸、最多显示三行，下方是完整 QQ 列表或当前目录的纯图片网格。QQ 表情仍按名字/拼音搜索并插入 `[/名字]`，行动文本表单仅显示 QQ 组。聊天下载表情即点即发为独立消息，仅发送 `sticker_md5`，不上传图片、不修改文本草稿、不弹确认，也不加入最近；发送前重新校验本地文件。接收端直接查 MD5 缓存并校验内容，不要求安装过 memes；文件缺失或损坏时显示占位符，图片保留比例且最大宽高为手机 128、宽屏 160 logical px。`emoji_recent_ids` 仅持久化最近的 QQ id（最多 96 项，显示最多三行），加载时清除旧下载表情记录。未安装表情包仍可使用 QQ 表情，资源通过标题栏的资源包入口下载。
 
 ## 结构
 

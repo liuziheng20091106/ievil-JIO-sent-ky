@@ -378,8 +378,6 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 onClose: () => setState(() => emojiField = null),
                 child: EmojiPicker(
                   onPick: (face) => _insertEmoji(emojiField!, face),
-                  // 与聊天输入区同一份本机设置：默认先给最近用过的。
-                  recentFirst: widget.store.emojiRecentFirst,
                   // 表单本身已占屏 88%，面板再高会把字段区压没。
                   height: (MediaQuery.sizeOf(context).height * 0.26)
                       .clamp(140.0, 210.0),
