@@ -66,7 +66,7 @@ class MeruruVoteBalance(unittest.TestCase):
         events = []
         open_vote(game, events)
         self.assertEqual(game["vote_freeze"]["denominator"], 6 if selected and puppet else 7)
-        for sid in ("1", "3", "4", "5", "6", "7"):
+        for sid in ("1", "2", "3", "4", "5", "6", "7"):
             if puppet and sid == "1":
                 continue
             apply_command(
@@ -79,8 +79,8 @@ class MeruruVoteBalance(unittest.TestCase):
         return game, events
 
     def test_enabled_vs_disabled_and_no_fabricated_ballot_or_private_disclosure(self):
-        enabled, events = self.vote(True, {"3", "4"})
-        disabled, _ = self.vote(False, {"3", "4"})
+        enabled, events = self.vote(True, {"2", "3", "4"})
+        disabled, _ = self.vote(False, {"2", "3", "4"})
         self.assertEqual(
             enabled["vote_rounds"][0],
             {"candidate": "3", "yes": 4, "denominator": 7, "threshold": 4, "passed": True},
@@ -104,12 +104,12 @@ class MeruruVoteBalance(unittest.TestCase):
         self.assertNotIn("傀儡", public_text)
         self.assertNotIn("傀儡", " ".join(row["text"] for row in enabled["log"]))
 
-        below_gate, _ = self.vote(True, {"3"})
+        below_gate, _ = self.vote(True, {"2", "3"})
         self.assertEqual(below_gate["vote_rounds"][0]["yes"], 2)
         self.assertEqual(below_gate["vote_rounds"][0]["denominator"], 7)
         self.assertFalse(below_gate["vote_rounds"][0]["passed"])
 
-        no_puppet, _ = self.vote(True, {"3", "4"}, puppet=False)
+        no_puppet, _ = self.vote(True, {"2", "3", "4"}, puppet=False)
         self.assertEqual(no_puppet["vote_rounds"][0], disabled["vote_rounds"][0])
 
 

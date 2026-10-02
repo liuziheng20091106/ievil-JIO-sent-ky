@@ -355,8 +355,7 @@ class HeuristicPolicy:
         ballot = client.action("vote.cast")
         if ballot is None:
             return None
-        # 一次性选票：每个候选一行，只投服务端给出的选项。提名自动同意行只有
-        # 「同意」；决斗日带有 duel 标记的行至少要有一张同意，否则整份选票会被拒。
+        # 一次性选票：只投服务端给出的选项；决斗日至少同意一张决斗牌。
         payload = {}
         duel_rows = []
         for item in ballot["fields"]:

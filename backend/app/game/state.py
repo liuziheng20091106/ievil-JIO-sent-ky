@@ -613,29 +613,8 @@ def nomination_rounds(game):
     return rounds
 
 
-def nomination_auto_yes(game, seat_id, card_id):
-    """该席位是否因提名过这张牌而自动投同意票。
-
-    「提名过该候选自动同意」优先于玩家的选择；但绑定中的雪莉不能同意处决汉娜，
-    那条限制又优先于自动同意，因此她这一次提名不产生同意票。
-    """
-    if not any(n["by"] == seat_id and n["card_id"] == card_id for n in game["nominations"]):
-        return False
-    if card_id == "hanna" and game["spiritual"]["sherry_bound"]:
-        card = current(game, seat_id)
-        if card is not None and card["id"] == "sherry":
-            return False
-    return True
-
-
 def seat_choice(game, seat_id, card_id):
-    """该席位对某个候选的选择；还没投且没有自动同意票时返回 None。
-
-    自动同意票不写进 ``game["ballots"]``：它是提名推导出来的结论，玩家自己没有
-    提交过，因此这里按规则实时算。
-    """
-    if nomination_auto_yes(game, seat_id, card_id):
-        return "yes"
+    """该席位对某个候选已提交的选择；尚未投票时返回 None。"""
     return ((game.get("ballots") or {}).get(seat_id) or {}).get(card_id)
 
 
@@ -1176,8 +1155,7 @@ def create_game(codex, rule_plugins=None):
         # 夜间死亡卡片的载荷：与 queued_notices 一一对应，天亮时随汇总公告一起下发；
         # 被梅露露复活的死亡由 revoke_death 一并删掉。
         "queued_deaths": [],
-        # 今天的选票：{席位: {角色牌: 同意/不同意/弃票}}。提名自动同意票不写进来，
-        # 由 state.seat_choice 按规则实时推导；计票表（旧字段 votes）已删除。
+        # 今天已提交的选票：{席位: {角色牌: 同意/不同意/弃票}}。
         "ballots": {},
         "vote_rounds": [],
         # 本次投票开始时冻结的分母（见 vote_denominator）；投票结束清空。

@@ -564,7 +564,7 @@ def game_view(game, actor):
         ]
         if own_id in game["water"]["holders"]:
             view["self"]["water"] = True
-        # 投票改为一次性提交全部候选：本人已提交/自动同意的选择按角色牌列出。
+        # 本人已提交的选择按角色牌列出。
         view["self"]["votes"] = ballot_selection(game, own_id)
         view["self"]["warning_deadline"] = game["warnings"].get(own_id)
         if game["status"] == "lobby" and game["phase"] == "ordering" and "honoka" in own["cards"]:

@@ -27,7 +27,6 @@ from .state import (
     hanna_witch_window,
     living,
     lost_by_challenge,
-    nomination_auto_yes,
     nomination_rounds,
     owner,
     pending_nominators,
@@ -117,7 +116,7 @@ DESCRIPTIONS = {
     "hiro.exit": "魔女化希罗主动出局：夜间提交时并入本夜预结算，白天则立即结算；若魔女回溯额度还没用，会先触发回溯并撤销这次出局。",
     "speech.done": "结束本次发言推进顺序；还没轮到你时是「本轮不发言」，轮到时自动略过。",
     "speech.speak": "提前写下发言内容，轮到你时由系统以本人身份公开，并自动略过你的顺序。",
-    "vote.nominate": "提名一名候选人，提交即生效；提名过同一候选的玩家之后自动投同意票。",
+    "vote.nominate": "提名一名候选人，提交即生效；提名不代表投票，进入投票后仍需自行选择。",
     "vote.pass": "放弃本次提名；提名在白天随时可以提交。",
     "execution.shoot": "临刑开枪：命中则目标按标准结算出局，未命中则下次命中率提高1/6；每枪重新选目标，可连发到子弹用完。",
     "execution.confirm": "收手并确认，进入处决结算；剩余子弹不再使用。",
@@ -214,7 +213,7 @@ FAKE_DECLARATION_NOTE = (
 # 提名说明要写清「提交即生效、计票去重」，两个分支（阶段内/提前）措辞相同。
 NOMINATE_DESCRIPTION = (
     "提交即生效，无需二次确认；同一人可被多人提名，进入投票后计票去重，"
-    "每个候选人只投一轮，提名过该候选的玩家自动投同意票。"
+    "每个候选人只投一轮；提名不代表投票，进入投票后仍需自行选择。"
 )
 
 
@@ -971,9 +970,7 @@ def vote_action(game, sid, rounds, rows):
         label = seat_label(game, row)
         note = ""
         extra = {"seat_id": item["seat_id"]}
-        if nomination_auto_yes(game, sid, card_id):
-            options, extra["default"], note = [("yes", "同意")], "yes", "提名自动同意"
-        elif bound_sherry and card_id == "hanna":
+        if bound_sherry and card_id == "hanna":
             options, note = [("no", "不同意"), ("abstain", "弃票")], "绑定汉娜：不能同意"
         else:
             options = VOTE_CHOICES
@@ -1306,9 +1303,8 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         )
         result.append(action("vote.pass", "放弃本次提名（可提前）", group="投票"))
     if phase == "voting" and active_seat in eligible_voters(game):
-        # 一次性投票：只要还有候选没表态就给一张完整表单，列表里一定有本轮所有候选
-        # （提名自动同意的行锁成「同意」）；已经交过卷、又因为投票中新增提名被叫回来
-        # 的席位只补新候选，不能改已经投过的票。没有待表态的候选就不给动作。
+        # 一次性投票：尚未提交的席位看到全部候选；已提交的席位只补新候选，
+        # 不能改已经投过的票。没有待表态的候选就不给动作。
         rounds = nomination_rounds(game)[len(game["vote_rounds"]) :]
         unfilled = [item for item in rounds if seat_choice(game, sid, item["card_id"]) is None]
         if unfilled:

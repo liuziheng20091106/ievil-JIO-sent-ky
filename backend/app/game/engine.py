@@ -71,7 +71,6 @@ from .state import (
     living,
     log_event,
     lost_by_challenge,
-    nomination_auto_yes,
     nomination_rounds,
     pending_nominators,
     pending_revive,
@@ -1514,8 +1513,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         for card_id, choice in data.items():
             require(card_id in rounds, "候选已变化，请刷新后重新投票")
             require(choice in {"yes", "no", "abstain"}, "选票无效")
-            if nomination_auto_yes(game, sid, card_id):
-                require(choice == "yes", "你提名过该候选，只能投同意")
             if (
                 choice == "yes"
                 and card_id == "hanna"

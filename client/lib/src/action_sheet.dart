@@ -819,9 +819,8 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
 
   /// 一次性投票的一行：头像 + 「座位号 · 角色名」+ 同意 / 不同意 / 弃票。
   ///
-  /// 服务端在每行上带 seat_id（候选所在席位）与可选的 note（「提名自动同意」
-  /// 「绑定汉娜：不能同意」「蕾雅决斗」）。只有一个选项的行是锁定的：看得见，
-  /// 不用点（提名自动同意票由服务端结算）。
+  /// 服务端在每行上带 seat_id（候选所在席位）与可选的 note
+  /// （「绑定汉娜：不能同意」「蕾雅决斗」）。
   Widget _ballotField(ActionField field) {
     final seatId = field.raw['seat_id']?.toString();
     final seat = _seatRow(seatId);
@@ -832,7 +831,6 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
         (seatId == null ? field.label : '$seatId号');
     final selected = values[field.name]?.toString();
     final note = field.raw['note']?.toString();
-    final locked = field.options.length <= 1;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Column(
@@ -869,9 +867,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
                 _choiceChip(
                   label: option['label'].toString(),
                   selected: selected == option['value'].toString(),
-                  locked: locked,
                   onTap: () {
-                    if (locked) return;
                     setState(() {
                       values[field.name] = option['value'].toString();
                       _saveDraft();
@@ -888,7 +884,6 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
   Widget _choiceChip({
     required String label,
     required bool selected,
-    required bool locked,
     required VoidCallback onTap,
   }) {
     final accent = context.palette.accent;
@@ -897,7 +892,7 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
       borderRadius: BorderRadius.circular(AppRadius.field),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.field),
-        onTap: locked ? null : onTap,
+        onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.md,

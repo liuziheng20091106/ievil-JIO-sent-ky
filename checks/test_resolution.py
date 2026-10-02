@@ -2654,7 +2654,7 @@ class SpeechTimer(unittest.TestCase):
 
 
 class NominationFlow(unittest.TestCase):
-    """提名可提前提交、重复提名不失败、提名人自动投同意票。"""
+    """提名可提前提交、重复提名只投一轮，提名人与其他玩家一样自行投票。"""
 
     def test_pre_nominations_confirm_themselves_when_the_phase_opens(self):
         game = arranged_game("discussion")
@@ -2678,40 +2678,40 @@ class NominationFlow(unittest.TestCase):
             [{"seat_id": "3", "card_id": candidate}],
         )
         self.assertEqual(game["public"]["votes"]["total"], 1)
-        # 提名过同一候选的两个席位都自动投同意票，不再出现在待投名单里。
-        self.assertEqual(seat_choice(game, "1", candidate), "yes")
-        self.assertEqual(seat_choice(game, "2", candidate), "yes")
-        self.assertNotIn("vote.cast", [item["id"] for item in actions_for(game, player(game, "1"))])
-        for sid in ["3", "4", "5", "6", "7"]:
+        self.assertIsNone(seat_choice(game, "1", candidate))
+        self.assertIsNone(seat_choice(game, "2", candidate))
+        self.assertEqual(set(outstanding_seats(game)), set("1234567"))
+        for sid in "1234567":
             command(game, player(game, sid), "vote.cast", {candidate: "no"})
             self.assertTrue(ballot_complete(game, sid))
         command(game, HOST, "host.advance", {})
         self.assertEqual(len(game["vote_rounds"]), 1)
+        self.assertEqual(game["vote_rounds"][0]["yes"], 0)
         self.assertEqual(game["phase"], "execution")
 
-    def test_a_nominated_candidate_row_is_locked_to_agree(self):
-        """提名过某候选的行只剩「同意」：自动同意票是规则，不是默认值。"""
-        game = arranged_game("nomination")
-        command(game, player(game, "1"), "vote.nominate", {"target": "3"})
-        command(game, player(game, "2"), "vote.nominate", {"target": "4"})
-        for sid in ("3", "4", "5", "6", "7"):
-            command(game, player(game, sid), "vote.pass")
-        command(game, HOST, "host.advance")
-        rounds = [item["card_id"] for item in nomination_rounds(game)]
-        descriptor = next(
-            item for item in actions_for(game, player(game, "1")) if item["id"] == "vote.cast"
-        )
-        # 两个候选各一行：提名过的那个锁成同意，另一个正常三选一。
-        self.assertEqual([item["name"] for item in descriptor["fields"]], rounds)
-        locked = descriptor["fields"][0]
-        self.assertEqual(locked["default"], "yes")
-        self.assertEqual([option["value"] for option in locked["options"]], ["yes"])
-        self.assertEqual(locked["note"], "提名自动同意")
-        with self.assertRaises(GameError):
-            command(game, player(game, "1"), "vote.cast", {rounds[0]: "no", rounds[1]: "no"})
-        command(game, player(game, "1"), "vote.cast", {rounds[0]: "yes", rounds[1]: "abstain"})
-        self.assertEqual(seat_choice(game, "1", rounds[0]), "yes")
-        self.assertEqual(seat_choice(game, "1", rounds[1]), "abstain")
+    def test_nominators_choose_their_own_votes(self):
+        for choice in ("yes", "no", "abstain"):
+            with self.subTest(choice=choice):
+                game = arranged_game("nomination")
+                command(game, player(game, "1"), "vote.nominate", {"target": "3"})
+                command(game, player(game, "2"), "vote.nominate", {"target": "4"})
+                command(game, HOST, "host.advance")
+                rounds = [item["card_id"] for item in nomination_rounds(game)]
+                descriptor = next(
+                    item
+                    for item in actions_for(game, player(game, "1"))
+                    if item["id"] == "vote.cast"
+                )
+                self.assertEqual([item["name"] for item in descriptor["fields"]], rounds)
+                self.assertEqual(
+                    [option["value"] for option in descriptor["fields"][0]["options"]],
+                    ["yes", "no", "abstain"],
+                )
+                self.assertEqual(game_view(game, player(game, "1"))["self"]["votes"], {})
+                command(game, player(game, "1"), "vote.cast", {rounds[0]: choice, rounds[1]: "no"})
+                self.assertEqual(seat_choice(game, "1", rounds[0]), choice)
+                self.assertTrue(ballot_complete(game, "1"))
+                self.assertNotIn("1", outstanding_seats(game))
 
     def test_seat_options_show_the_role_card_in_game_and_the_nickname_before_it(self):
         """对局内选择界面按「座位号 · 角色名」标识席位，候场仍用玩家公开称呼。"""
@@ -3094,11 +3094,10 @@ class ForceAdvance(unittest.TestCase):
         command(game, player(game, "1"), "vote.cast", {candidate: "yes"})
         command(game, HOST, "host.advance", {})
         self.assertEqual(seat_choice(game, "1", candidate), "yes")
-        self.assertEqual(seat_choice(game, "2", candidate), "yes")
-        for sid in ("3", "4", "5", "6", "7"):
+        for sid in ("2", "3", "4", "5", "6", "7"):
             # 强制推进＝视为放弃：没交卷的席位整份选票记弃票。
             self.assertEqual(seat_choice(game, sid, candidate), "abstain")
-        self.assertEqual(game["vote_rounds"][0]["yes"], 2)
+        self.assertEqual(game["vote_rounds"][0]["yes"], 1)
         self.assertEqual(game["phase"], "execution")
 
     def test_force_advance_confirms_given_up_night_actions(self):

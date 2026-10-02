@@ -1021,14 +1021,14 @@ void main() {
       fields: [
         {
           'name': 'emma',
-          'label': '1号 · 艾玛（你提名过，自动同意）',
+          'label': '1号 · 艾玛',
           'type': 'select',
           'required': true,
           'seat_id': '1',
-          'note': '提名自动同意',
-          'default': 'yes',
           'options': [
             {'value': 'yes', 'label': '同意'},
+            {'value': 'no', 'label': '不同意'},
+            {'value': 'abstain', 'label': '弃票'},
           ],
         },
         {
@@ -1059,15 +1059,16 @@ void main() {
     expect(find.text('3号 · 雪莉'), findsOneWidget);
     expect(find.textContaining('阿雪'), findsNothing);
     expect(find.textContaining('小满'), findsNothing);
-    expect(find.text('提名自动同意'), findsOneWidget);
     expect(find.text('蕾雅决斗'), findsOneWidget);
-    // 提名自动同意的行按默认值选中，且只有一个选项（锁定）。
-    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle), findsNothing);
 
-    await tester.tap(find.text('不同意'));
+    await tester.tap(find.text('不同意').at(0));
+    await tester.pump();
+    expect(store.draftFor(action)['emma'], 'no');
+    await tester.tap(find.text('弃票').at(1));
     await tester.pump();
     expect(find.byIcon(Icons.check_circle), findsNWidgets(2));
-    expect(store.draftFor(action)['sherry'], 'no', reason: '选票要写进草稿');
+    expect(store.draftFor(action)['sherry'], 'abstain', reason: '选票要写进草稿');
   });
 
   testWidgets('屏幕够宽时同屏显示多个界面，窄屏仍是一次一页', (tester) async {

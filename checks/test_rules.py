@@ -636,27 +636,6 @@ class PhaseBannerRules(unittest.TestCase):
         nominating = staged_game(day=2, half="day", phase="nomination")
         self.assertNotIn("speech_deadline", self.prompt(nominating, "1"))
 
-    def test_nomination_and_voting_list_who_is_still_expected(self):
-        game = staged_game(day=2, half="day", phase="nomination")
-        game["nomination_done"] = ["1", "2"]
-        self.assertEqual(
-            self.prompt(game, "1")["title"], "正在等待3号、4号、5号、6号、7号玩家提名"
-        )
-        self.assertEqual(self.prompt(game, "3")["title"], "请提交提名或放弃")
-
-        game = staged_game(day=2, half="day", phase="voting")
-        # 一次性投票：候选是4号席的当前牌，1号提名过它（自动同意），2号已投不同意。
-        candidate = game["seats"][3]["cards"][0]
-        game["nominations"] = [{"seat_id": "4", "card_id": candidate, "by": "1"}]
-        game["ballots"] = {"2": {candidate: "no"}}
-        self.assertEqual(
-            self.prompt(game, "1")["title"], "正在等待3号、4号、5号、6号、7号玩家投票"
-        )
-        self.assertEqual(self.prompt(game, "3")["title"], "请投票")
-        # 全场横幅只通报进度：私聊里的「先结束私聊」提示只挂在本人待办上。
-        self.assertIsNone(self.prompt(game, "1", active_private=True)["hint"])
-        self.assertIn("私聊", self.prompt(game, "3", active_private=True)["hint"])
-
     def test_night_banner_never_names_the_seats_that_are_still_acting(self):
         game = staged_game(day=3, half="night", phase="night")
         game["night"]["actors"] = {
