@@ -1,0 +1,30 @@
+游戏动画资源介绍
+
+本目录存放游戏动画使用的角色半身立绘素材。本步只统一角色目录名并说明对应关系，尚未接入动画播放。
+角色目录名与 backend/app/game/catalog.py 的角色 id、client/lib/src/role_visuals.dart 的客户端角色 id 保持一致；不修改项目现有角色名称或游戏规则。
+
+目录约定
+- normal/：普通状态的半身立绘。
+- EX/：魔女化后的半身立绘。EX 是素材状态分类，不改变角色在游戏规则中能否魔女化的限制。
+- 同一状态下的图片保留原始文件名，不依据文件名推断表情、动作或播放顺序。
+- honoka/ 当前只有 EX/，不补造 normal/ 素材。
+- warden-portrait.png：暂按“系统”立绘理解，保留原文件名；不是玩家角色目录，也不在本步重新定义为主持人立绘。
+
+角色对应表（原资源目录 -> 当前目录 / 项目角色）
+ema -> emma / 艾玛
+hiro -> hiro / 希罗
+hana -> hanna / 汉娜
+sherry -> sherry / 雪莉
+meruru -> meruru / 梅露露
+noah -> noah / 诺亚
+anan -> annan / 安安
+Miria -> millia / 米莉亚
+coco -> coco / 可可
+nanoka -> nanoka / 奈乃香
+Alisa -> arisa / 亚里沙
+margo -> marg / 玛格
+leia -> leia / 蕾雅
+jailer -> honoka / 穗乃香（用户所说的 hnk，项目实际角色 id 为 honoka）
+
+本步仅重命名上述不一致的角色目录，保留 normal/、EX/ 以及所有 PNG 文件名和内容。
+资源图片继续遵循项目 resources/ 的 Git 忽略规则；本介绍文件单独纳入版本管理。
