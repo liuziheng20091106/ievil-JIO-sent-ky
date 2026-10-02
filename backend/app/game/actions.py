@@ -12,7 +12,7 @@ from .catalog import (
 from . import plugins
 from .resolution import target_allowed
 from .roles.coco import coco_seat
-from .roles.emma import treasure_protected
+from .external_plugins.emma_treasure import is_enabled as treasure_enabled, treasure_protected
 from .state import (
     ballot_complete,
     can_use_ability,
@@ -154,7 +154,6 @@ NIGHT_ABILITY_DESCRIPTIONS = {
     "rain": "下雨：本局一次，此后夜间死者会公开凶手座位号的方向线索。",
     "scapegoat": "替罪凶手：本局一次，指定之后自己造成死亡时对外显示的凶手。",
     "swap": "换血：每晚必须选择一名玩家（未提交时由系统随机指定）；其即将死亡时由你代替其死亡。",
-    "treasure": "寻宝：清空本席其他夜间选择，1/5概率挖到地雷！不过你会获得不在场证明，这或许能帮你在投票时获取一些优势？提交后本夜不可修改或放弃。",
     "witch_scan": "查看全员当前魔女化状态，结果只发给你。",
     "arisa_injure": "令环形左右邻座各以1/2概率负伤；该效果不会把已有负伤升级为死亡。",
     "rest": "医务室休息：这一夜不吃艾玛毒素、目击一定是真的；其他玩家会知道你在休息。魔女化后失去本技能。",
@@ -476,6 +475,8 @@ def night_abilities(game, card):
         if role != card["role_id"]:
             continue
         if ability in {"massacre", "scapegoat", "witch_scan", "extra_kill"} and not witch:
+            continue
+        if ability == "treasure" and not treasure_enabled(game):
             continue
         if ability in {"treasure", "rest"} and witch:
             continue
@@ -1099,7 +1100,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
             submitted = {a["ability"] for a in night["actions"] if a["seat_id"] == sid}
             if "treasure" in submitted:
                 # 寻宝提交后本夜定局：不再提供修改、清除或放弃入口，防止重掷地雷
-                # 或私下看到结果后弃单洗白（服务端同样拒绝，见 engine.night.submit）。
+                # 或私下看到结果后弃单洗白（插件命令同样拒绝）。
                 result.append(
                     action(
                         "night.confirm",
@@ -1110,7 +1111,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                 )
             else:
                 for ability in night_abilities(game, acting):
-                    if ability == "treasure" and submitted:
+                    if ability == "treasure":
                         continue
                     fields = []
                     if ability == "scapegoat":
@@ -1120,7 +1121,6 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                     elif ability not in {
                         "massacre",
                         "rain",
-                        "treasure",
                         "witch_scan",
                         "arisa_injure",
                         "rest",
@@ -1141,7 +1141,6 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                             fields,
                             {"ability": ability},
                             "夜间",
-                            danger=ability == "treasure",
                             description=NIGHT_ABILITY_DESCRIPTIONS.get(ability, ""),
                         )
                     )

@@ -38,7 +38,7 @@ def rewind_on_death(game, events, half):
 def confirm_madness(game, card, actions, sid):
     """可攻击艾玛却没出手时消耗例外夜，或交主持裁定。"""
     from ..state import current, owner, pending
-    from .emma import treasure_protected
+    from ..external_plugins.emma_treasure import treasure_protected
     from ..resolution import target_allowed
 
     emma = game["cards"]["emma"]

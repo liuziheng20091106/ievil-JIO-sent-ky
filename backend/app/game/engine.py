@@ -5,7 +5,7 @@ from random import SystemRandom
 
 from . import clock
 from . import plugins
-from .roles import emma, hanna, hiro, honoka, meruru, millia, nanoka, sherry
+from .roles import hanna, hiro, honoka, meruru, millia, nanoka, sherry
 from .actions import (
     CHALLENGE_PHASES,
     actions_for,
@@ -1332,8 +1332,6 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             "title": f"{sid}号夜间选择",
             **deepcopy({k: v for k, v in data.items() if k != "ability"}),
         }
-        if ability == "treasure":
-            emma.submit_treasure(game, events, card, entry, sid)
         if ability == "swap":
             millia.record_swap(game, data.get("target"))
         if target:

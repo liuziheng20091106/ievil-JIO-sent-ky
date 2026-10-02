@@ -4,6 +4,7 @@ from copy import deepcopy
 from random import SystemRandom
 
 from . import plugins
+from .external_plugins import emma_treasure
 from .roles import annan, arisa, emma, hanna, hiro, honoka, marg, millia, nanoka, noah, sherry
 from .roles.coco import unlock_coco, witch_information
 from .roles.marg import loved_card_id
@@ -361,8 +362,10 @@ def night_damage(game, events=None):
             )
         elif ability == "extra_kill" and target:
             attacks.append(hanna.extra_attack(action, target))
-        elif ability in {"massacre", "treasure"}:
+        elif ability == "massacre":
             attacks.extend(emma.night_attacks(game, action))
+        elif ability == "treasure":
+            attacks.extend(emma_treasure.night_attacks(game, action))
         elif ability == "arisa_injure":
             arisa.contribute_attacks(action, attacks)
     marg.contribute_love_attack(game, attacks)

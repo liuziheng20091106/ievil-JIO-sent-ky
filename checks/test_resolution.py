@@ -13,6 +13,7 @@ from backend.app.game import (
     run_speech_timer,
     touch_speech_timer,
 )
+from backend.app.game import plugins
 from backend.app.game.actions import (
     actions_for,
     can_day_ability,
@@ -34,7 +35,7 @@ from backend.app.game.resolution import (
     witness_size,
 )
 from backend.app.game.roles.coco import unlock_coco
-from backend.app.game.roles.emma import treasure_protected
+from backend.app.game.external_plugins.emma_treasure import ID as TREASURE_ID, treasure_protected
 from backend.app.game.roles.marg import loved_card_id
 from backend.app.game.roles.millia import substitute as millia_substitute
 from backend.app.game.state import (
@@ -69,6 +70,12 @@ def command(game, actor, action, payload=None):
     game.clear()
     game.update(changed)
     return events
+
+
+def treasure_game():
+    game = arranged_game("night", "night")
+    game["rule_plugins"] = plugins.manifest([TREASURE_ID])
+    return game
 
 
 class PoisonAndDeclarations(unittest.TestCase):
@@ -386,23 +393,23 @@ class NewNightRules(unittest.TestCase):
         self.assertTrue(preview["injured"]["hiro"])
 
     def test_treasure_only_clears_its_own_seat_and_protects_today(self):
-        game = arranged_game("night", "night")
+        game = treasure_game()
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
         # 别的席位先提交一条行动：寻宝只清本席，不能把别人的行动一起清掉。
         command(game, player(game, "3"), "night.submit", {"ability": "protect", "target": "2"})
-        with patch("backend.app.game.roles.emma.SystemRandom") as random:
+        with patch("backend.app.game.external_plugins.emma_treasure.SystemRandom") as random:
             random.return_value.randrange.return_value = 1
-            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+            command(game, player(game, "1"), TREASURE_ID + ".submit")
         self.assertFalse(game["night"]["locked"])
         self.assertEqual(game["phase"], "night")
-        self.assertEqual(game["cards"]["emma"]["states"]["treasure_protected_day"], 2)
+        self.assertEqual(game["plugin_state"][TREASURE_ID]["protected_day"], 2)
         submitted = {(action["seat_id"], action["ability"]) for action in game["night"]["actions"]}
         self.assertIn(("3", "protect"), submitted)
         self.assertIn(("1", "treasure"), submitted)
 
     def test_witch_emma_has_no_treasure_and_must_massacre(self):
-        game = arranged_game("night", "night")
+        game = treasure_game()
         game["cards"]["millia"]["alive"] = False
         game["cards"]["emma"]["witch"] = True
         begin_night(game, [])
@@ -412,23 +419,26 @@ class NewNightRules(unittest.TestCase):
             if item["id"] == "night.submit"
         ]
         self.assertNotIn("treasure", offered)
+        self.assertNotIn(
+            TREASURE_ID + ".submit", {a["id"] for a in actions_for(game, player(game, "1"))}
+        )
         self.assertIn("massacre", offered)
 
     def test_treasure_cannot_be_resubmitted_to_reroll_the_mine(self):
         """寻宝提交后本夜定局：重交、清除、超时放弃都不能重掷地雷骰。"""
-        game = arranged_game("night", "night")
+        game = treasure_game()
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        with patch("backend.app.game.roles.emma.SystemRandom") as random:
+        with patch("backend.app.game.external_plugins.emma_treasure.SystemRandom") as random:
             random.return_value.randrange.return_value = 0  # 第一次就踩雷
-            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+            command(game, player(game, "1"), TREASURE_ID + ".submit")
         entry = next(a for a in game["night"]["actions"] if a["ability"] == "treasure")
         self.assertTrue(entry["mine"])
         # 重交被拒：骰值不会被重掷成安全结果。
-        with patch("backend.app.game.roles.emma.SystemRandom") as random:
+        with patch("backend.app.game.external_plugins.emma_treasure.SystemRandom") as random:
             random.return_value.randrange.return_value = 1
             with self.assertRaises(GameError):
-                command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
+                command(game, player(game, "1"), TREASURE_ID + ".submit")
         # 清除被拒：不能私下看到地雷结果后弃单洗白。
         with self.assertRaises(GameError):
             command(game, player(game, "1"), "night.clear")
@@ -437,6 +447,7 @@ class NewNightRules(unittest.TestCase):
         # 行动表不再提供修改、清除或放弃入口，只剩确认。
         offered = [item["id"] for item in actions_for(game, player(game, "1"))]
         self.assertNotIn("night.submit", offered)
+        self.assertNotIn(TREASURE_ID + ".submit", offered)
         self.assertNotIn("night.clear", offered)
         self.assertIn("night.confirm", offered)
         # 超时强制推进只补确认，寻宝行动保留。
@@ -447,23 +458,23 @@ class NewNightRules(unittest.TestCase):
 
     def test_treasure_without_mine_keeps_protection(self):
         """寻宝安全落地时保护照常生效，且换一天骰值重新掷。"""
-        game = arranged_game("night", "night")
+        game = treasure_game()
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        with patch("backend.app.game.roles.emma.SystemRandom") as random:
+        with patch("backend.app.game.external_plugins.emma_treasure.SystemRandom") as random:
             random.return_value.randrange.return_value = 1
-            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
-        self.assertEqual(game["cards"]["emma"]["states"]["treasure_protected_day"], 2)
-        self.assertEqual(game["cards"]["emma"]["states"]["treasure_roll"]["day"], 2)
+            command(game, player(game, "1"), TREASURE_ID + ".submit")
+        self.assertEqual(game["plugin_state"][TREASURE_ID]["protected_day"], 2)
+        self.assertEqual(game["plugin_state"][TREASURE_ID]["day"], 2)
 
     def test_treasure_mine_resolves_in_the_night_batch(self):
-        game = arranged_game("night", "night")
+        game = treasure_game()
         game["cards"]["millia"]["alive"] = False
         begin_night(game, [])
-        with patch("backend.app.game.roles.emma.SystemRandom") as random:
+        with patch("backend.app.game.external_plugins.emma_treasure.SystemRandom") as random:
             random.return_value.randrange.return_value = 0  # 触发地雷
-            command(game, player(game, "1"), "night.submit", {"ability": "treasure"})
-        self.assertNotIn("treasure_protected_day", game["cards"]["emma"]["states"])
+            command(game, player(game, "1"), TREASURE_ID + ".submit")
+        self.assertIsNone(game["plugin_state"][TREASURE_ID]["protected_day"])
         command(game, player(game, "1"), "night.confirm")
         game["night"]["confirmed"] = list(game["night"]["actors"])
         lock_night(game, [])
@@ -2108,7 +2119,8 @@ class WitchHiroMandate(unittest.TestCase):
     def test_a_treasure_protected_emma_is_never_required_as_a_target(self):
         """寻宝保护当天魔女刀点不到艾玛，条件与刀口必须同步，否则整夜无解。"""
         game = self.witch_hiro_night()
-        game["cards"]["emma"]["states"]["treasure_protected_day"] = game["day"]
+        game["rule_plugins"] = plugins.manifest([TREASURE_ID])
+        game["plugin_state"][TREASURE_ID] = {"card_id": "emma", "protected_day": game["day"]}
         self.assertTrue(treasure_protected(game, "emma"))
         self.assertNotIn("1", self.knife_targets(game))
         # 提名同样不能选中受保护的牌：刀口与提名选项共用同一个判定。

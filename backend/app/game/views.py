@@ -11,6 +11,7 @@ from .actions import (
 from .catalog import PHASES, ROLES
 from . import plugins
 from .roles.coco import coco_seat
+from .external_plugins.emma_treasure import treasure_protected
 from .state import (
     annan_penalty_day,
     ballot_complete,
@@ -217,12 +218,13 @@ def card_view(game, card, host=False):
                 "no_ability",
                 "evidence_allowed",
                 "evidence_used",
-                "treasure_protected_day",
                 "entry_allowed",
             }
         }
         if states.get("puppet"):
             result["states"]["puppet_master_seat"] = owner(game, states["puppet"])["id"]
+    if treasure_protected(game, card["id"]):
+        result["states"]["treasure_protected_day"] = game["day"]
     result["states"]["entry_allowed"] = card_actionable(game, card)
     return result
 
@@ -252,10 +254,7 @@ def status_cards(game, own):
         else:
             text = "本局你会魔女化。" if will else "前三天你不会按开局命运魔女化。"
             add("witch_destiny", "danger" if will else "info", "魔女化命运", text)
-    protected = next(
-        (card for card in cards if card["states"].get("treasure_protected_day", -1) >= game["day"]),
-        None,
-    )
+    protected = next((card for card in cards if treasure_protected(game, card["id"])), None)
     if protected:
         add(
             "treasure",
