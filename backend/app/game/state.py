@@ -421,9 +421,8 @@ def pending(game, kind, title, **data):
     return item
 
 
-# 主持人对局日志：与玩家可见消息分离的服务端留档，只给主持人看。
+# 主持人对局日志：进行中只给主持人看，归档后公开完整有效记录。
 # 追加统一的 {day, half, phase, kind, text} 条目，客户端按 kind 着色。
-LOG_LIMIT = 400
 
 
 def log_event(game, kind, text):
@@ -435,9 +434,6 @@ def log_event(game, kind, text):
         "text": text,
     }
     game.setdefault("log", []).append(entry)
-    # 环形上限：长对局不会无限膨胀，最近 400 条足够复盘。
-    if len(game["log"]) > LOG_LIMIT:
-        del game["log"][: len(game["log"]) - LOG_LIMIT]
 
 
 def log_index(game):

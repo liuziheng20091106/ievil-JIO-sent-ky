@@ -128,49 +128,4 @@ void main() {
     });
   });
 
-  testWidgets('历史对局详情渲染', (tester) async {
-    await withClock(Clock.fixed(fixedNow), () async {
-      final store = await previewStore();
-      await pumpPhone(
-        tester,
-        MatchDetailPage(
-          store: store,
-          matchId: 'game-1',
-          loader: (matchId) async => MatchDetail.fromJson({
-            ...matchJson(),
-            'events': [
-              {
-                'seq': 0,
-                'kind': 'notice',
-                'sender_name': '主持人',
-                'text': '新对局已创建，等待主持人开放参局',
-                'created_at': stampAgo(60),
-              },
-              {
-                'seq': 1,
-                'kind': 'chat',
-                'sender_name': 'kiwi',
-                'avatar_role_id': 'marg',
-                'text': '我这边没有可以证明的信息，先听大家说。',
-                'created_at': stampAgo(30),
-              },
-              {
-                'seq': 2,
-                'kind': 'alert',
-                'sender_name': '主持人',
-                'text': '2号 · 希罗一张角色牌出局。',
-                'created_at': stampAgo(20),
-              },
-            ],
-          }),
-        ),
-      );
-      expect(find.text('公开时间线'), findsOneWidget);
-      await expectLater(
-        find.byType(MatchDetailPage),
-        matchesGoldenFile('goldens/history_detail.png'),
-      );
-      expectClockPinned(fixedNow);
-    });
-  });
 }

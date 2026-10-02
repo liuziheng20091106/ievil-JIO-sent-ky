@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'design.dart';
 import 'message_time.dart';
@@ -8,8 +11,9 @@ import 'store.dart';
 
 /// 历史列表的数据来源；默认走 `store.api`，回归检查可以注入固定的历史数据
 /// （widget 测试里所有真实 HTTP 都会被测试框架拦掉，页面本身不该为此加分支）。
-typedef MatchHistoryLoader = Future<({List<MatchSummary> matches, bool hasMore})>
-    Function({String? before, int limit});
+typedef MatchHistoryLoader
+    = Future<({List<MatchSummary> matches, bool hasMore})> Function(
+        {String? before, int limit});
 
 /// 单局历史详情的数据来源；默认走 `store.api`。
 typedef MatchDetailLoader = Future<MatchDetail> Function(String matchId);
@@ -20,8 +24,7 @@ typedef MatchDeleter = Future<void> Function(String matchId);
 /// 历史对局：已结束（或没结束就被清空）的对局留档。
 ///
 /// 服务端把它存在独立库里（`data/history.sqlite3`），建新局与一键初始化都不会清掉。
-/// 归档范围是**公开记录**：胜负与裁定、七个席位的两张角色牌、公屏与全场公告时间线；
-/// 私信与只发给个人的情报不入库，页脚也把这件事写清楚。
+/// 归档包含全部频道消息、定向情报与主持人日志；进行中对局仍按原权限裁剪。
 class MatchHistoryPage extends StatefulWidget {
   const MatchHistoryPage({
     super.key,
@@ -43,6 +46,7 @@ class MatchHistoryPage extends StatefulWidget {
 }
 
 class _MatchHistoryPageState extends State<MatchHistoryPage> {
+  final scroll = ScrollController();
   List<MatchSummary> matches = const [];
   bool hasMore = false;
   bool loading = true;
@@ -57,6 +61,12 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
   void initState() {
     super.initState();
     refresh();
+  }
+
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
   }
 
   Future<({List<MatchSummary> matches, bool hasMore})> _page({String? before}) {
@@ -123,7 +133,7 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
         icon: Icon(Icons.delete_outline, color: context.palette.danger),
         title: const Text('删除这条历史对局？'),
         content: Text(
-          '「第 ${match.day} 日 · ${matchResultTitle(match)}」的胜负、身份与公开时间线'
+          '「第 ${match.day} 日 · ${matchResultTitle(match)}」的胜负、身份与完整记录'
           '都会删掉，删除后不可恢复。',
         ),
         actions: [
@@ -133,7 +143,8 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: context.palette.danger),
+            style:
+                FilledButton.styleFrom(backgroundColor: context.palette.danger),
             child: const Text('删除'),
           ),
         ],
@@ -170,56 +181,66 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
       appBar: AppBar(title: const Text('历史对局')),
       body: RefreshIndicator(
         onRefresh: refresh,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.sm,
-            AppSpacing.lg,
-            AppSpacing.xxl,
+        child: ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+          child: Scrollbar(
+            controller: scroll,
+            thumbVisibility: true,
+            interactive: true,
+            child: ListView(
+              controller: scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.sm,
+                AppSpacing.lg,
+                AppSpacing.xxl,
+              ),
+              children: [
+                if (matches.isEmpty && !loading)
+                  EmptyState(
+                    icon: Icons.history_outlined,
+                    title: error ?? '还没有历史对局',
+                    detail: error == null
+                        ? '一局结束（或没结束就被清空）后就会在这里留档，跨局保留。'
+                        : '下拉可以重新加载。',
+                  ),
+                for (final item in matches)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                    child: _MatchCard(
+                      match: item,
+                      canDelete: canDelete,
+                      onDelete: canDelete ? () => remove(item) : null,
+                      onTap: () async {
+                        await Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => MatchDetailPage(
+                              store: widget.store,
+                              matchId: item.id,
+                            ),
+                          ),
+                        );
+                        // 详情页里也可能删掉了这一局：回来后重新拉一次列表。
+                        if (canDelete) refresh();
+                      },
+                    ),
+                  ),
+                if (hasMore)
+                  Center(
+                    child: TextButton(
+                      onPressed: loading ? null : loadMore,
+                      child: const Text('加载更早的对局'),
+                    ),
+                  ),
+                if (loading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+              ],
+            ),
           ),
-          children: [
-            if (matches.isEmpty && !loading)
-              EmptyState(
-                icon: Icons.history_outlined,
-                title: error ?? '还没有历史对局',
-                detail: error == null
-                    ? '一局结束（或没结束就被清空）后就会在这里留档，跨局保留。'
-                    : '下拉可以重新加载。',
-              ),
-            for (final item in matches)
-              Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                child: _MatchCard(
-                  match: item,
-                  canDelete: canDelete,
-                  onDelete: canDelete ? () => remove(item) : null,
-                  onTap: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => MatchDetailPage(
-                          store: widget.store,
-                          matchId: item.id,
-                        ),
-                      ),
-                    );
-                    // 详情页里也可能删掉了这一局：回来后重新拉一次列表。
-                    if (canDelete) refresh();
-                  },
-                ),
-              ),
-            if (hasMore)
-              Center(
-                child: TextButton(
-                  onPressed: loading ? null : loadMore,
-                  child: const Text('加载更早的对局'),
-                ),
-              ),
-            if (loading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-          ],
         ),
       ),
     );
@@ -338,7 +359,7 @@ class _MatchCard extends StatelessWidget {
   }
 }
 
-/// 单局详情：结算、七个席位的两张角色牌与公开时间线。
+/// 单局详情：结算、角色牌、全部频道消息与主持人日志。
 class MatchDetailPage extends StatefulWidget {
   const MatchDetailPage({
     super.key,
@@ -362,6 +383,8 @@ class MatchDetailPage extends StatefulWidget {
 }
 
 class _MatchDetailPageState extends State<MatchDetailPage> {
+  final scroll = ScrollController();
+  bool exporting = false;
   MatchDetail? detail;
   bool loading = true;
   bool deleting = false;
@@ -377,6 +400,48 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
     load();
   }
 
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> export() async {
+    final value = detail;
+    if (value == null || value.exportText.isEmpty || exporting) return;
+    setState(() => exporting = true);
+    try {
+      final path =
+          await const MethodChannel('history_export').invokeMethod<String>(
+        'save',
+        {
+          'filename': '魔法裁判-对局-${value.match.id}.txt',
+          'bytes': Uint8List.fromList(
+              [0xef, 0xbb, 0xbf, ...utf8.encode(value.exportText)]),
+        },
+      );
+      if (path != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已导出：$path')),
+        );
+      }
+    } on PlatformException catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(failure.message ?? '导出失败，请重新选择保存位置')),
+        );
+      }
+    } on MissingPluginException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前平台不支持保存文件')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => exporting = false);
+    }
+  }
+
   Future<void> load() async {
     final loader = widget.loader;
     if (loader == null && widget.store.api == null) {
@@ -387,8 +452,9 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
       return;
     }
     try {
-      final value =
-          loader != null ? await loader(widget.matchId) : await widget.store.api!.match(widget.matchId);
+      final value = loader != null
+          ? await loader(widget.matchId)
+          : await widget.store.api!.match(widget.matchId);
       if (!mounted) return;
       setState(() {
         detail = value;
@@ -416,7 +482,7 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
         content: Text(
           '「第 ${detail?.match.day ?? '?'} 日 · '
           '${detail == null ? '' : matchResultTitle(detail!.match)}」的胜负、身份与'
-          '公开时间线都会删掉，删除后不可恢复。',
+          '完整记录都会删掉，删除后不可恢复。',
         ),
         actions: [
           TextButton(
@@ -425,7 +491,8 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: context.palette.danger),
+            style:
+                FilledButton.styleFrom(backgroundColor: context.palette.danger),
             child: const Text('删除'),
           ),
         ],
@@ -457,6 +524,18 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
       appBar: AppBar(
         title: const Text('对局记录'),
         actions: [
+          IconButton(
+            tooltip: '导出 TXT',
+            onPressed: value == null || value.exportText.isEmpty || exporting
+                ? null
+                : export,
+            icon: exporting
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.file_download_outlined),
+          ),
           if (canDelete)
             IconButton(
               tooltip: '删除这条历史对局',
@@ -470,51 +549,118 @@ class _MatchDetailPageState extends State<MatchDetailPage> {
       ),
       body: RefreshIndicator(
         onRefresh: load,
-        child: value == null
-            ? ListView(
-                padding: const EdgeInsets.all(AppSpacing.lg),
-                children: [
-                  if (loading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: AppSpacing.xxl),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else
-                    EmptyState(
-                      icon: Icons.history_toggle_off_outlined,
-                      title: error ?? '读取不到这一局',
-                      detail: '下拉可以重新加载。',
-                    ),
-                ],
-              )
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.lg,
-                  AppSpacing.sm,
-                  AppSpacing.lg,
-                  AppSpacing.xxl,
-                ),
-                children: [
-                  _ResultCard(match: value.match),
-                  const SectionTitle(
-                    '参与身份',
-                    subtitle: '座位、昵称与最终的两张角色牌（上层在前）。',
+        child: ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+          child: Scrollbar(
+            controller: scroll,
+            thumbVisibility: true,
+            interactive: true,
+            child: value == null
+                ? ListView(
+                    controller: scroll,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    children: [
+                      if (loading)
+                        const Padding(
+                          padding:
+                              EdgeInsets.symmetric(vertical: AppSpacing.xxl),
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      else
+                        EmptyState(
+                          icon: Icons.history_toggle_off_outlined,
+                          title: error ?? '读取不到这一局',
+                          detail: '下拉可以重新加载。',
+                        ),
+                    ],
+                  )
+                : CustomScrollView(
+                    controller: scroll,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          AppSpacing.sm,
+                          AppSpacing.lg,
+                          0,
+                        ),
+                        sliver: SliverList.list(children: [
+                          _ResultCard(match: value.match),
+                          if (!value.archiveComplete)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: AppSpacing.sm),
+                              child: Text(
+                                '旧版留档不完整，已丢弃的私聊、日志或早期消息无法恢复。',
+                                style: TextStyle(
+                                    color: context.palette.textSecondary),
+                              ),
+                            ),
+                          const SectionTitle('参与身份'),
+                          for (final player in value.match.players)
+                            _PlayerCard(player: player),
+                          const SectionTitle('完整消息记录'),
+                          if (value.events.isEmpty)
+                            const EmptyState(
+                              icon: Icons.timeline_outlined,
+                              title: '没有消息记录',
+                            ),
+                        ]),
+                      ),
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.lg),
+                        sliver: SliverList.builder(
+                          itemCount: value.events.length,
+                          itemBuilder: (_, index) =>
+                              _EventRow(event: value.events[index]),
+                        ),
+                      ),
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.lg),
+                        sliver: SliverList.list(children: [
+                          const SectionTitle('主持人日志'),
+                          if (value.hostLog.isEmpty)
+                            const EmptyState(
+                              icon: Icons.receipt_long_outlined,
+                              title: '没有留存的主持人日志',
+                            ),
+                        ]),
+                      ),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          0,
+                          AppSpacing.lg,
+                          AppSpacing.xxl,
+                        ),
+                        sliver: SliverList.builder(
+                          itemCount: value.hostLog.length,
+                          itemBuilder: (context, index) {
+                            final entry = value.hostLog[index];
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: AppSpacing.xs),
+                              child: Text(
+                                '第${entry['day']}天${entry['half'] == 'night' ? '夜间' : '白天'} · '
+                                '${entry['text'] ?? ''}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  height: 1.45,
+                                  color: context.palette.textSecondary,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
-                  for (final player in value.match.players)
-                    _PlayerCard(player: player),
-                  const SectionTitle(
-                    '公开时间线',
-                    subtitle: '公屏发言与全场公告；私信与只发给个人的情报不入库。',
-                  ),
-                  if (value.events.isEmpty)
-                    const EmptyState(
-                      icon: Icons.timeline_outlined,
-                      title: '没有可展示的公开记录',
-                    )
-                  else
-                    for (final event in value.events) _EventRow(event: event),
-                ],
-              ),
+          ),
+        ),
       ),
     );
   }
@@ -535,7 +681,8 @@ class _ResultCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.emoji_events_outlined, color: context.palette.host),
+                  Icon(Icons.emoji_events_outlined,
+                      color: context.palette.host),
                   const SizedBox(width: AppSpacing.md),
                   Expanded(
                     child: Text(
@@ -553,7 +700,8 @@ class _ResultCard extends StatelessWidget {
               Text(
                 '第 ${match.day} 日 · 主持人：${match.hostName} · '
                 '${formatMessageTime(match.endedAt)}',
-                style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+                style: TextStyle(
+                    fontSize: 12, color: context.palette.textTertiary),
               ),
               if (match.reason.isNotEmpty) ...[
                 const SizedBox(height: AppSpacing.sm),
@@ -570,7 +718,8 @@ class _ResultCard extends StatelessWidget {
                 const SizedBox(height: AppSpacing.sm),
                 Text(
                   '这一局没有宣判就被清空（一键初始化或开启下一局）。',
-                  style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+                  style: TextStyle(
+                      fontSize: 12, color: context.palette.textTertiary),
                 ),
               ],
             ],
@@ -695,7 +844,7 @@ class _EventRow extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppRadius.chip),
             ),
             child: Text(
-              event.text,
+              '${event.scopeLabel}${time.isEmpty ? '' : ' · $time'}\n${event.text}',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 12.5,
@@ -748,9 +897,15 @@ class _EventRow extends StatelessWidget {
                     ],
                   ],
                 ),
+                Text(
+                  event.scopeLabel,
+                  style: TextStyle(
+                      fontSize: 11, color: context.palette.textSecondary),
+                ),
                 const SizedBox(height: 2),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
                     color: context.palette.surface,
                     borderRadius: BorderRadius.circular(AppRadius.card),

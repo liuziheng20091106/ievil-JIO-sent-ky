@@ -1037,7 +1037,7 @@ class _LobbyPageState extends State<LobbyPage> {
               icon: Icons.history_outlined,
               color: context.palette.textSecondary,
               title: '历史对局',
-              subtitle: '查看已结束对局的胜负、身份与公开时间线',
+              subtitle: '胜负、身份、全部对话与主持人日志',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => MatchHistoryPage(store: store),

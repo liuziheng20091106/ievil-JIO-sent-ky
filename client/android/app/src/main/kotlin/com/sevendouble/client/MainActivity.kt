@@ -17,6 +17,9 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     private var imageResult: MethodChannel.Result? = null
+    private var historyExportChannel: MethodChannel? = null
+    private var historyExportResult: MethodChannel.Result? = null
+    private var historyExportBytes: ByteArray? = null
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -100,11 +103,74 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        historyExportChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "history_export")
+        historyExportChannel?.setMethodCallHandler { call, result ->
+            if (call.method != "save") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            if (historyExportResult != null) {
+                result.error("busy", "正在保存对局记录", null)
+                return@setMethodCallHandler
+            }
+            val arguments = call.arguments as? Map<*, *>
+            val filename = arguments?.get("filename") as? String
+            val bytes = arguments?.get("bytes") as? ByteArray
+            if (filename.isNullOrEmpty() || bytes == null ||
+                filename.any { it == '/' || it == '\\' || it == '\u0000' }) {
+                result.error("arguments", "保存参数无效", null)
+                return@setMethodCallHandler
+            }
+            historyExportResult = result
+            historyExportBytes = bytes
+            try {
+                @Suppress("DEPRECATION")
+                startActivityForResult(
+                    Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        type = "text/plain"
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        putExtra(Intent.EXTRA_TITLE, filename)
+                    },
+                    HISTORY_EXPORT_REQUEST,
+                )
+            } catch (failure: Exception) {
+                historyExportResult = null
+                historyExportBytes = null
+                result.error("save", failure.message ?: "无法打开保存位置", null)
+            }
+        }
     }
 
     @Deprecated("Activity result API inherited from FlutterActivity")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == HISTORY_EXPORT_REQUEST) {
+            val result = historyExportResult ?: return
+            val bytes = historyExportBytes
+            historyExportResult = null
+            historyExportBytes = null
+            if (resultCode == RESULT_CANCELED) {
+                result.success(null)
+                return
+            }
+            val uri = data?.data
+            if (resultCode != RESULT_OK || uri == null || bytes == null) {
+                result.error("save", "无法读取保存位置", null)
+                return
+            }
+            try {
+                val output = contentResolver.openOutputStream(uri, "wt")
+                    ?: throw java.io.IOException("无法写入对局记录")
+                output.use {
+                    it.write(bytes)
+                    it.flush()
+                }
+                result.success(uri.toString())
+            } catch (failure: Exception) {
+                result.error("save", failure.message ?: "对局记录写入失败", null)
+            }
+            return
+        }
         if (requestCode != IMAGE_REQUEST) return
         val result = imageResult ?: return
         imageResult = null
@@ -230,9 +296,29 @@ class MainActivity : FlutterActivity() {
         KeepAliveService.start(this)
     }
 
+    private fun cancelHistoryExport() {
+        val result = historyExportResult
+        historyExportResult = null
+        historyExportBytes = null
+        result?.success(null)
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        cancelHistoryExport()
+        historyExportChannel?.setMethodCallHandler(null)
+        historyExportChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    override fun onDestroy() {
+        cancelHistoryExport()
+        super.onDestroy()
+    }
+
     companion object {
         private const val INVITE_CHANNEL_ID = "invites"
         private const val INVITE_NOTIFICATION_ID = 2
         private const val IMAGE_REQUEST = 2001
+        private const val HISTORY_EXPORT_REQUEST = 2002
     }
 }

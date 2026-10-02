@@ -1014,7 +1014,7 @@ class MatchPlayer {
   late final bool blocked;
 }
 
-/// 历史对局时间线上的一条公开消息。
+/// 历史对局时间线上的一条消息，包括私聊与定向情报。
 class MatchEvent {
   MatchEvent.fromJson(Object? value) : raw = jsonObject(value, 'match.event') {
     seq = jsonInt(raw['seq'], 'match.event.seq');
@@ -1023,6 +1023,13 @@ class MatchEvent {
     avatarRoleId = raw['avatar_role_id']?.toString();
     text = raw['text']?.toString() ?? '';
     createdAt = raw['created_at']?.toString() ?? '';
+    channelName =
+        raw['channel_name']?.toString() ?? (kind == 'chat' ? '公屏' : '全场公告');
+    audienceNames = raw['audience_names'] == null
+        ? null
+        : jsonArray(raw['audience_names'], 'match.event.audience_names')
+            .map((item) => item.toString())
+            .toList(growable: false);
   }
 
   final Map<String, dynamic> raw;
@@ -1032,9 +1039,15 @@ class MatchEvent {
   late final String? avatarRoleId;
   late final String text;
   late final String createdAt;
+  late final String channelName;
+  late final List<String>? audienceNames;
+
+  String get scopeLabel => audienceNames == null
+      ? channelName
+      : '$channelName · 接收：${audienceNames!.join('、')}';
 }
 
-/// 单局历史详情：结算 + 参与身份 + 公开时间线。
+/// 单局历史详情：结算、参与身份、全部消息与主持人日志。
 class MatchDetail {
   MatchDetail.fromJson(Object? value)
       : match = MatchSummary.fromJson(value),
@@ -1044,11 +1057,22 @@ class MatchDetail {
         : jsonArray(raw['events'], 'match.detail.events')
             .map(MatchEvent.fromJson)
             .toList(growable: false);
+    hostLog = raw['host_log'] == null
+        ? const []
+        : jsonArray(raw['host_log'], 'match.detail.host_log')
+            .map((item) => jsonObject(item, 'match.detail.host_log.entry'))
+            .toList(growable: false);
+    exportText = raw['export_text']?.toString() ?? '';
+    archiveComplete =
+        jsonBool(raw['archive_complete'], 'match.detail.archive_complete');
   }
 
   final Map<String, dynamic> raw;
   final MatchSummary match;
   late final List<MatchEvent> events;
+  late final List<Map<String, dynamic>> hostLog;
+  late final String exportText;
+  late final bool archiveComplete;
 }
 
 /// 一条「正在输入」状态：由服务端按频道可见性中继，客户端只渲染不持久。

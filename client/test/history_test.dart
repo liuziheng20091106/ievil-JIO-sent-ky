@@ -7,7 +7,7 @@ import 'package:seven_double_client/src/models.dart';
 import 'package:seven_double_client/src/role_visuals.dart';
 import 'package:seven_double_client/src/store.dart';
 
-/// 历史对局页面：列表、单局详情（身份与公开时间线）与空状态。
+/// 历史对局页面：列表、单局详情、频道记录、滚动与维护权限。
 ///
 /// 页面自己不发请求：数据走注入的 loader（widget 测试里真实 HTTP 会被测试框架拦掉），
 /// 接口本身的路径、查询与字段解析由 `game_api_test.dart` 覆盖。
@@ -122,7 +122,7 @@ void main() {
     expect(find.text('对局记录'), findsOneWidget);
   });
 
-  testWidgets('单局详情渲染身份、公开时间线与隐私说明', (tester) async {
+  testWidgets('单局详情保留身份与主持人头像', (tester) async {
     final store = await previewStore();
     await pump(
       tester,
@@ -131,6 +131,7 @@ void main() {
         matchId: 'game-1',
         loader: (matchId) async => MatchDetail.fromJson({
           ...matchJson(),
+          'archive_complete': true,
           'events': [
             {
               'seq': 0,
@@ -165,19 +166,63 @@ void main() {
     expect(find.text('已移出'), findsOneWidget);
     expect(find.textContaining('新对局已创建'), findsOneWidget);
     expect(find.text('公屏上说过的话'), findsOneWidget);
-    expect(find.text('公开时间线'), findsOneWidget);
-    expect(find.textContaining('私信与只发给个人的情报不入库'), findsOneWidget);
 
     // 回归：主持人消息的头像是月代雪立绘，不能退化成「?」占位。
     final hostAvatar = tester.widget<RoleAvatar>(
-      find.descendant(
-        of: find.widgetWithText(Row, '主持人公屏上说过的话').first,
-        matching: find.byType(RoleAvatar),
-      ).last,
+      find
+          .descendant(
+            of: find.widgetWithText(Row, '主持人公屏上说过的话').first,
+            matching: find.byType(RoleAvatar),
+          )
+          .last,
     );
     expect(hostAvatar.host, isTrue);
     expect(hostAvatar.roleId, 'host');
     expect(find.text('?'), findsNothing);
+  });
+  testWidgets('拖动滚动条可读到长记录末尾与主持人日志', (tester) async {
+    final store = await previewStore();
+    await pump(
+      tester,
+      MatchDetailPage(
+        store: store,
+        matchId: 'game-1',
+        loader: (_) async => MatchDetail.fromJson({
+          ...matchJson(),
+          'archive_complete': true,
+          'events': [
+            for (var i = 0; i < 450; i++)
+              {
+                'seq': i,
+                'kind': 'chat',
+                'sender_name': 'kiwi',
+                'channel_name': '私聊：kiwi、主持人',
+                'text': '私聊记录 $i',
+                'created_at': '2026-09-26T01:30:00+00:00',
+              },
+          ],
+          'host_log': [
+            {'day': 3, 'half': 'night', 'kind': 'death', 'text': '最终裁定：魔女全部出局'},
+          ],
+        }),
+      ),
+    );
+    final scrollbar = tester.widget<Scrollbar>(find.byType(Scrollbar));
+    final controller = scrollbar.controller!;
+    expect(find.text('私聊记录 449'), findsNothing);
+    // 惰性列表会逐步细化长度；拖住常驻滑块一路到底。
+    final gesture = await tester.startGesture(const Offset(416, 68));
+    await gesture.moveTo(const Offset(416, 858));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(controller.offset, greaterThan(0));
+    await tester.scrollUntilVisible(
+      find.textContaining('最终裁定：魔女全部出局'),
+      700,
+      scrollable: find.byType(Scrollable),
+      maxScrolls: 100,
+    );
+    expect(find.textContaining('最终裁定：魔女全部出局'), findsOneWidget);
   });
 
   testWidgets('没有历史对局时显示空状态', (tester) async {

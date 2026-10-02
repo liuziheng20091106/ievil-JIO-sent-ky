@@ -31,6 +31,8 @@ class FlutterWindow : public Win32Window {
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> image_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> history_export_channel_;
+  bool history_export_busy_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

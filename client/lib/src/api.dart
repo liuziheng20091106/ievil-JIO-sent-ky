@@ -527,7 +527,7 @@ class GameApi {
     );
   }
 
-  /// 单局历史详情：结算、七个席位的两张角色牌与公开时间线。
+  /// 单局历史详情：结算、角色牌、全部频道消息、主持人日志与完整 TXT 正文。
   Future<MatchDetail> match(String matchId) async => MatchDetail.fromJson(
         await _request('GET', '/api/history/${Uri.encodeComponent(matchId)}'),
       );
