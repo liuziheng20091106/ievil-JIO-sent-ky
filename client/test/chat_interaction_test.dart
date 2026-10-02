@@ -167,173 +167,190 @@ void main() {
     expect(newStore.takeActionTutorial()?.id, 'speech.done');
   });
 
-  testWidgets('公开顺序与当前席位随服务端状态更新', (tester) async {
+  testWidgets('发言分隔符实时落在本轮起点，结束和重连后保留', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    final store = GameStore.forPreview(
-      preferences: await SharedPreferences.getInstance(),
-      endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
-      actor: Actor.fromJson({
-        'id': 'p1',
-        'account_id': 'a1',
-        'kind': 'player',
-        'seat_id': '1',
-        'name': '一号',
-      }),
-      view: GameView.fromJson({
-        'ui_version': 1,
-        'id': 'game-1',
-        'version': 1,
-        'status': 'playing',
-        'day': 1,
-        'half': 'day',
-        'phase': 'speech',
-        'phase_label': '顺序发言',
-        'seats': [
-          {
-            'id': '1',
-            'participant_id': 'p1',
-            'avatar_role_id': 'anna',
-            'occupied': true
-          },
-          {
-            'id': '2',
-            'participant_id': 'p2',
-            'avatar_role_id': 'millia',
-            'occupied': true
-          },
-        ],
-        'self': {'seat_id': '1'},
-        'actions': [],
-        'public': {
-          'speech_order': ['2', '1'],
-          'speaker': '2'
+    final preferences = await SharedPreferences.getInstance();
+    final actor = Actor.fromJson({
+      'id': 'p1',
+      'account_id': 'a1',
+      'kind': 'player',
+      'seat_id': '1',
+      'name': '一号',
+    });
+    final base = <String, dynamic>{
+      'ui_version': 1,
+      'id': 'game-1',
+      'version': 1,
+      'status': 'playing',
+      'day': 1,
+      'half': 'day',
+      'phase': 'speech',
+      'phase_label': '顺序发言',
+      'seats': [
+        {
+          'id': '1',
+          'participant_id': 'p1',
+          'avatar_role_id': 'annan',
+          'occupied': true
         },
-        'channels': [
-          {
-            'id': 'public',
-            'label': '公开讨论',
-            'status': 'active',
-            'can_send': true,
-            'reason': '',
-            'actions': []
+        {
+          'id': '2',
+          'participant_id': 'p2',
+          'avatar_role_id': 'millia',
+          'occupied': true
+        },
+      ],
+      'self': {'seat_id': '1'},
+      'actions': <dynamic>[],
+      'public': {
+        'speech_order': ['2', '1'],
+        'speaker': '2'
+      },
+      'channels': [
+        {
+          'id': 'public',
+          'label': '公开讨论',
+          'status': 'active',
+          'can_send': true,
+          'reason': '',
+          'actions': <dynamic>[]
+        },
+      ],
+    };
+    Map<String, dynamic> chat(int id, String sender, String text) => {
+          'id': id,
+          'kind': 'chat',
+          'text': text,
+          'sender_id': sender,
+          'sender_name': sender,
+          'channel_id': 'public',
+        };
+    Map<String, dynamic> turn(int id, String seat, String role,
+            {int day = 1}) =>
+        {
+          'id': id,
+          'kind': 'speech_turn',
+          'text': '$seat号开始顺序发言。',
+          'sender_id': 'host',
+          'channel_id': 'public',
+          'payload': {
+            'type': 'speech_turn',
+            'day': day,
+            'seat_id': seat,
+            'avatar_role_id': role
           },
-        ],
-      }),
+        };
+    final store = GameStore.forPreview(
+      preferences: preferences,
+      endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
+      actor: actor,
+      view: GameView.fromJson(base),
       gameId: 'game-1',
-    );
-    await tester.binding.setSurfaceSize(const Size(420, 880));
+      messages: [
+        GameMessage.fromJson(chat(1, 'p2', '二号此前自由聊天')),
+        GameMessage.fromJson(chat(2, 'p1', '一号此前自由聊天')),
+      ],
+    )..messageScope = 'public';
+    addTearDown(store.dispose);
+    await tester.binding.setSurfaceSize(const Size(420, 1100));
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
         MaterialApp(theme: buildAppTheme(), home: GameShell(store: store)));
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('1. 2号'), findsNothing);
-    expect(find.text('2. 1号'), findsNothing);
-    expect(find.text('2号'), findsWidgets);
-    expect(find.byType(RoleAvatar), findsWidgets);
-  });
-  testWidgets('席位号不显示额外顺序序号，分隔符位于本轮首条发言前', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    final messages = [
-      GameMessage.fromJson({
-        'id': 1,
-        'kind': 'chat',
-        'text': '希罗：我先说到这里',
-        'sender_id': 'p2',
-        'sender_name': '二号',
-        'channel_id': 'public',
-      }),
-      GameMessage.fromJson({
-        'id': 2,
-        'kind': 'chat',
-        'text': '安安：这是我说的话',
-        'sender_id': 'p1',
-        'sender_name': '一号',
-        'channel_id': 'public',
-      }),
-      GameMessage.fromJson({
-        'id': 3,
-        'kind': 'chat',
-        'text': '安安：114514',
-        'sender_id': 'p1',
-        'sender_name': '一号',
-        'channel_id': 'public',
-      }),
-    ];
-    final store = GameStore.forPreview(
-      preferences: await SharedPreferences.getInstance(),
-      endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
-      actor: Actor.fromJson({
-        'id': 'p1',
-        'account_id': 'a1',
-        'kind': 'player',
-        'seat_id': '1',
-        'name': '一号',
-      }),
-      view: GameView.fromJson({
-        'ui_version': 1,
-        'id': 'game-1',
-        'version': 1,
-        'status': 'playing',
-        'day': 1,
-        'half': 'day',
-        'phase': 'speech',
-        'phase_label': '顺序发言',
-        'seats': [
-          {
-            'id': '1',
-            'participant_id': 'p1',
-            'avatar_role_id': 'anna',
-            'occupied': true
-          },
-          {
-            'id': '2',
-            'participant_id': 'p2',
-            'avatar_role_id': 'millia',
-            'occupied': true
-          },
-        ],
-        'self': {'seat_id': '1'},
-        'actions': [],
+    expect(find.byKey(const ValueKey('speech-divider-3')), findsNothing);
+
+    store
+        .applyLiveEvent({'type': 'message', 'message': turn(3, '2', 'millia')});
+    await tester.pump(const Duration(milliseconds: 600));
+    final secondTurn = find.byKey(const ValueKey('speech-divider-3'));
+    expect(secondTurn, findsOneWidget);
+    expect(tester.getTopLeft(secondTurn).dy,
+        greaterThan(tester.getTopLeft(find.text('一号此前自由聊天')).dy));
+    store.applyLiveEvent(
+        {'type': 'message', 'message': chat(4, 'p2', '二号本轮发言')});
+    store.applyLiveEvent({'type': 'message', 'message': turn(5, '1', 'annan')});
+    store.applyLiveEvent({
+      'type': 'state',
+      'state': {
+        ...base,
+        'version': 2,
         'public': {
           'speech_order': ['2', '1'],
           'speaker': '1'
         },
-        'channels': [
-          {
-            'id': 'public',
-            'label': '公开讨论',
-            'status': 'active',
-            'can_send': true,
-            'reason': '',
-            'actions': [],
-          },
-        ],
-      }),
-      gameId: 'game-1',
-      messages: messages,
-    );
-    await tester.binding.setSurfaceSize(const Size(420, 880));
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-        MaterialApp(theme: buildAppTheme(), home: GameShell(store: store)));
+      }
+    });
     await tester.pump(const Duration(milliseconds: 600));
+    final firstTurn = find.byKey(const ValueKey('speech-divider-5'));
+    expect(firstTurn, findsOneWidget);
+    expect(tester.getTopLeft(firstTurn).dy,
+        greaterThan(tester.getTopLeft(find.text('二号本轮发言')).dy));
+    store.applyLiveEvent(
+        {'type': 'message', 'message': chat(6, 'p1', '一号本轮发言')});
+    store.applyLiveEvent(
+        {'type': 'message', 'message': turn(7, '2', 'hiro', day: 2)});
+    final finished = <String, dynamic>{
+      ...base,
+      'version': 3,
+      'day': 2,
+      'phase': 'discussion',
+      'phase_label': '自由讨论',
+      'public': {'speech_order': <dynamic>[], 'speaker': null},
+      'seats': [
+        {
+          'id': '1',
+          'participant_id': 'replacement',
+          'avatar_role_id': null,
+          'occupied': true
+        },
+        {
+          'id': '2',
+          'participant_id': 'p2',
+          'avatar_role_id': 'hiro',
+          'occupied': true
+        },
+      ],
+    };
+    store.applyLiveEvent({'type': 'state', 'state': finished});
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(tester.getTopLeft(firstTurn).dy,
+        lessThan(tester.getTopLeft(find.text('一号本轮发言')).dy));
+    expect(find.byKey(const ValueKey('speech-divider-7')), findsOneWidget);
+    final historicalAvatar =
+        find.descendant(of: secondTurn, matching: find.byType(RoleAvatar));
+    expect(tester.widget<RoleAvatar>(historicalAvatar).roleId, 'millia');
 
-    expect(find.text('1. 2号'), findsNothing);
-    expect(find.text('2. 1号'), findsNothing);
-    expect(find.text('2号'), findsWidgets);
-    expect(find.byKey(const ValueKey('speech-divider-2')), findsOneWidget);
-    expect(find.byKey(const ValueKey('speech-divider-1')), findsOneWidget);
-    final hiroDivider =
-        tester.getTopLeft(find.byKey(const ValueKey('speech-divider-2')));
-    final hiroMessage = tester.getTopLeft(find.text('希罗：我先说到这里'));
-    final annaDivider =
-        tester.getTopLeft(find.byKey(const ValueKey('speech-divider-1')));
-    final annaMessage = tester.getTopLeft(find.text('安安：这是我说的话'));
-    final annaSecondMessage = tester.getTopLeft(find.text('安安：114514'));
-    expect(hiroDivider.dy, lessThan(hiroMessage.dy));
-    expect(annaDivider.dy, lessThan(annaMessage.dy));
-    expect(annaDivider.dy, greaterThan(hiroMessage.dy));
-    expect(annaSecondMessage.dy, greaterThan(annaMessage.dy));
+    final history = store.messages.map((item) => item.raw).toList();
+    store.applyLiveEvent(
+        {'type': 'sync', 'state': finished, 'messages': history});
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(secondTurn, findsOneWidget);
+    expect(firstTurn, findsOneWidget);
+    final reopened = GameStore.forPreview(
+      preferences: preferences,
+      endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
+      actor: actor,
+      view: GameView.fromJson(finished),
+      gameId: 'game-1',
+      messages: history.map(GameMessage.fromJson).toList(),
+    );
+    addTearDown(reopened.dispose);
+    await tester.pumpWidget(MaterialApp(
+        theme: buildAppTheme(),
+        home: GameShell(key: const ValueKey('reopened'), store: reopened)));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(secondTurn, findsOneWidget);
+    expect(firstTurn, findsOneWidget);
+    expect(find.byKey(const ValueKey('speech-divider-7')), findsOneWidget);
+    expect(
+        tester
+            .widget<RoleAvatar>(find.descendant(
+                of: secondTurn, matching: find.byType(RoleAvatar)))
+            .roleId,
+        'millia');
+    expect(tester.getTopLeft(secondTurn).dy,
+        greaterThan(tester.getTopLeft(find.text('一号此前自由聊天')).dy));
+    await tester.pump(const Duration(seconds: 2));
   });
   testWidgets('正文长按区分本人菜单，复制与撤回占位', (tester) async {
     String? copied;

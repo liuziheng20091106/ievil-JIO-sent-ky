@@ -1,5 +1,8 @@
 """聊天提及和撤回：实际 HTTP/WebSocket 口径及旧库迁移。"""
 
+import base64
+import struct
+import zlib
 import os
 import tempfile
 import unittest
@@ -101,6 +104,70 @@ class ChatInteractions(unittest.TestCase):
         page = self.client.get(self.root + "/messages", headers=headers)
         page.raise_for_status()
         return next((m for m in page.json()["messages"] if m["id"] == message_id), None)
+
+    def test_chat_images_are_bounded_private_persistent_and_retractable(self):
+        def png_data(size=0):
+            def chunk(tag, data):
+                return (
+                    struct.pack(">I", len(data))
+                    + tag
+                    + data
+                    + struct.pack(">I", zlib.crc32(tag + data))
+                )
+
+            png = b"\x89PNG\r\n\x1a\n"
+            png += chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+            png += chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
+            if size:
+                png += chunk(b"tEXt", b"Comment\x00" + b"x" * (size - len(png) - 32))
+            png += chunk(b"IEND", b"")
+            return "data:image/png;base64," + base64.b64encode(png).decode()
+
+        first, a = self.join("25001")
+        second, b = self.join("25002")
+        third, _ = self.join("25003")
+        created = self.command(self.host, "channel.create", {"participant_ids": [a["id"], b["id"]]})
+        private = next(
+            item["id"] for item in created["channels"] if item["id"].startswith("private:")
+        )
+        image = png_data(100 * 1024)
+        self.assertEqual(len(base64.b64decode(image.split(",")[1])), 100 * 1024)
+        with self.client.websocket_connect(
+            "/api/live?game_id=" + self.root.rsplit("/", 1)[-1], headers=second
+        ) as socket:
+            socket.receive_json()
+            sent = self.send(first, private, "", image=image)
+            live = socket.receive_json()
+            while live["type"] != "message":
+                live = socket.receive_json()
+            self.assertEqual(live["message"]["payload"]["image"], image)
+        self.assertEqual(self.history(second, sent["id"])["payload"]["image"], image)
+        self.assertIsNone(self.history(third, sent["id"]))
+        with storage.connect() as db:
+            row = db.execute("SELECT payload FROM messages WHERE id=?", (sent["id"],)).fetchone()
+            self.assertIn(image, row["payload"])
+        for invalid in (
+            png_data(100 * 1024 + 1),
+            "data:image/png;base64,ZmFrZQ==",
+            "data:image/svg+xml;base64,PHN2Zz4=",
+        ):
+            response = self.client.post(
+                self.root + "/messages",
+                headers=first,
+                json={"channel_id": private, "image": invalid},
+            )
+            self.assertEqual(response.status_code, 422)
+        response = self.client.post(
+            self.root + f"/messages/{sent['id']}/retract", headers=first, json={}
+        )
+        response.raise_for_status()
+        self.assertNotIn("payload", self.history(second, sent["id"]))
+        self.assertEqual(
+            self.client.post(
+                self.root + "/messages", headers=first, json={"channel_id": "public", "text": "   "}
+            ).status_code,
+            422,
+        )
 
     def test_public_private_and_self_mentions_use_visible_occupied_player_ids(self):
         first, a = self.join("21001")

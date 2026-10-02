@@ -1,6 +1,10 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <shobjidl.h>
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
+#include <fstream>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -27,6 +31,59 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  image_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "chat_image",
+      &flutter::StandardMethodCodec::GetInstance());
+  image_channel_->SetMethodCallHandler(
+      [this](const auto& call, auto result) {
+        if (call.method_name() != "pick") {
+          result->NotImplemented();
+          return;
+        }
+        IFileOpenDialog* dialog = nullptr;
+        HRESULT status = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+            CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+        if (FAILED(status)) {
+          result->Error("picker", "无法打开图片选择器");
+          return;
+        }
+        const COMDLG_FILTERSPEC filters[] = {{L"图片", L"*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp"}};
+        dialog->SetFileTypes(1, filters);
+        status = dialog->Show(GetHandle());
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(status)) status = dialog->GetResult(&item);
+        dialog->Release();
+        if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+          result->Success();
+          return;
+        }
+        if (FAILED(status)) {
+          result->Error("picker", "无法读取所选图片");
+          return;
+        }
+        PWSTR path = nullptr;
+        status = item->GetDisplayName(SIGDN_FILESYSPATH, &path);
+        item->Release();
+        if (FAILED(status)) {
+          result->Error("picker", "无法读取所选图片");
+          return;
+        }
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        CoTaskMemFree(path);
+        const auto size = file.tellg();
+        if (!file || size <= 0 || size > 20 * 1024 * 1024) {
+          result->Error("image", "请选择20MB以内的图片");
+          return;
+        }
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+        file.seekg(0);
+        if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
+          result->Error("image", "无法读取所选图片");
+          return;
+        }
+        result->Success(flutter::EncodableValue(std::move(bytes)));
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +97,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  image_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

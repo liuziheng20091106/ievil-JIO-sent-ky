@@ -105,9 +105,12 @@ class GameStore extends ChangeNotifier {
     try {
       final result = await client.references(id);
       if (gameId != id) return;
-      referenceEvents = jsonArray(result['events']).map(ReferenceItem.fromJson).toList();
-      referenceRoles = jsonArray(result['roles']).map(ReferenceItem.fromJson).toList();
-      referenceSkills = jsonArray(result['skills']).map(ReferenceItem.fromJson).toList();
+      referenceEvents =
+          jsonArray(result['events']).map(ReferenceItem.fromJson).toList();
+      referenceRoles =
+          jsonArray(result['roles']).map(ReferenceItem.fromJson).toList();
+      referenceSkills =
+          jsonArray(result['skills']).map(ReferenceItem.fromJson).toList();
       referencesGameId = id;
     } on ApiException catch (failure) {
       referenceError = failure.message;
@@ -567,7 +570,8 @@ class GameStore extends ChangeNotifier {
   bool get agreementPending =>
       actor == null &&
       (agreementLoading ||
-          (!agreement.isEmpty && !agreement.acceptedBy(_acceptedAgreementHash)));
+          (!agreement.isEmpty &&
+              !agreement.acceptedBy(_acceptedAgreementHash)));
 
   /// 已经同意过的协议哈希（按服务地址隔离）。
   String? get _acceptedAgreementHash {
@@ -752,15 +756,15 @@ class GameStore extends ChangeNotifier {
       final result = await api!.lobby();
       lobbyGame =
           result['game'] == null ? null : LobbyGame.fromJson(result['game']);
-      invites = jsonArray(result['invites'] ?? const <dynamic>[], 'lobby.invites')
-          .map(LobbyInvite.fromJson)
-          .toList(growable: false);
+      invites =
+          jsonArray(result['invites'] ?? const <dynamic>[], 'lobby.invites')
+              .map(LobbyInvite.fromJson)
+              .toList(growable: false);
       // 大厅轮询顺带取公告：版本号变了才重建列表，避免每 5 秒刷新一次列表状态。
       final version = result['announcements_version']?.toString() ?? '';
       if (version != announcementsVersion) {
         announcementsVersion = version;
-        announcements = jsonArray(
-                result['announcements'] ?? const <dynamic>[],
+        announcements = jsonArray(result['announcements'] ?? const <dynamic>[],
                 'lobby.announcements')
             .map(Announcement.fromJson)
             .toList(growable: false);
@@ -897,9 +901,10 @@ class GameStore extends ChangeNotifier {
     if (api == null || actor == null) return;
     try {
       final result = await api!.online(gameId: gameId);
-      online = jsonArray(result['accounts'] ?? const <dynamic>[], 'online.accounts')
-          .map(OnlineAccount.fromJson)
-          .toList(growable: false);
+      online =
+          jsonArray(result['accounts'] ?? const <dynamic>[], 'online.accounts')
+              .map(OnlineAccount.fromJson)
+              .toList(growable: false);
       _noteUpdateFlag(
           jsonBool(result['update_available'], 'online.update_available'));
     } on ApiException {
@@ -1261,7 +1266,8 @@ class GameStore extends ChangeNotifier {
             if (message.id > _readCursor && message.senderId != actor?.id) {
               unreadMessageCount++;
             }
-            if (message.kind == 'chat' && message.senderId != actor?.id &&
+            if (message.kind == 'chat' &&
+                message.senderId != actor?.id &&
                 message.mentionIds.contains(actor?.id) &&
                 message.id > _readCursor) {
               _mentionedMessageIds.add(message.id);
@@ -1364,7 +1370,8 @@ class GameStore extends ChangeNotifier {
     warningCount = next.self['warning_deadline'] != null
         ? 1
         : (tasks is List
-            ? tasks.where((task) => task is Map && task['blocking'] == true)
+            ? tasks
+                .where((task) => task is Map && task['blocking'] == true)
                 .length
             : 0);
 
@@ -1430,7 +1437,8 @@ class GameStore extends ChangeNotifier {
     view = next;
     // 候场期间陆续有人入席：参与身份变了就补一次佩戴信息，后入席的玩家也有徽章。
     final participants = next.participantIds;
-    if (participants.isNotEmpty && !setEquals(participants, _equippedRequested)) {
+    if (participants.isNotEmpty &&
+        !setEquals(participants, _equippedRequested)) {
       _equippedRequested = participants;
       loadGameAchievements();
     }
@@ -1614,8 +1622,8 @@ class GameStore extends ChangeNotifier {
     if (api == null || gameId == null) return;
     final after = messages.isEmpty ? 0 : messages.last.id;
     try {
-      final page = await api!
-          .messages(gameId!, scope: messageScope, after: after, asSeat: activeAsSeat);
+      final page = await api!.messages(gameId!,
+          scope: messageScope, after: after, asSeat: activeAsSeat);
       _mergeMessages(page.messages);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -1705,12 +1713,12 @@ class GameStore extends ChangeNotifier {
 
   bool _matchesScope(GameMessage message, String scope) {
     // 观战者独享观战频道：聊天消息只认观战频道，公屏/私信筛选统一映射过去。
-    final spectatorChat =
-        actor?.isSpectator == true && message.kind == 'chat';
+    final spectatorChat = actor?.isSpectator == true && message.kind == 'chat';
     if (spectatorChat && message.channelId != 'spectator') return false;
     return switch (scope) {
-      'public' => message.kind == 'chat' &&
-          message.channelId == (actor?.isSpectator == true ? 'spectator' : 'public'),
+      'public' => (message.kind == 'chat' || message.kind == 'speech_turn') &&
+          message.channelId ==
+              (actor?.isSpectator == true ? 'spectator' : 'public'),
       'system' => message.channelId == 'system' || message.kind != 'chat',
       'host' => message.channelId != 'public' &&
           message.channelId != 'system' &&
@@ -1786,7 +1794,8 @@ class GameStore extends ChangeNotifier {
 
   GameChannel? get selectedChannel {
     for (final target in sendTargets) {
-      if (target.asSeat == activeAsSeat && target.channel.id == activeChannelId) {
+      if (target.asSeat == activeAsSeat &&
+          target.channel.id == activeChannelId) {
         return target.channel;
       }
     }
@@ -1855,10 +1864,12 @@ class GameStore extends ChangeNotifier {
   /// [hasText] 为假（清空/已发送）或频道切换时，对之前上报过的频道补发停止。
   void reportTyping({required bool hasText}) {
     final channelId = activeChannelId;
-    final switched = _typingLastChannel != null && _typingLastChannel != channelId;
+    final switched =
+        _typingLastChannel != null && _typingLastChannel != channelId;
     if (!hasText || switched) {
       // 已经上报过的频道才需要停止帧；停止后清空节流基线。
-      for (final channel in _typingActiveChannels.where((c) => c != channelId || !hasText)) {
+      for (final channel
+          in _typingActiveChannels.where((c) => c != channelId || !hasText)) {
         live?.sendTyping(channel, active: false);
       }
       _typingActiveChannels.clear();
@@ -1880,9 +1891,16 @@ class GameStore extends ChangeNotifier {
     _typingActiveChannels.add(channelId);
     live!.sendTyping(channelId);
   }
-  Future<void> sendMessage(String text, {List<ChatReference> references = const []}) async {
+
+  Future<void> sendMessage(String text,
+      {String? image, List<ChatReference> references = const []}) async {
     final id = gameId;
-    if (api == null || id == null || writeBusy || text.trim().isEmpty) return;
+    if (api == null ||
+        id == null ||
+        writeBusy ||
+        (text.trim().isEmpty && image == null)) {
+      return;
+    }
     writeBusy = true;
     error = null;
     notifyListeners();
@@ -1895,7 +1913,7 @@ class GameStore extends ChangeNotifier {
     ];
     try {
       final message = await api!.sendMessage(id, activeChannelId, trimmed,
-          asSeat: puppetSeatId, references: adjusted);
+          asSeat: puppetSeatId, image: image, references: adjusted);
       _mergeMessages([message]);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -1918,7 +1936,8 @@ class GameStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final updated = await api!.retractMessage(id, message.id, asSeat: activeAsSeat);
+      final updated =
+          await api!.retractMessage(id, message.id, asSeat: activeAsSeat);
       _mergeMessages([updated]);
     } on ApiException catch (failure) {
       error = failure.message;
@@ -2065,8 +2084,8 @@ class GameStore extends ChangeNotifier {
     String? asSeat,
     Map<String, dynamic>? initial,
   }) async {
-    await preferences.remove(
-        'draft:${draftKey(action, asSeat: asSeat, initial: initial)}');
+    await preferences
+        .remove('draft:${draftKey(action, asSeat: asSeat, initial: initial)}');
   }
 
   String _preferenceKey(String suffix) =>
@@ -2115,8 +2134,7 @@ class GameStore extends ChangeNotifier {
       } else {
         // origin 自身含冒号（http://…），gameId/account 不含，因此贪婪的
         // 第一组能吃下完整 origin，随后两组分别对上 gameId 与 account。
-        final match =
-            RegExp('^(.+):([^:]*):([^:]*):(.+)\$').firstMatch(key);
+        final match = RegExp('^(.+):([^:]*):([^:]*):(.+)\$').firstMatch(key);
         if (match != null &&
             match.group(1) == origin &&
             match.group(3) == account) {

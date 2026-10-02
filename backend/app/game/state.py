@@ -1337,17 +1337,18 @@ def witch_seats(game):
 
 
 def emma_solo_win(game):
-    """魔女化艾玛单独获胜：她展开全场攻击的那一夜就是终局。
+    """全场攻击正常结算后艾玛单胜，存活与实际死亡人数不影响胜负。
 
-    用户裁定（2026-09-27）：清场夜＝对局结束——只要全场攻击在本夜正常结算就直接判她
-    单独获胜。每个席位仍然只掉当前牌（半天一牌不变），庇护、玛格的爱与米莉亚替死只
-    决定谁掉牌，不再阻止胜负；唯一的结构性反制是希罗回溯——回溯会把整个 night 连同
-    这里的标记一起还原回快照（见 `resolution.night_damage`）。
+    massacre 在锁定后的预结算中记录；只有进入 night_results 才算正常结算。
+    希罗回溯会在落死亡之前终止结算，并把整个 night 还原回快照。
     """
     emma = role_card(game, "emma")
-    if not (emma["witch"] and emma["alive"]) or game["half"] != "night":
-        return False
-    return bool((game.get("night") or {}).get("massacre"))
+    return bool(
+        emma["witch"]
+        and game["half"] == "night"
+        and game["phase"] == "night_results"
+        and (game.get("night") or {}).get("massacre")
+    )
 
 
 def check_winner(game):
@@ -1355,7 +1356,7 @@ def check_winner(game):
         # 艾玛的单胜独立于两个阵营：她单独获胜，其余玩家均落败。
         game["winner_candidate"] = {
             "winner": "emma",
-            "reason": "魔女化艾玛杀死所有其他角色，单独获胜，其余玩家均落败",
+            "reason": "魔女化艾玛的全场攻击已正常结算，单独获胜，其余玩家均落败",
         }
         return
     faction = witch_faction(game)

@@ -1,6 +1,6 @@
 """Validated transport inputs; game commands remain domain-validated."""
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from typing import Literal
 
 
@@ -73,9 +73,16 @@ class ChatReference(Input):
 
 class Chat(Input):
     channel_id: str = Field(min_length=1, max_length=100)
-    text: str = Field(min_length=1, max_length=2000)
+    text: str = Field(default="", max_length=2000)
+    image: str | None = Field(default=None, max_length=136_559)
     as_seat: str | None = Field(default=None, max_length=4)
     references: list[ChatReference] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def require_content(self):
+        if not self.text and not self.image:
+            raise ValueError("请填写消息文字或选择图片")
+        return self
 
 
 class ChatRetract(Input):

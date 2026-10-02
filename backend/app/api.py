@@ -1392,6 +1392,12 @@ async def send_message(game_id: str, body: schemas.Chat, request: Request):
                     if target and target["active"] and not target["blocked"]:
                         mention_ids.append(target_id)
             references_payload = chat_references(db, game_id, body.text, body.references)
+            if body.image is not None:
+                _, image = evidence.decode_image(body.image)
+                if len(image) > 100 * 1024:
+                    raise HTTPException(422, "聊天图片必须压缩到100KB以内")
+                references_payload = references_payload or {"type": "references", "items": []}
+                references_payload["image"] = body.image
             seat = seat_for(game, actor["seat_id"]) if actor["seat_id"] else None
             row = storage.add_message(
                 db,

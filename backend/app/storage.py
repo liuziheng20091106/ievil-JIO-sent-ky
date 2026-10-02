@@ -414,6 +414,7 @@ def project_message_payload(raw, actor, kind=None):
         fields = ("start", "end", "type", "id", "label", "text", "image_id")
         return {
             "type": "references",
+            **({"image": payload["image"]} if isinstance(payload.get("image"), str) else {}),
             "items": [
                 {key: item[key] for key in fields if key in item}
                 for item in payload["items"]
@@ -421,6 +422,12 @@ def project_message_payload(raw, actor, kind=None):
             ],
         }
 
+    if kind == "speech_turn" and payload.get("type") == "speech_turn":
+        return {
+            key: payload[key]
+            for key in ("type", "day", "seat_id", "avatar_role_id")
+            if key in payload
+        }
     if payload.get("type") == "death":
         return {key: payload[key] for key in ("type", "day", "half", "deaths") if key in payload}
     if payload.get("type") == "plugin":
@@ -591,7 +598,7 @@ def messages(
         if actor.get("kind") == "spectator" and not host_capable(actor):
             clauses.append("m.kind='chat' AND m.channel_id='spectator'")
         else:
-            clauses.append("m.kind='chat' AND m.channel_id='public'")
+            clauses.append("m.kind IN ('chat','speech_turn') AND m.channel_id='public'")
     elif scope == "private":
         clauses.append("m.kind='chat' AND m.channel_id!='public' AND m.channel_id!='information'")
         if actor.get("kind") == "spectator" and not host_capable(actor):

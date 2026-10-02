@@ -16,6 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    private var imageResult: MethodChannel.Result? = null
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -76,6 +77,60 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "chat_image")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "pick") {
+                    result.notImplemented()
+                } else if (imageResult != null) {
+                    result.error("busy", "正在选择图片", null)
+                } else {
+                    imageResult = result
+                    try {
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(
+                            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                type = "image/*"
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                            },
+                            IMAGE_REQUEST,
+                        )
+                    } catch (failure: Exception) {
+                        imageResult = null
+                        result.error("picker", "无法打开图片选择器", null)
+                    }
+                }
+            }
+    }
+
+    @Deprecated("Activity result API inherited from FlutterActivity")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != IMAGE_REQUEST) return
+        val result = imageResult ?: return
+        imageResult = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            result.success(null)
+            return
+        }
+        try {
+            val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (output.size() + count > 20 * 1024 * 1024) {
+                        throw IllegalArgumentException("请选择20MB以内的图片")
+                    }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: throw IllegalArgumentException("无法读取所选图片")
+            result.success(bytes)
+        } catch (failure: Exception) {
+            result.error("image", failure.message ?: "无法读取所选图片", null)
+        }
     }
 
     /// 用系统默认浏览器打开网页；没有可用浏览器时返回 false（界面退回复制链接）。
@@ -178,5 +233,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val INVITE_CHANNEL_ID = "invites"
         private const val INVITE_NOTIFICATION_ID = 2
+        private const val IMAGE_REQUEST = 2001
     }
 }

@@ -43,9 +43,7 @@ class SpeechTimerRelay(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.host, self.host_actor_id = self.host_login("10001")
-        created = self.client.post(
-            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX}
-        )
+        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
         created.raise_for_status()
         self.game_id = created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
@@ -177,6 +175,89 @@ class SpeechTimerRelay(unittest.TestCase):
         return self.state(headers)["public"]["speech_deadline"]
 
     # ------------------------------------------------------------------ 用例
+
+    def test_turn_boundaries_are_live_and_survive_skips_reordering_and_reconnect(self):
+        earlier = self.client.post(
+            self.root + "/messages",
+            headers=self.host,
+            json={"channel_id": "public", "text": "开局前的自由聊天"},
+        )
+        earlier.raise_for_status()
+        players, state = self.speaking_phase()
+        headers = {sid: self.seat_headers(players, sid) for sid in map(str, range(1, 8))}
+        self.command(self.host, "host.auto")  # 收尾由本用例显式推进，避免五秒计时竞态。
+        state = self.command(self.host, "host.speech", {"start": "1", "direction": "asc"})
+
+        def history():
+            response = self.client.get(
+                self.root + "/messages", headers=headers["2"], params={"scope": "public"}
+            )
+            response.raise_for_status()
+            return response.json()["messages"]
+
+        initial = [item for item in history() if item["kind"] == "speech_turn"]
+        self.assertEqual(initial[-1]["payload"]["seat_id"], "1")
+        self.assertGreater(initial[0]["id"], earlier.json()["id"])
+        seat = next(item for item in state["seats"] if item["id"] == "1")
+        self.assertEqual(initial[-1]["payload"]["avatar_role_id"], seat["avatar_role_id"])
+        sent = self.client.post(
+            self.root + "/messages",
+            headers=headers["1"],
+            json={"channel_id": "public", "text": "一号本轮发言"},
+        )
+        sent.raise_for_status()
+        self.assertLess(initial[-1]["id"], sent.json()["id"])
+        self.command(headers["3"], "speech.speak", {"text": "三号提前写好的发言"})
+        self.command(headers["4"], "speech.done")
+
+        with self.connect(headers["2"]) as socket:
+            self.command(headers["1"], "speech.done")
+            received = []
+            for _ in range(30):
+                frame = socket.receive_json()
+                if frame["type"] == "message":
+                    received.append(frame["message"])
+                if frame["type"] == "state" and frame["state"]["public"]["speaker"] == "2":
+                    break
+            live_turns = [item for item in received if item["kind"] == "speech_turn"]
+            self.assertEqual([item["payload"]["seat_id"] for item in live_turns], ["2"])
+            self.assertFalse(any(item["kind"] == "chat" for item in received))
+            # 预提交在轮到时先发布边界、再公开正文；跳过4号之后直接开始5号。
+            self.command(headers["2"], "speech.done")
+            received = []
+            for _ in range(30):
+                frame = socket.receive_json()
+                if frame["type"] == "message" and frame["message"]["kind"] in {
+                    "chat",
+                    "speech_turn",
+                }:
+                    received.append(frame["message"])
+                if frame["type"] == "state" and frame["state"]["public"]["speaker"] == "5":
+                    break
+            self.assertEqual(
+                [item["kind"] for item in received], ["speech_turn", "chat", "speech_turn"]
+            )
+            self.assertEqual(received[0]["payload"]["seat_id"], "3")
+            self.assertEqual(received[1]["text"], "三号提前写好的发言")
+            self.assertEqual(received[2]["payload"]["seat_id"], "5")
+
+        # 改顺序不能重新占用已提交席位，也不能把新起点移动到旧聊天前。
+        state = self.command(self.host, "host.speech", {"start": "3", "direction": "asc"})
+        self.assertEqual(state["public"]["speaker"], "5")
+        state = self.command(self.host, "host.speech", {"start": "6", "direction": "asc"})
+        self.assertEqual(state["public"]["speaker"], "6")
+        for sid in ("6", "7", "5"):
+            self.command(headers[sid], "speech.done")
+        self.command(self.host, "host.advance")
+        self.assertEqual(self.state(headers["2"])["phase"], "discussion")
+        saved = [item for item in history() if item["kind"] == "speech_turn"]
+        seats = [item["payload"]["seat_id"] for item in saved[len(initial) :]]
+        self.assertEqual(seats, ["2", "3", "5", "6", "7", "5"])
+        with self.client.websocket_connect("/api/live", headers=headers["2"]) as socket:
+            frame = socket.receive_json()
+            self.assertEqual(frame["type"], "sync")
+            recovered = [item for item in frame["messages"] if item["kind"] == "speech_turn"]
+            self.assertEqual(recovered, saved)
 
     def test_the_speaking_phase_publishes_one_clock_to_everyone(self):
         players, state = self.speaking_phase()

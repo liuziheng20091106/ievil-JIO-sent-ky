@@ -593,8 +593,7 @@ def death_batch(game, events, preview):
         # 被魔女袭击指到却没出局的席位同样要有目击：目击看的是「被指到」。
         publish_survivor_witnesses(game, events, preview, killed)
     wipe_massacred_seats(game, events, killed)
-    # 无人出局也要判一次胜负：魔女化艾玛的清场夜即使一个人都没打死（庇护/爱/替死全挡住）
-    # 同样直接判她单独获胜，见 state.emma_solo_win。check_winner 是幂等的。
+    # 死亡落实后重算阵营胜负；艾玛单胜在进入 night_results 后判定，实际死亡人数不限。
     check_winner(game)
     plugins.emit(game, events, "post_resolve", {"deaths": tuple(killed)})
 

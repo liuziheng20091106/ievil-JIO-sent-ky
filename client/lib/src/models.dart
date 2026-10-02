@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 Map<String, dynamic> jsonObject(Object? value, [String name = 'object']) {
   if (value is! Map) throw FormatException('$name must be a JSON object');
@@ -136,8 +137,9 @@ class Actor {
     seatId = raw['seat_id']?.toString();
     accountId = (raw['account_id'] ?? raw['id']).toString();
     avatarUrl = raw['avatar_url']?.toString();
-    hostLevel =
-        raw['host_level'] == null ? 0 : jsonInt(raw['host_level'], 'actor.host_level');
+    hostLevel = raw['host_level'] == null
+        ? 0
+        : jsonInt(raw['host_level'], 'actor.host_level');
   }
 
   final Map<String, dynamic> raw;
@@ -186,7 +188,8 @@ class LobbyGame {
 /// 在线账号：只用于展示与邀请，不含令牌；头像地址是账号的 QQ 头像链接
 /// （qlogo 的 `nk=` 参数里带 QQ 号），界面只拿它显示图片。
 class OnlineAccount {
-  OnlineAccount.fromJson(Object? value) : raw = jsonObject(value, 'online.account');
+  OnlineAccount.fromJson(Object? value)
+      : raw = jsonObject(value, 'online.account');
 
   final Map<String, dynamic> raw;
   String get id => jsonString(raw['id'], 'online.account.id');
@@ -308,8 +311,8 @@ class GameChannel {
     acceptedIds = _strings(raw['accepted_ids']);
     invitation = raw['invitation']?.toString() ?? 'none';
     canSend = jsonBool(raw['can_send'], 'channel.can_send');
-    blockedTransient = jsonBool(raw['blocked_transient'],
-        'channel.blocked_transient',
+    blockedTransient = jsonBool(
+        raw['blocked_transient'], 'channel.blocked_transient',
         fallback: false);
     asSeat = raw['as_seat']?.toString();
     reason = raw['reason']?.toString() ?? '';
@@ -393,6 +396,10 @@ class GameMessage {
         ? null
         : jsonObject(raw['payload'], 'message.payload');
     references = _messageReferences(kind, recalled, text, payload);
+    final imageUrl = recalled ? null : payload?['image'];
+    image = imageUrl is String
+        ? base64Decode(imageUrl.substring(imageUrl.indexOf(',') + 1))
+        : null;
   }
 
   final Map<String, dynamic> raw;
@@ -406,6 +413,7 @@ class GameMessage {
   late final String createdAt;
   late final bool recalled;
   late final List<String> mentionIds;
+  late final Uint8List? image;
 
   /// 结构化播报载荷（例如技能声明的技能名、介绍与目标）。
   /// 服务端已按收件人的可见范围裁剪过：私密目标与伪装标记不会出现在这里。
@@ -434,30 +442,42 @@ class ChatReference {
   final int start, end;
   final ReferenceItem item;
 
-  ChatReference shifted(int amount) => ChatReference(start + amount, end + amount, item);
+  ChatReference shifted(int amount) =>
+      ChatReference(start + amount, end + amount, item);
   Map<String, dynamic> toJson() => {
-    'start': start, 'end': end, 'type': item.type, 'id': item.id,
-  };
+        'start': start,
+        'end': end,
+        'type': item.type,
+        'id': item.id,
+      };
 }
 
 List<ChatReference> _messageReferences(
     String kind, bool recalled, String text, Map<String, dynamic>? payload) {
-  if (kind != 'chat' || recalled || payload?['type'] != 'references' ||
+  if (kind != 'chat' ||
+      recalled ||
+      payload?['type'] != 'references' ||
       payload?['items'] is! List) {
     return const [];
   }
   final result = <ChatReference>[];
   var previous = 0;
   for (final value in payload!['items'] as List) {
-    if (value is! Map || value['start'] is! int || value['end'] is! int ||
-        value['type'] is! String || value['id'] is! String ||
-        value['label'] is! String || value['text'] is! String ||
+    if (value is! Map ||
+        value['start'] is! int ||
+        value['end'] is! int ||
+        value['type'] is! String ||
+        value['id'] is! String ||
+        value['label'] is! String ||
+        value['text'] is! String ||
         !['event', 'role', 'skill'].contains(value['type'])) {
       return const [];
     }
     final start = value['start'] as int;
     final end = value['end'] as int;
-    if (start < previous || end <= start || end > text.length ||
+    if (start < previous ||
+        end <= start ||
+        end > text.length ||
         text.substring(start, end) != '#${value['label']}') {
       return const [];
     }
@@ -476,7 +496,9 @@ class RoleInfo {
     witch = raw['witch']?.toString() ?? '';
     avatar = raw['avatar']?.toString();
     skills = raw['skills'] is List
-        ? (raw['skills'] as List).map((entry) => jsonObject(entry, 'skill')).toList()
+        ? (raw['skills'] as List)
+            .map((entry) => jsonObject(entry, 'skill'))
+            .toList()
         : const [];
   }
 
@@ -549,8 +571,10 @@ class EquippedAchievement {
 
 /// 本局某个参与身份佩戴的成就：`/api/achievements/games/{id}/equipped` 的一行。
 class GameEquipped {
-  GameEquipped.fromJson(Object? value) : raw = jsonObject(value, 'equipped_row') {
-    participantId = jsonString(raw['participant_id'], 'equipped_row.participant_id');
+  GameEquipped.fromJson(Object? value)
+      : raw = jsonObject(value, 'equipped_row') {
+    participantId =
+        jsonString(raw['participant_id'], 'equipped_row.participant_id');
     accountId = raw['account_id']?.toString() ?? '';
     equipped = raw['equipped'] == null
         ? null
@@ -588,7 +612,8 @@ class AchievementPlayer {
     name = raw['name']?.toString() ?? '';
     avatarUrl = raw['avatar_url']?.toString() ?? '';
     lastPlayedAt = raw['last_played_at']?.toString();
-    achievementCount = jsonInt(raw['achievement_count'], 'player.achievement_count');
+    achievementCount =
+        jsonInt(raw['achievement_count'], 'player.achievement_count');
     equipped = raw['equipped'] == null
         ? null
         : EquippedAchievement.fromJson(raw['equipped']);
@@ -638,7 +663,8 @@ class AchievementSummary {
 
 /// 公告：标题 + markdown 正文；hash 是内容哈希，客户端用它记「已读」。
 class Announcement {
-  Announcement.fromJson(Object? value) : raw = jsonObject(value, 'announcement') {
+  Announcement.fromJson(Object? value)
+      : raw = jsonObject(value, 'announcement') {
     id = jsonString(raw['id'], 'announcement.id');
     title = jsonString(raw['title'], 'announcement.title');
     body = raw['body']?.toString() ?? '';
@@ -709,7 +735,8 @@ class RulePluginInfo {
             .map((item) => jsonString(item, 'plugin.depends[]'))
             .toList(growable: false);
     required = jsonBool(data['required'], 'plugin.required');
-    defaultEnabled = jsonBool(data['default_enabled'], 'plugin.default_enabled');
+    defaultEnabled =
+        jsonBool(data['default_enabled'], 'plugin.default_enabled');
   }
 
   late final String id;
@@ -834,8 +861,9 @@ class GameView {
           .where((panel) => panel.seatId.isNotEmpty)
           .toList(growable: false);
 
-  Map<String, dynamic> get public =>
-      raw['public'] == null ? const {} : jsonObject(raw['public'], 'state.public');
+  Map<String, dynamic> get public => raw['public'] == null
+      ? const {}
+      : jsonObject(raw['public'], 'state.public');
 
   /// 视图里出现的参与身份 id：席位占位者，加上主持人视图的参与者名单。
   /// 成就是按参与身份下发佩戴徽章的，这里用来判断要不要重新拉一次。
@@ -858,11 +886,13 @@ class GameView {
   }
 
   /// 自由发言阶段已提交结束请求的席位 id。
-  List<String> get discussionEndRequests => public['discussion_end_requests'] == null
-      ? const []
-      : jsonArray(public['discussion_end_requests'], 'public.discussion_end_requests')
-          .map((item) => item.toString())
-          .toList(growable: false);
+  List<String> get discussionEndRequests =>
+      public['discussion_end_requests'] == null
+          ? const []
+          : jsonArray(public['discussion_end_requests'],
+                  'public.discussion_end_requests')
+              .map((item) => item.toString())
+              .toList(growable: false);
 
   /// 结束自由发言所需提交人数；服务端下发，缺省按满编六人。
   int get discussionEndRequired {
@@ -955,7 +985,8 @@ class MatchSummary {
 
 /// 历史对局里的一个参与身份：座位、昵称与最终的两张角色牌。
 class MatchPlayer {
-  MatchPlayer.fromJson(Object? value) : raw = jsonObject(value, 'match.player') {
+  MatchPlayer.fromJson(Object? value)
+      : raw = jsonObject(value, 'match.player') {
     participantId = raw['participant_id']?.toString() ?? '';
     name = raw['name']?.toString() ?? '';
     kind = raw['kind']?.toString() ?? 'player';

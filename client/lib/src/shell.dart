@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
@@ -11,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'action_sheet.dart';
 import 'achievements.dart';
 import 'app_icons.dart';
+import 'chat_image.dart';
 import 'design.dart';
 import 'emoji.dart';
 import 'emoji_picker.dart';
@@ -755,6 +757,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
   bool emojiOpen = false;
   bool _pickingMention = false;
   bool _pickingEvidence = false;
+  bool _pickingImage = false;
   final List<ChatReference> editingReferences = [];
   final Map<(String?, String?, String?, String),
       (TextEditingValue, List<ChatReference>)> _drafts = {};
@@ -1133,67 +1136,20 @@ class _ChatActionPageState extends State<ChatActionPage> {
     return result;
   }
 
-  Map<String, dynamic>? get _speakerSeat {
-    final view = widget.store.view!;
-    if (view.phase != 'speech') return null;
-    final speaker = view.public['speaker']?.toString();
-    if (speaker == null) return null;
-    for (final seat in view.seats) {
-      if (seat['id']?.toString() == speaker && seat['avatar_role_id'] != null) {
-        return seat;
-      }
-    }
-    return null;
-  }
-
-  List<_SpeechMessageRow> _speechRows(GameStore store) {
-    final messages = store.messages;
-    final seats = _speechSeats;
-    if (seats.isEmpty) {
-      return [
-        for (final message in messages) _SpeechMessageRow.message(message)
+  List<_SpeechMessageRow> _speechRows(GameStore store) => [
+        for (final message in store.messages)
+          if (message.kind == 'speech_turn' &&
+              message.payload?['type'] == 'speech_turn' &&
+              message.payload?['seat_id'] != null)
+            _SpeechMessageRow.divider({
+              'id': message.payload!['seat_id'],
+              'avatar_role_id': message.payload!['avatar_role_id'],
+            }, message)
+          else
+            _SpeechMessageRow.message(message),
       ];
-    }
 
-    final shownSeats = <String>{};
-    final dividers = <int, Map<String, dynamic>>{};
-    for (var index = 0; index < messages.length; index++) {
-      final message = messages[index];
-      if (message.channelId != 'public' || message.senderId == null) {
-        continue;
-      }
-      for (final seat in seats) {
-        final seatId = seat['id']?.toString();
-        final participantId = seat['participant_id']?.toString();
-        if (seatId == null ||
-            participantId == null ||
-            participantId != message.senderId ||
-            !shownSeats.add(seatId)) {
-          continue;
-        }
-        dividers[index] = seat;
-        break;
-      }
-    }
-    final rows = <_SpeechMessageRow>[];
-    for (var index = 0; index < messages.length; index++) {
-      final seat = dividers[index];
-      if (seat != null) {
-        rows.add(_SpeechMessageRow.divider(seat));
-      }
-      rows.add(_SpeechMessageRow.message(messages[index]));
-    }
-    final speaker = _speakerSeat;
-    final speakerId = speaker?['id']?.toString();
-    if (speaker != null &&
-        speakerId != null &&
-        !shownSeats.contains(speakerId)) {
-      rows.add(_SpeechMessageRow.divider(speaker));
-    }
-    return rows;
-  }
-
-  /// 消息列表本体：顺序发言的分隔线跟随每个席位的首条公屏发言。
+  /// 发言权起点来自持久化消息：实时切换、阶段结束与重连用同一条时间线。
   Widget _messageList(GameStore store) {
     final rows = _speechRows(store);
     if (rows.isEmpty) {
@@ -1224,7 +1180,10 @@ class _ChatActionPageState extends State<ChatActionPage> {
           final row = rows[index - header];
           final seat = row.seat;
           if (seat != null) {
-            return _SpeechTurnDivider(seat: seat);
+            return _SpeechTurnDivider(
+              key: ValueKey('speech-divider-${row.message!.id}'),
+              seat: seat,
+            );
           }
           final item = row.message!;
           return MessageBubble(
@@ -1506,6 +1465,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
           onCloseEmoji: () => setEmojiOpen(false),
           onTapField: () => setEmojiOpen(false),
           onSend: send,
+          onPickImage: pickImage,
           onShortcut: insertShortcut,
           onClearError: () => setState(() => sendError = null),
           onChanged: (text) {
@@ -1539,6 +1499,50 @@ class _ChatActionPageState extends State<ChatActionPage> {
     if (open) FocusManager.instance.primaryFocus?.unfocus();
   }
 
+  Future<void> pickImage() async {
+    if (_pickingImage || widget.store.writeBusy) return;
+    final target = _currentDraftKey;
+    final channel = widget.store.selectedChannel;
+    if (channel?.canSend != true) return;
+    _pickingImage = true;
+    try {
+      final image = await pickChatImage();
+      if (!mounted || image == null || target != _currentDraftKey) return;
+      final bytes = base64Decode(image.substring(image.indexOf(',') + 1));
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('发送图片到${channel!.label}'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 400),
+            child: Image.memory(bytes,
+                fit: BoxFit.contain, semanticLabel: '待发送图片'),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('发送图片')),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true || target != _currentDraftKey) return;
+      await widget.store.sendMessage('', image: image);
+    } on ApiException catch (failure) {
+      if (mounted) setState(() => sendError = failure.message);
+    } on PlatformException catch (failure) {
+      if (mounted) setState(() => sendError = failure.message ?? '无法读取图片');
+    } on FormatException catch (failure) {
+      if (mounted) setState(() => sendError = failure.message);
+    } catch (_) {
+      if (mounted) setState(() => sendError = '无法处理这张图片，请选择其它图片');
+    } finally {
+      _pickingImage = false;
+    }
+  }
+
   Future<void> send() async {
     final text = message.text;
     if (text.trim().isEmpty) return;
@@ -1564,7 +1568,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
 
 class _SpeechMessageRow {
   const _SpeechMessageRow.message(this.message) : seat = null;
-  const _SpeechMessageRow.divider(this.seat) : message = null;
+  const _SpeechMessageRow.divider(this.seat, this.message);
 
   final GameMessage? message;
   final Map<String, dynamic>? seat;
@@ -1621,14 +1625,13 @@ class _SpeechOrderStrip extends StatelessWidget {
 }
 
 class _SpeechTurnDivider extends StatelessWidget {
-  const _SpeechTurnDivider({required this.seat});
+  const _SpeechTurnDivider({super.key, required this.seat});
   final Map<String, dynamic> seat;
 
   @override
   Widget build(BuildContext context) {
-    final role = seat['avatar_role_id'].toString();
+    final role = seat['avatar_role_id']?.toString();
     return Padding(
-      key: ValueKey('speech-divider-${seat['id']}'),
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(children: [
         Expanded(child: Divider(color: context.palette.accent)),
@@ -1637,7 +1640,7 @@ class _SpeechTurnDivider extends StatelessWidget {
         const SizedBox(width: 4),
         RoleAvatar(roleId: role, size: 28),
         const SizedBox(width: 4),
-        Text(roleVisual(role)?.name ?? role),
+        if (role != null) Text(roleVisual(role)?.name ?? role),
         const SizedBox(width: 6),
         Expanded(child: Divider(color: context.palette.accent)),
       ]),
@@ -1698,6 +1701,7 @@ class _Composer extends StatelessWidget {
     required this.onCloseEmoji,
     required this.onTapField,
     required this.onSend,
+    required this.onPickImage,
     required this.onShortcut,
     required this.onChanged,
     required this.onClearError,
@@ -1726,6 +1730,7 @@ class _Composer extends StatelessWidget {
   /// 重新聚焦输入框即收起面板：否则键盘与面板会同时占位。
   final VoidCallback onTapField;
   final VoidCallback onSend;
+  final VoidCallback onPickImage;
   final VoidCallback onClearError;
   final ValueChanged<String> onChanged;
   final ValueChanged<String> onShortcut;
@@ -1761,6 +1766,12 @@ class _Composer extends StatelessWidget {
                 const SizedBox(width: AppSpacing.xs),
                 _SettingsButton(store: store),
                 const SizedBox(width: AppSpacing.xs),
+                IconButton(
+                  tooltip: '发送图片',
+                  onPressed: canSend ? onPickImage : null,
+                  icon: const Icon(Icons.image_outlined, size: 20),
+                  visualDensity: VisualDensity.compact,
+                ),
                 _EmojiButton(
                   enabled: canSend,
                   open: emojiOpen,
@@ -3022,7 +3033,7 @@ class MessageBubble extends StatelessWidget {
                                   ? context.palette.onAccent
                                   : context.palette.textTertiary),
                         )
-                      else
+                      else if (message.text.isNotEmpty)
                         GestureDetector(
                           onLongPress: () =>
                               _showMessageMenu(context, message, mine, store),
@@ -3041,6 +3052,40 @@ class MessageBubble extends StatelessWidget {
                                 color: mine
                                     ? context.palette.onAccent
                                     : context.palette.text),
+                          ),
+                        ),
+                      if (!message.recalled && message.image != null)
+                        GestureDetector(
+                          onLongPress: () =>
+                              _showMessageMenu(context, message, mine, store),
+                          onTap: () => showDialog<void>(
+                            context: context,
+                            builder: (context) => Dialog(
+                              child: Stack(
+                                children: [
+                                  InteractiveViewer(
+                                      child: Image.memory(message.image!,
+                                          fit: BoxFit.contain,
+                                          semanticLabel: '聊天图片')),
+                                  Positioned(
+                                      right: 0,
+                                      top: 0,
+                                      child: IconButton(
+                                        tooltip: '关闭',
+                                        onPressed: () => Navigator.pop(context),
+                                        icon: const Icon(Icons.close),
+                                      )),
+                                ],
+                              ),
+                            ),
+                          ),
+                          child: Image.memory(
+                            message.image!,
+                            semanticLabel: '聊天图片',
+                            width: 220,
+                            height: 180,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Text('图片无法显示'),
                           ),
                         ),
                     ],

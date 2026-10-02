@@ -101,7 +101,8 @@ class GameApi {
       // 与其它请求一致：不跟随重定向，避免把下载引到协议外的地址。
       request.followRedirects = false;
       request.headers.set(HttpHeaders.acceptHeader, '*/*');
-      final response = await request.close().timeout(const Duration(seconds: 25));
+      final response =
+          await request.close().timeout(const Duration(seconds: 25));
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw ApiException('下载失败 (${response.statusCode})',
             statusCode: response.statusCode);
@@ -185,13 +186,15 @@ class GameApi {
         ),
       );
 
-  Future<Map<String, dynamic>> acceptInvite(String inviteId) async => jsonObject(
+  Future<Map<String, dynamic>> acceptInvite(String inviteId) async =>
+      jsonObject(
         await _request(
             'POST', '/api/invites/${Uri.encodeComponent(inviteId)}/accept'),
       );
 
   Future<void> rejectInvite(String inviteId) async {
-    await _request('POST', '/api/invites/${Uri.encodeComponent(inviteId)}/reject');
+    await _request(
+        'POST', '/api/invites/${Uri.encodeComponent(inviteId)}/reject');
   }
 
   Future<GameView> state(String gameId) async => GameView.fromJson(
@@ -255,14 +258,15 @@ class GameApi {
   }
 
   Future<Map<String, dynamic>> references(String gameId) async =>
-      jsonObject(await _request('GET',
-          '/api/games/${Uri.encodeComponent(gameId)}/references'));
+      jsonObject(await _request(
+          'GET', '/api/games/${Uri.encodeComponent(gameId)}/references'));
 
   Future<GameMessage> sendMessage(
     String gameId,
     String channelId,
     String text, {
     String? asSeat,
+    String? image,
     List<ChatReference> references = const [],
   }) async =>
       GameMessage.fromJson(await _request(
@@ -271,12 +275,15 @@ class GameApi {
         body: {
           'channel_id': channelId,
           'text': text,
+          if (image != null) 'image': image,
           if (asSeat != null) 'as_seat': asSeat,
-          if (references.isNotEmpty) 'references': [for (final ref in references) ref.toJson()],
+          if (references.isNotEmpty)
+            'references': [for (final ref in references) ref.toJson()],
         },
       ));
 
-  Future<GameMessage> retractMessage(String gameId, int messageId, {String? asSeat}) async =>
+  Future<GameMessage> retractMessage(String gameId, int messageId,
+          {String? asSeat}) async =>
       GameMessage.fromJson(await _request(
         'POST',
         '/api/games/${Uri.encodeComponent(gameId)}/messages/$messageId/retract',
@@ -323,8 +330,8 @@ class GameApi {
       ));
 
   Future<Map<String, dynamic>> hostChallenge(String id) async => jsonObject(
-        await _request(
-            'GET', '/api/native/auth/host/challenges/${Uri.encodeComponent(id)}'),
+        await _request('GET',
+            '/api/native/auth/host/challenges/${Uri.encodeComponent(id)}'),
       );
 
   /// 公告列表（任何已登录身份可读）。
@@ -398,8 +405,8 @@ class GameApi {
 
   /// 成就目录：玩家用它对照自己获得的成就，主持人用它挑要授权的成就。
   Future<List<AchievementDef>> achievementCatalog() async => jsonArray(
-        jsonObject(await _request('GET', '/api/achievements/catalog'))[
-            'achievements'],
+        jsonObject(
+            await _request('GET', '/api/achievements/catalog'))['achievements'],
         'achievements',
       ).map(AchievementDef.fromJson).toList(growable: false);
 
@@ -437,8 +444,8 @@ class GameApi {
 
   /// 总玩家列表（主持人）：最近的参赛顺序在前。
   Future<List<AchievementPlayer>> achievementPlayers() async => jsonArray(
-        jsonObject(await _request('GET', '/api/achievements/players'))[
-            'players'],
+        jsonObject(
+            await _request('GET', '/api/achievements/players'))['players'],
         'players',
       ).map(AchievementPlayer.fromJson).toList(growable: false);
 

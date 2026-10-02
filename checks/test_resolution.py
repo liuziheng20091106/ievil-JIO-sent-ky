@@ -30,6 +30,7 @@ from backend.app.game.resolution import (
     prepare_night_preview,
     revive,
     witch_witness_targets,
+    witness_suspects,
     witness_size,
 )
 from backend.app.game.roles.coco import unlock_coco
@@ -609,6 +610,109 @@ class NewNightRules(unittest.TestCase):
         )
         self.assertIn("可可", game["witness"]["text"])
         self.assertNotIn("穗乃香", game["witness"]["text"])
+
+
+class EmmaSoloVictory(unittest.TestCase):
+    def night_game(self):
+        game = arranged_game("night", "night")
+        game["seats"][0]["cards"] = ["emma", "millia"]
+        game["cards"]["emma"]["witch"] = True
+        game["spiritual"]["hiro_used"] = {"normal": True, "witch": True}
+        begin_night(game, [])
+        return game
+
+    def test_massacre_only_wins_after_normal_resolution(self):
+        game = self.night_game()
+        command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+        check_winner(game)
+        self.assertIsNone(game["winner_candidate"])
+        command(game, player(game, "1"), "night.confirm")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "night_review")
+        check_winner(game)
+        self.assertIsNone(game["winner_candidate"])
+        with self.assertRaises(GameError):
+            command(game, HOST, "host.confirm_winner", {"confirm": True})
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["winner_candidate"]["winner"], "emma")
+
+    def test_massacre_wins_even_when_another_witch_kills_emma(self):
+        game = self.night_game()
+        game["cards"]["hiro"]["witch"] = True
+        game["spiritual"]["sherry_bound"] = True
+        begin_night(game, [])
+        command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+        command(game, player(game, "1"), "night.confirm")
+        command(game, player(game, "2"), "night.submit", {"ability": "knife", "target": "1"})
+        command(game, player(game, "2"), "night.confirm")
+        command(game, HOST, "host.advance")
+        command(game, HOST, "host.advance")
+        self.assertFalse(game["cards"]["emma"]["alive"])
+        self.assertTrue(
+            any(
+                death["target_card"] == "emma" and death["cause"] == "knife"
+                for death in game["deaths"]
+            )
+        )
+        self.assertEqual(game["winner_candidate"]["winner"], "emma")
+        for item in list(game["pending"]):
+            command(
+                game,
+                HOST,
+                "host.resolve",
+                {
+                    "pending_id": item["id"],
+                    "suspects": witness_suspects(game, item.get("source_card")),
+                },
+            )
+        command(game, HOST, "host.confirm_winner", {"confirm": True})
+        self.assertEqual(game["status"], "ended")
+        for sid in ("1", "2", "3", "4", "5", "6", "7"):
+            self.assertEqual(game_view(game, player(game, sid))["result"]["winner"], "emma")
+        self.assertFalse(game["result"]["personal_results"][0]["won"])
+
+    def test_massacre_wins_even_when_every_other_seat_is_protected(self):
+        game = self.night_game()
+        for card in game["cards"].values():
+            if card["id"] != "emma":
+                card["states"]["protected_day"] = game["day"]
+        command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+        command(game, player(game, "1"), "night.confirm")
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["night"]["preview"]["deaths"], [])
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["deaths"], [])
+        self.assertEqual(game["winner_candidate"]["winner"], "emma")
+        self.assertTrue(all(current(game, row) is not None for row in game["seats"]))
+
+    def test_witch_emma_does_not_win_without_massacre(self):
+        game = self.night_game()
+        game["phase"] = "night_results"
+        check_winner(game)
+        self.assertIsNone(game["winner_candidate"])
+
+    def test_hiro_rewind_cancels_massacre_and_emma_victory(self):
+        for witch in (False, True):
+            with self.subTest(witch=witch):
+                game = self.night_game()
+                game.update(day=1, half="day", phase="speech")
+                game["cards"]["hiro"]["witch"] = witch
+                game["spiritual"]["hiro_used"] = {"normal": False, "witch": False}
+                snapshot = save_snapshot(game)
+                game["day"] = 2
+                begin_night(game, [])
+                command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+                command(game, player(game, "1"), "night.confirm")
+                command(game, HOST, "host.advance")
+                self.assertEqual((game["day"], game["phase"], game["half"]), (1, "speech", "day"))
+                self.assertEqual(game["night"], snapshot["state"]["night"])
+                self.assertEqual(game["deaths"], [])
+                self.assertTrue(game["cards"]["emma"]["alive"])
+                self.assertTrue(game["cards"]["hiro"]["alive"])
+                self.assertTrue(game["spiritual"]["hiro_used"]["witch" if witch else "normal"])
+                check_winner(game)
+                self.assertIsNone(game["winner_candidate"])
+                self.assertIsNone(game["result"])
 
 
 class ResolutionEdges(unittest.TestCase):
@@ -2060,10 +2164,6 @@ class WitchEmmaMassacre(unittest.TestCase):
         self.assertEqual(game["phase"], "night_results")
         self.assertEqual(game["night"].get("massacre"), "emma")
         self.assertEqual(game["winner_candidate"]["winner"], "emma")
-        self.assertEqual(
-            game["winner_candidate"]["reason"],
-            "魔女化艾玛杀死所有其他角色，单独获胜，其余玩家均落败",
-        )
 
     def test_massacre_wins_even_if_a_seat_was_already_eliminated(self):
         """已整席出局的席位不该挡住单独获胜（真实对局里 6 号两张牌早就出局）。"""

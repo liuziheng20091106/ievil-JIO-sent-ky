@@ -29,7 +29,10 @@ BLOCKING_PROMPTS = {
     "speech": ("轮到你顺序发言", "发言、打断，或点「本轮不发言」跳过你的顺序。"),
     "nomination": ("请提交提名或放弃", "同一人可以被多人提名；提交即生效。"),
     "voting": ("请投票", "严格超过有投票权存活玩家的一半才会处决。"),
-    "execution": ("请完成临刑响应", "有临刑开枪机会时先选目标开枪；每枪都要重新选目标，子弹没打完前可以接着开，也可以随时收手并确认。"),
+    "execution": (
+        "请完成临刑响应",
+        "有临刑开枪机会时先选目标开枪；每枪都要重新选目标，子弹没打完前可以接着开，也可以随时收手并确认。",
+    ),
 }
 
 
@@ -155,7 +158,7 @@ def result_title(result):
     if winner == "witch":
         return "本局已结束 · 魔女获胜"
     if winner == "emma":
-        # 魔女化艾玛杀光全场时单独获胜，其余玩家均落败。
+        # 魔女化艾玛发动并完成全场攻击后单独获胜，其余玩家均落败。
         return "本局已结束 · 艾玛单独获胜"
     if winner == "aborted":
         return "本局已终止"
@@ -286,7 +289,9 @@ def puppet_channel_view(db, game, seat):
     result = []
     can_send, chat_reason, chat_transient = seat_chat(game, seat)
     blocked = (
-        storage.channel_send_reason(db, game, identity, "public") if identity else "该席位当前无人操作"
+        storage.channel_send_reason(db, game, identity, "public")
+        if identity
+        else "该席位当前无人操作"
     ) or chat_reason
     result.append(
         {
@@ -323,7 +328,11 @@ def puppet_channel_view(db, game, seat):
                 "status": row["status"],
                 "creator_id": row["creator_id"],
                 "members": [
-                    {"id": member, "name": channel_names(db, [member]).get(member, "参与者"), "kind": "player"}
+                    {
+                        "id": member,
+                        "name": channel_names(db, [member]).get(member, "参与者"),
+                        "kind": "player",
+                    }
                     for member in members
                 ],
                 "invited_ids": json.loads(row["invited_ids"]),
@@ -351,7 +360,9 @@ def channel_names(db, member_ids, host_name="主持人"):
 
 def puppet_channel_title(db, members, host_name="主持人"):
     names = channel_names(db, [member for member in members if member != "host"], host_name)
-    return "、".join(host_name if member == "host" else names.get(member, "参与者") for member in members)
+    return "、".join(
+        host_name if member == "host" else names.get(member, "参与者") for member in members
+    )
 
 
 def channels_for(db, game, actor, domain_view):
@@ -500,8 +511,6 @@ def channels_for(db, game, actor, domain_view):
     return result
 
 
-
-
 def channel_create_descriptor(db, game, actor, participants):
     if game["status"] == "ended" or storage.active_private_channel(db, game, actor["id"]):
         return None
@@ -558,9 +567,7 @@ def runtime_actions(game, participants):
     seats = [
         {
             "value": seat["id"],
-            "label": seat["id"]
-            + "号 · "
-            + (display_player_name(seat["name"]) or "空席"),
+            "label": seat["id"] + "号 · " + (display_player_name(seat["name"]) or "空席"),
         }
         for seat in game["seats"]
         if not seat["occupant_id"]
@@ -594,7 +601,9 @@ def runtime_actions(game, participants):
             "room.kick",
             "移出参与者 / 本局拉黑",
             [
-                field("participant_id", "参与者", "select", [(p["value"], p["label"]) for p in people]),
+                field(
+                    "participant_id", "参与者", "select", [(p["value"], p["label"]) for p in people]
+                ),
                 field("block", "同时在本局拉黑", "checkbox", required=False, default=False),
             ],
             group="房间管理",
@@ -629,8 +638,15 @@ def runtime_actions(game, participants):
                 "room.mute",
                 "设置或解除参与者禁言",
                 [
-                    field("participant_id", "参与者", "select", [(p["value"], p["label"]) for p in people]),
-                    field("muted", "禁言（取消勾选为解除）", "checkbox", required=False, default=True),
+                    field(
+                        "participant_id",
+                        "参与者",
+                        "select",
+                        [(p["value"], p["label"]) for p in people],
+                    ),
+                    field(
+                        "muted", "禁言（取消勾选为解除）", "checkbox", required=False, default=True
+                    ),
                 ],
                 group="房间管理",
                 short_label="禁言",
@@ -695,7 +711,9 @@ def view(db, game, actor, online):
             for pid in result["result"].get("personal_losses", [])
             if pid in people
         ]
-    collected_channel_actions = [item for channel in result["channels"] for item in channel["actions"]]
+    collected_channel_actions = [
+        item for channel in result["channels"] for item in channel["actions"]
+    ]
     active_private = storage.active_private_channel(db, game, actor["id"])
     if actor.get("kind") == "spectator":
         # 观战者没有私信：不下发任何 channel.* 行动。

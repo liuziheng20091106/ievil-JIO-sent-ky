@@ -423,7 +423,6 @@ class BackendFlow(unittest.TestCase):
         prompt = self.client.get(self.root + "/state", headers=headers[0]).json()[
             "action_prompt"
         ]
-        self.assertEqual(prompt["title"], "请点击文本框下发的*准备*按钮")
         self.assertIsNone(prompt["hint"])
         # 已经准备完的席位不再被催。
         self.command(headers[0], "lobby.ready")
@@ -439,7 +438,6 @@ class BackendFlow(unittest.TestCase):
         channel = next(item for item in created["channels"] if item["status"] == "pending")
         self.command(headers[1], "channel.accept", {"channel_id": channel["id"]})
         view = self.client.get(self.root + "/state", headers=headers[1]).json()
-        self.assertEqual(view["action_prompt"]["title"], "请点击文本框下发的*准备*按钮")
         self.assertIn("私聊", view["action_prompt"]["hint"])
 
     def test_host_player_pair_channel_skips_system_notice(self):

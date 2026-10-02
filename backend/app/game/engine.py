@@ -272,6 +272,28 @@ def apply_damage(game, events, preview, allow_reaction=True):
     return False
 
 
+def publish_speech_turn(game, events, seat_id):
+    """把发言权起点存进消息时间线；头像用当时公开身份，不依赖之后的阶段或替补。"""
+    turn = [game["day"], game["public"].get("rewinds", 0), seat_id]
+    if game.get("speech_turn") == turn:
+        return False
+    s = seat(game, seat_id)
+    events.append(
+        {
+            "kind": "speech_turn",
+            "text": f"{seat_id}号开始顺序发言。",
+            "payload": {
+                "type": "speech_turn",
+                "day": game["day"],
+                "seat_id": seat_id,
+                "avatar_role_id": s["avatar_role_id"],
+            },
+        }
+    )
+    game["speech_turn"] = turn
+    return True
+
+
 def speech_done(game, events):
     public = game["public"]
     # 发言权一换人，原发言人的30秒警告就作废：新发言人另有一份公开倒计时，
@@ -288,6 +310,7 @@ def speech_done(game, events):
             passed.append(finished)
     if public.get("interrupted_speaker"):
         resumed = public.pop("interrupted_speaker")
+        publish_speech_turn(game, events, resumed)
         queued = game.get("speech_queued", {})
         if resumed in queued:
             # 被打断者若已提前写好发言，恢复发言权时先公开，内容不随打断丢失。
@@ -308,10 +331,14 @@ def next_speaker(game, current_speaker, events):
     while index < len(order) and (order[index] in passed or not seat_operable(game, order[index])):
         sid = order[index]
         if sid in queued:
+            publish_speech_turn(game, events, sid)
             # 跳过或轮到自己前已出局：提前写好的内容照旧公开，不静默丢弃。
             chat_event(game, events, sid, f"{queued.pop(sid)}")
         index += 1
-    return order[index] if index < len(order) else None
+    speaker = order[index] if index < len(order) else None
+    if speaker:
+        publish_speech_turn(game, events, speaker)
+    return speaker
 
 
 def sync_speaker(game, events):
@@ -322,6 +349,7 @@ def sync_speaker(game, events):
     连续多个无人可操作的席位在一次调用里全部越过。
     """
     if game["phase"] != "speech":
+        game.pop("speech_turn", None)
         # 离开顺序发言阶段：倒计时随阶段一起清除，不留到自由发言或第二天。
         if sync_speech_timer(game):
             game["version"] += 1
@@ -329,6 +357,8 @@ def sync_speaker(game, events):
     public = game["public"]
     while public.get("speaker") and not seat_operable(game, public["speaker"]):
         speech_done(game, events)
+    if public.get("speaker") and publish_speech_turn(game, events, public["speaker"]):
+        game["version"] += 1
     if sync_speech_timer(game):
         game["version"] += 1
 
@@ -574,6 +604,7 @@ def advance(game, events):
         if game.get("rewound_night"):
             return
         game["phase"] = "night_results"
+        check_winner(game)
     elif phase == "night_results":
         require(
             not game["winner_candidate"],
@@ -1007,9 +1038,9 @@ def host_command(game, events, action, data):
         if data["direction"] == "desc":
             order = [order[0]] + order[1:][::-1]
         game["public"]["speech_order"] = order
-        if game["phase"] == "speech":
-            game["public"]["speaker"] = order[0]
+        game["public"].pop("interrupted_speaker", None)
         notify(game, events, "发言顺序：" + " → ".join(order))
+        game["public"]["speaker"] = next_speaker(game, None, events)
     elif action == "host.warn":
         outstanding = outstanding_seats(game)
         if data.get("all"):
