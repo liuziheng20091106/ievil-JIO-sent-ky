@@ -188,6 +188,10 @@ package-release.cmd
 - `data/downloads.json`：网页首页「下载游戏」的三条链接——**Windows 安装程序**（`Updater.exe`）、Windows 便携版（zip）、安卓版；
 - `data/updates.json`：客户端应用内更新的「平台 + 版本区间」清单，刷新两个平台兜底区间的 latest/url/size/sha256 与 Windows 的 `updater_url`（手工写的更新日志 `notes`、`minimum`、`guide_url` 与更窄的区间条目都保留）。
 
+从 1.1.0 起，完整三段发行版本唯一源码是 `client/lib/src/client_version.dart` 的 `kClientVersion`（当前 `1.1.0`）；正常补丁发版只改该常量。`client/pubspec.yaml` 固定 `version: 1.1.0+1`，仅跨 `x.y` 系列才改 `x.y`，`+1` 不动。客户端 UA、更新比较、发布清单 `latest`、三条上传对象键与 `Updater.exe --version` 使用完整发行版本；APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`，Windows runner 系统文件版本来自固定包基线。更新器 CMake 从 Dart 常量读取版本，将该文件登记到 `CMAKE_CONFIGURE_DEPENDS`，版本宏保持 source scoped。不使用 `--build-name` / `--build-number` 同步补丁，不做 `flutter clean`；改变 Dart 常量仍需正常重编 Dart AOT。 Flutter 要求三段合法 SemVer，跨系列使用 x.y.0+1；这是固定包基线，并非跟随补丁发行版本同步。
+
+本地输出名不变，三条上传名使用「原 stem-完整发行版本.扩展名」：`魔法裁判Windows-1.1.0.zip`、`app-release-1.1.0.apk`、`Updater-1.1.0.exe`，不能把 `1.1` 当发行版本。更新日志从上一条真正改 `kClientVersion` 数值的提交之后逐个查看 `client/`（含更新器）diff，`pubspec.yaml` 的依赖调整不算发版提交。普通后续发版只 stage Dart 版本文件（有其它修改时只选版本行），跨系列才另选 pubspec 的版本行，不带入其它用户修改。本次只是版本来源迁移，不上传、不修改 `data/` 的线上版本或下载配置。
+
 **对象键一律带版本号**（`releases/app-release-1.0.11.apk`、`releases/Updater-1.0.11.exe`）：实测 `s3.tkcloud.online` 会把同名对象缓存在边缘（GET 命中缓存、HEAD 不命中，且缓存键忽略 query），复用同一个键会让客户端与更新器下到上一版的旧包——发布后校验因此**用真实 GET 回读对外地址**比对总长度，对不上直接判失败。注意该校验必须显式带 UA：该域名会把 `Python-urllib/*` 直接 403。
 
 可加 `--dry-run` 只打包并打印计划（不联网、不改配置）、`--skip-zip` 复用已有压缩包、`--skip-upload` 复用已上传的对象只做校验与配置刷新、`--no-downloads` / `--no-updates` 分别跳过两处配置刷新、`--no-updater` 不上传安装程序、`--env <路径>` 换配置文件。

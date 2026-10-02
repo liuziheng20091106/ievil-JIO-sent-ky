@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PUBSPEC = ROOT / "client" / "pubspec.yaml"
+CLIENT_VERSION_FILE = ROOT / "client" / "lib" / "src" / "client_version.dart"
 
 
 class ManifestError(Exception):
@@ -31,15 +31,17 @@ class ManifestError(Exception):
 
 
 def client_version() -> str:
-    """客户端版本名：与 `client/lib/src/client_version.dart` 同步手改的 pubspec 版本。"""
-    if not PUBSPEC.exists():
-        raise ManifestError(f"缺少 {PUBSPEC}")
-    for raw in PUBSPEC.read_text(encoding="utf-8").splitlines():
-        if raw.startswith("version:"):
-            value = raw.split(":", 1)[1].strip().split("+")[0]
-            if re.fullmatch(r"\d+\.\d+\.\d+", value):
-                return value
-    raise ManifestError(f"{PUBSPEC} 里没有形如 `version: 1.2.3+1` 的版本名")
+    """实际发行版本名：唯一取自 Dart 的 kClientVersion，pubspec 只保留系列版本。"""
+    if not CLIENT_VERSION_FILE.exists():
+        raise ManifestError(f"缺少 {CLIENT_VERSION_FILE}")
+    for raw in CLIENT_VERSION_FILE.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(
+            r"const[ \t]+kClientVersion[ \t]*=[ \t]*(['\"])([0-9]+\.[0-9]+\.[0-9]+)\1;[ \t]*",
+            raw,
+        )
+        if match:
+            return match[2]
+    raise ManifestError(f"{CLIENT_VERSION_FILE} 里没有合法的三段数字 kClientVersion")
 
 
 def find_catch_all(items: list, platform: str) -> int | None:
@@ -96,7 +98,7 @@ def refresh_manifest(path: Path, version: str, entries: list[dict], log=print) -
 
 def show(path: Path) -> int:
     """打印当前清单与匹配到的版本，排查「为什么没提示更新」时用。"""
-    print(f"客户端版本：{client_version()}（来自 {PUBSPEC}）")
+    print(f"客户端版本：{client_version()}（来自 {CLIENT_VERSION_FILE}）")
     print(f"更新清单：{path}")
     if not path.exists():
         print("  （文件不存在：后端不会下发任何版本标签，也就没人会被提示更新）")

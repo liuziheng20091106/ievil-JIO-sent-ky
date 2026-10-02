@@ -29,14 +29,16 @@ target_compile_definitions(Updater PRIVATE "WINVER=0x0A00")
 target_include_directories(Updater PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(Updater PRIVATE "${CMAKE_SOURCE_DIR}")
 
-# 版本名唯一取自 pubspec；改版本后重新配置，避免增量构建沿用旧宏。
-set(UPDATER_PUBSPEC "${CMAKE_CURRENT_SOURCE_DIR}/../../pubspec.yaml")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UPDATER_PUBSPEC}")
-file(STRINGS "${UPDATER_PUBSPEC}" UPDATER_VERSION_LINE REGEX "^version:")
-if(NOT UPDATER_VERSION_LINE MATCHES "^version:[ \t]+([0-9]+\\.[0-9]+\\.[0-9]+)(\\+[0-9]+)?$")
-  message(FATAL_ERROR "client/pubspec.yaml 缺少合法的三段版本名")
+# 发行版本唯一取自 Dart 常量；改版本后重新配置，避免增量构建沿用旧宏。
+set(UPDATER_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../lib/src/client_version.dart")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UPDATER_VERSION_FILE}")
+file(STRINGS "${UPDATER_VERSION_FILE}" UPDATER_VERSION_LINE REGEX "^[ \t]*const[ \t]+kClientVersion[ \t]*=")
+# file(STRINGS) 返回列表；JOIN 解开 Dart 语句末尾分号的列表转义。
+list(JOIN UPDATER_VERSION_LINE "\n" UPDATER_VERSION_LINE)
+if(NOT UPDATER_VERSION_LINE MATCHES "^[ \t]*const[ \t]+kClientVersion[ \t]*=[ \t]*('([0-9]+\\.[0-9]+\\.[0-9]+)'|\"([0-9]+\\.[0-9]+\\.[0-9]+)\")[ \t]*;[ \t]*$")
+  message(FATAL_ERROR "client/lib/src/client_version.dart 缺少合法的三段 kClientVersion 发行版本")
 endif()
-set(UPDATER_VERSION "${CMAKE_MATCH_1}")
+set(UPDATER_VERSION "${CMAKE_MATCH_2}${CMAKE_MATCH_3}")
 
 # 版本宏只传给真正使用版本号的 4 个源文件；挂在 target 上会让整个更新器失去编译缓存。
 set_source_files_properties(

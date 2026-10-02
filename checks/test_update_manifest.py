@@ -121,30 +121,34 @@ class ManifestRefresh(unittest.TestCase):
 
 
 class ClientVersionSource(unittest.TestCase):
-    def test_reads_the_version_name_from_pubspec(self):
+    def test_patch_version_is_independent_of_pubspec(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as directory:
-            pubspec = Path(directory) / "pubspec.yaml"
-            pubspec.write_text("name: x\nversion: 2.3.4+7\n", encoding="utf-8")
-            original = module.PUBSPEC
-            module.PUBSPEC = pubspec
-            try:
-                self.assertEqual(module.client_version(), "2.3.4")
-            finally:
-                module.PUBSPEC = original
+            root = Path(directory)
+            (root / "pubspec.yaml").write_text("version: 1.1.0+1\n", encoding="utf-8")
+            version_file = root / "client_version.dart"
+            module.CLIENT_VERSION_FILE = version_file
+            for version in ("1.1.0", "1.1.7"):
+                with self.subTest(version=version):
+                    version_file.write_text(
+                        f"const kClientVersion = '{version}';\n", encoding="utf-8"
+                    )
+                    self.assertEqual(module.client_version(), version)
 
-    def test_rejects_a_pubspec_without_a_version(self):
+    def test_rejects_a_missing_or_invalid_release_version(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as directory:
-            pubspec = Path(directory) / "pubspec.yaml"
-            pubspec.write_text("name: x\nversion: latest\n", encoding="utf-8")
-            original = module.PUBSPEC
-            module.PUBSPEC = pubspec
-            try:
-                with self.assertRaises(module.ManifestError):
-                    module.client_version()
-            finally:
-                module.PUBSPEC = original
+            version_file = Path(directory) / "client_version.dart"
+            module.CLIENT_VERSION_FILE = version_file
+            with self.assertRaises(module.ManifestError):
+                module.client_version()
+            for value in ("1.1", "latest", "1.1.0+1", "1.1.0oops"):
+                with self.subTest(value=value):
+                    version_file.write_text(
+                        f"const kClientVersion = '{value}';\n", encoding="utf-8"
+                    )
+                    with self.assertRaises(module.ManifestError):
+                        module.client_version()
 
 
 if __name__ == "__main__":

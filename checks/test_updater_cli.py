@@ -41,7 +41,8 @@ class UpdaterCommandLine(unittest.TestCase):
             check=False,  # 断言由调用方看 returncode 做，这里不抛异常
         )
 
-    def test_version_matches_the_client_pubspec(self):
+    def test_version_matches_the_client_release_version(self):
+        """--version 必须精确匹配 client_version() 读取的 Dart 发行版本。"""
         result = self.run_updater("--version")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((result.stdout or "").strip(), "magicjudge-updater " + client_version())

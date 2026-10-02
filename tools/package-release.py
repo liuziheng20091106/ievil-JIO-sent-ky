@@ -22,8 +22,9 @@
     package-release.cmd --no-updates        # 不刷新 data/updates.json
     .venv\\Scripts\\python.exe tools\\package-release.py --help
 
-对象键一律带版本号（`releases/app-release-1.2.3.apk` 这样）：实测自定义域会把同名对象
-在边缘缓存住（连 query 都忽略），复用同一个键会让客户端与更新器下到上一版的旧包。
+对象键一律带实际发行版本号（取自 `client/lib/src/client_version.dart` 的 kClientVersion，
+例如 `releases/app-release-1.1.0.apk`），本地构建产物名不变，pubspec 的系列版本不参与命名。
+实测自定义域会缓存同名对象（连 query 都忽略），复用键会让客户端与更新器下到上一版旧包。
 上传后除对象存储回读外，还会用真实 GET 回读一次对外地址，长度对不上就判失败。
 """
 

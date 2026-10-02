@@ -142,7 +142,7 @@ class ReleaseMonitor extends ChangeNotifier {
   /// 同一服务地址 + 同一标签的 online 触发复检间隔。
   static const onlineRecheckWindow = Duration(minutes: 10);
 
-  /// 客户端内置版本号，与 client/pubspec.yaml 的 version 名称保持一致；
+  /// 客户端实际发行版本号，默认取 kClientVersion，不使用 pubspec 的系列版本；
   /// 故意不用 package_info_plus：不为三行比较代码引依赖（不发版不用改这里）。
   final String currentVersion;
 
