@@ -272,6 +272,27 @@ def download_file(resources_dir: Path, pack: str, path: str) -> Path:
     return target
 
 
+def load_upload_log(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (ValueError, RecursionError) as error:
+        raise ManifestError("Resource upload log is invalid") from error
+    if not isinstance(value, dict) or any(
+        not isinstance(url, str)
+        or not isinstance(entry, dict)
+        or not isinstance(entry.get("path"), str)
+        or type(entry.get("size")) is not int
+        or entry["size"] < 0
+        or not isinstance(entry.get("md5"), str)
+        or not MD5_PATTERN.fullmatch(entry["md5"])
+        for url, entry in value.items()
+    ):
+        raise ManifestError("Resource upload log is invalid")
+    return value
+
+
 def update_manifest(resources_dir: Path, pack: str) -> dict:
     directory = pack_directory(resources_dir, pack)
     files = []

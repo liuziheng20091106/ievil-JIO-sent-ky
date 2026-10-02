@@ -77,6 +77,13 @@ def get_file(pack: str, path: str):
         except (ValueError, RecursionError) as error:
             raise HTTPException(503, "Resource download configuration is invalid") from error
         download_url = f"{base_url.rstrip('/')}/{entry['md5']}"
+        try:
+            upload_log = resource_packs.load_upload_log(storage.DATA_DIR / "resource-uploads.json")
+        except resource_packs.ManifestError, OSError:
+            upload_log = {}
+        uploaded = upload_log.get(download_url)
+        if uploaded is None or uploaded["md5"] != entry["md5"] or uploaded["size"] != entry["size"]:
+            return FileResponse(file, headers={"Cache-Control": "no-cache"})
         if download_url not in available_resource_urls:
             # Probe GET, not HEAD: Cloudflare may cache different results for each method.
             request = Request(
