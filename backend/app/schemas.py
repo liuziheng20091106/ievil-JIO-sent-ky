@@ -64,6 +64,10 @@ class Command(Input):
     as_seat: str | None = Field(default=None, max_length=8)
 
 
+class Leave(Input):
+    expected_version: StrictInt | None = Field(default=None, ge=0)
+
+
 class ChatReference(Input):
     start: StrictInt
     end: StrictInt

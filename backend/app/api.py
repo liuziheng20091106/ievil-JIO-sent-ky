@@ -590,23 +590,30 @@ async def participate(game_id: str, body: schemas.Participation, request: Reques
 
 
 @router.post("/games/{game_id}/leave")
-async def leave_game(game_id: str, request: Request):
-    """观战者主动退出本局：只解除自己的观战参与身份，不动对局与席位。
-
-    观战者不占席位，离开不会影响任何牌面；之后仍可再次入席观战。
-    玩家（占席）的退出仍属主持人裁量，走 room.kick，不能在这里自行脱落。
-    """
+async def leave_game(game_id: str, request: Request, body: schemas.Leave | None = None):
+    """玩家或观战者主动离开；玩家腾空席位，保留牌面与行动状态。"""
     async with realtime.lock:
         with storage.transaction() as db:
             actor = auth.require_actor(db, request, game_id)
-            if actor["kind"] != "spectator":
-                raise HTTPException(403, "只有观战者可以主动退出对局")
+            if actor["kind"] not in {"player", "spectator"}:
+                raise HTTPException(403, "只有玩家或观战者可以主动离开对局")
             game = require_game(db, game_id)
-            auth.revoke_participant(db, actor["id"])
+            if actor["kind"] == "player":
+                if body is None or body.expected_version is None:
+                    raise HTTPException(422, "离开房间需要当前状态版本")
+                if body.expected_version != game["version"]:
+                    raise HTTPException(409, "状态已变化，请刷新后检查并重新确认操作")
+            remove_participant(db, game, actor)
+            if actor["kind"] == "player":
+                game["version"] += 1
+                storage.save_game(db, game)
             row = storage.add_message(
                 db,
                 game["id"],
-                text="观战者【" + display_player_name(actor["name"]) + "】已离开对局",
+                text=("观战者" if actor["kind"] == "spectator" else actor["seat_id"] + "号玩家")
+                + "【"
+                + display_player_name(actor["name"])
+                + "】已离开对局",
             )
         realtime.publish(game_id, [row])
         refresh_connections()
@@ -773,6 +780,17 @@ async def host_enter(game_id: str, request: Request):
         return {"owner": owner, "announced": announced, "owner_name": host_label(game)}
 
 
+def remove_participant(db, game, target, *, block=False):
+    seat = seat_for(game, target["seat_id"]) if target["kind"] == "player" else None
+    if seat and seat["occupant_id"] != target["id"]:
+        raise HTTPException(409, "该参与者已不再占据该席位")
+    auth.revoke_participant(db, target["id"], block=block)
+    if seat:
+        seat["occupant_id"] = None
+        if game["status"] == "lobby":
+            seat["ready"] = False
+
+
 def room_command(db, game, actor, action_id, payload):
     if actor["kind"] != "host":
         raise HTTPException(403, "仅主持人可以管理房间")
@@ -791,14 +809,7 @@ def room_command(db, game, actor, action_id, payload):
         ).fetchone()
         if not target:
             raise HTTPException(422, "请选择本局有效参与者")
-        seat = seat_for(game, target["seat_id"]) if target["kind"] == "player" else None
-        if seat and seat["occupant_id"] != target["id"]:
-            raise HTTPException(409, "该参与者已不再占据该席位")
-        auth.revoke_participant(db, target["id"], block=body.block)
-        if seat:
-            seat["occupant_id"] = None
-            if game["status"] == "lobby":
-                seat["ready"] = False
+        remove_participant(db, game, target, block=body.block)
         text = (
             "【"
             + display_player_name(target["name"])

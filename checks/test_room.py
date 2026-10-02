@@ -215,14 +215,9 @@ class BackendFlow(unittest.TestCase):
         evidence = self.client.post(self.root + "/evidence", headers=eighth, json={"text": "x"})
         self.assertEqual(evidence.status_code, 403, evidence.text)
 
-    def test_spectator_leaves_by_itself_but_player_cannot(self):
+    def test_spectator_leaves_by_itself(self):
         self.open_join()
-        player, _, _ = self.join("11101")
         spectator, spectator_actor, _ = self.join("11102", "spectator")
-
-        # 占席玩家的退出仍由主持人裁量（room.kick），不能自己脱落。
-        refused = self.client.post(self.root + "/leave", headers=player)
-        self.assertEqual(refused.status_code, 403, refused.text)
 
         left = self.client.post(self.root + "/leave", headers=spectator)
         self.assertEqual(left.status_code, 200, left.text)
@@ -238,6 +233,90 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(rejoined.status_code, 200, rejoined.text)
         self.assertEqual(rejoined.json()["actor"]["id"], spectator_actor["id"])
         self.assertIsNone(rejoined.json()["actor"]["seat_id"])
+
+    def test_player_leaves_lobby_without_revoking_login(self):
+        self.open_join()
+        player, actor, _ = self.join("11103")
+        self.command(player, "lobby.ready")
+        state = self.client.get(self.root + "/state", headers=player).json()
+        missing = self.client.post(self.root + "/leave", headers=player)
+        self.assertEqual(missing.status_code, 422, missing.text)
+        stale = self.client.post(
+            self.root + "/leave",
+            headers=player,
+            json={"expected_version": state["version"] - 1},
+        )
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(self.client.get(self.root + "/state", headers=player).status_code, 200)
+        left = self.client.post(
+            self.root + "/leave",
+            headers=player,
+            json={"expected_version": state["version"]},
+        )
+        self.assertEqual(left.status_code, 200, left.text)
+        self.assertEqual(self.client.get(self.root + "/state", headers=player).status_code, 401)
+        self.assertEqual(self.client.get("/api/me", headers=player).status_code, 200)
+        with storage.connect() as db:
+            game = storage.load_game(db, self.game_id)
+            seat = next(seat for seat in game["seats"] if seat["id"] == actor["seat_id"])
+            self.assertIsNone(seat["occupant_id"])
+            self.assertFalse(seat["ready"])
+            self.assertEqual(game["version"], state["version"] + 1)
+            participant = db.execute(
+                "SELECT * FROM participants WHERE id=?", (actor["id"],)
+            ).fetchone()
+            self.assertFalse(participant["active"])
+            self.assertFalse(participant["blocked"])
+        rejoined = self.client.post(
+            self.root + "/participations", headers=player, json={"kind": "player"}
+        )
+        self.assertEqual(rejoined.status_code, 200, rejoined.text)
+        self.assertEqual(rejoined.json()["actor"]["seat_id"], actor["seat_id"])
+        refused = self.client.post(self.root + "/leave", headers=self.host)
+        self.assertEqual(refused.status_code, 403, refused.text)
+
+    def test_player_leaving_preserves_dealt_seat_for_substitute(self):
+        self.open_join()
+        players = [self.join(str(11201 + index)) for index in range(7)]
+        spectator, substitute, _ = self.join("11299", "spectator")
+        for headers, _, _ in players:
+            self.command(headers, "lobby.ready")
+        player, actor, _ = players[0]
+        self.edit_state(lambda game: game.update(status="playing"))
+        with storage.connect() as db:
+            before = storage.load_game(db, self.game_id)
+        left = self.client.post(
+            self.root + "/leave",
+            headers=player,
+            json={"expected_version": before["version"]},
+        )
+        self.assertEqual(left.status_code, 200, left.text)
+        with storage.connect() as db:
+            after = storage.load_game(db, self.game_id)
+        expected = next(seat for seat in before["seats"] if seat["id"] == actor["seat_id"])
+        expected["occupant_id"] = None
+        before["version"] += 1
+        self.assertEqual(after, before, "主动离开不得重置角色、技能或已提交行动")
+        refused = self.client.post(
+            self.root + "/participations", headers=player, json={"kind": "player"}
+        )
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.command(
+            self.host,
+            "room.replace",
+            {
+                "seat_id": actor["seat_id"],
+                "participant_id": substitute["id"],
+                "keep_actions": True,
+            },
+        )
+        with storage.connect() as db:
+            replaced = storage.load_game(db, self.game_id)
+        expected["occupant_id"], expected["name"] = substitute["id"], substitute["name"]
+        seat = next(seat for seat in replaced["seats"] if seat["id"] == actor["seat_id"])
+        self.assertEqual(seat, expected)
+        self.assertEqual(replaced["cards"], after["cards"])
+        self.assertEqual(self.client.get(self.root + "/state", headers=spectator).status_code, 200)
 
     def test_unconfirmed_host_sees_no_cards_and_no_private_history(self):
         """未确认进入管理界面的主持人只有观察者投影：没有全席双牌，也读不到本局私聊。

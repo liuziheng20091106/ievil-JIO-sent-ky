@@ -561,14 +561,19 @@ Future<void> returnToLobby(BuildContext context, GameStore store) async {
   }
 }
 
-/// 观战席主动退出：确认后让服务端解除观战身份，再回到大厅。
-/// 观战不占席位，退出不影响任何牌面；之后仍可再次入席观战。
-Future<void> leaveSpectating(BuildContext context, GameStore store) async {
+/// 主动离开本局：确认后解除参与身份，再回到大厅。
+Future<void> confirmLeaveGame(BuildContext context, GameStore store) async {
+  final version = store.view?.version;
+  if (version == null) return;
+  final spectating = store.actor?.isSpectator == true;
+  final label = spectating ? '退出观战' : '离开房间';
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('退出观战？'),
-      content: const Text('退出后会回到大厅，对局本身与其他玩家不受影响；之后仍可以再次观战。'),
+      title: Text('$label？'),
+      content: Text(spectating
+          ? '退出后会回到大厅，对局本身与其他玩家不受影响；之后仍可以再次观战。'
+          : '离开后会回到大厅，席位将空出，角色牌、技能状态与已提交行动保留。开局后回席需由主持人安排替补。'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext, false),
@@ -576,14 +581,14 @@ Future<void> leaveSpectating(BuildContext context, GameStore store) async {
         ),
         FilledButton(
           onPressed: () => Navigator.pop(dialogContext, true),
-          child: const Text('退出观战'),
+          child: Text(label),
         ),
       ],
     ),
   );
   if (confirmed != true) return;
   try {
-    await store.leaveGame();
+    await store.leaveGame(version);
   } on ApiException catch (failure) {
     if (context.mounted) {
       ScaffoldMessenger.of(context)
@@ -4233,13 +4238,12 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
         const SizedBox(height: AppSpacing.xl),
-        // 观战席不占席位，可以自己退出回大厅（占席玩家的退出仍由主持人裁量）。
-        if (actor.isSpectator) ...[
+        if (!actor.isHost) ...[
           OutlinedButton.icon(
             onPressed:
-                store.writeBusy ? null : () => leaveSpectating(context, store),
+                store.writeBusy ? null : () => confirmLeaveGame(context, store),
             icon: const Icon(Icons.meeting_room_outlined, size: 18),
-            label: const Text('退出观战（返回大厅）'),
+            label: Text(actor.isSpectator ? '退出观战（返回大厅）' : '离开房间'),
           ),
           const SizedBox(height: AppSpacing.md),
         ],

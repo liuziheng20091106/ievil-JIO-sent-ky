@@ -282,7 +282,7 @@ class GameStore extends ChangeNotifier {
   /// 进入管理界面后服务端给的提示：不是建局主持人时说明已发本局系统公告。
   String? hostAdminNotice;
 
-  /// 主动离开观战期间置位：服务端解除身份后会把旧连接按 4401 终结，
+  /// 主动离开本局期间置位：服务端解除身份后会把旧连接按 4401 终结，
   /// 但那是本人主动退出，不该被当成身份失效而清掉会话。
   bool _leavingByChoice = false;
 
@@ -1044,19 +1044,29 @@ class GameStore extends ChangeNotifier {
     }
   }
 
-  /// 观战席主动退出：先断开实时连接（服务端解除身份后会把旧连接按 4401 终结，
-  /// 而 4401 在客户端语义里等于「身份失效」），再让服务端解除观战身份并回大厅。
-  /// 占席玩家的退出仍由主持人裁量，服务端会拒绝这里。
-  Future<void> leaveGame() async {
+  /// 主动离开本局；拒绝或版本冲突时恢复实时连接，留在房间重新确认。
+  Future<void> leaveGame(int expectedVersion) async {
     final client = api;
     final id = gameId;
-    if (client == null || id == null) return;
+    if (client == null || id == null || writeBusy) return;
+    writeBusy = true;
+    notifyListeners();
     // 关闭连接的回执可能晚于这次退出流程本身，所以标记留到下一次进局再清。
     _leavingByChoice = true;
-    await live?.stop();
-    live = null;
-    await client.leaveGame(id);
-    await returnToLobby();
+    try {
+      await live?.stop();
+      live = null;
+      try {
+        await client.leaveGame(id, expectedVersion);
+      } catch (_) {
+        await enterGame(id);
+        rethrow;
+      }
+      await returnToLobby();
+    } finally {
+      writeBusy = false;
+      notifyListeners();
+    }
   }
 
   /// 参与者 id 对应的账号 id：点头像看成就摘要时用它查公开摘要。
@@ -1229,7 +1239,7 @@ class GameStore extends ChangeNotifier {
         connectionStatus = status;
         // 服务端用 4401 终结身份（被移出对局/该局已换成新局/令牌作废），
         // 或握手期就 401/403：留在局里只会反复失败，清会话回登录页。
-        // 大厅视图由 returnToLobby 的会话校验兜底。观战席自己退出时同样会收到
+        // 大厅视图由 returnToLobby 的会话校验兜底。本人主动退出时同样会收到
         // 4401，但那是有意为之，不能把用户踢回登录页。
         if (!_leavingByChoice &&
             (status.startsWith('登录状态已失效') || status == '登录已失效，请重新登录')) {

@@ -167,9 +167,10 @@ class GameApi {
         '/api/games/${Uri.encodeComponent(gameId)}/host/enter',
       ));
 
-  /// 观战席主动退出本局：服务端只解除观战参与身份，之后仍可再次入席观战。
-  Future<void> leaveGame(String gameId) async {
-    await _request('POST', '/api/games/${Uri.encodeComponent(gameId)}/leave');
+  /// 主动离开本局：腾空玩家席位，保留角色与行动状态，不退出账号登录。
+  Future<void> leaveGame(String gameId, int expectedVersion) async {
+    await _request('POST', '/api/games/${Uri.encodeComponent(gameId)}/leave',
+        body: {'expected_version': expectedVersion});
   }
 
   /// 在线账号名单；带 gameId 时服务端额外给出能否邀请与是否已邀请。
