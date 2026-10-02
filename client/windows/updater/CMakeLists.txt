@@ -29,6 +29,15 @@ target_compile_definitions(Updater PRIVATE "WINVER=0x0A00")
 target_include_directories(Updater PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(Updater PRIVATE "${CMAKE_SOURCE_DIR}")
 
+# 版本名唯一取自 pubspec；改版本后重新配置，避免增量构建沿用旧宏。
+set(UPDATER_PUBSPEC "${CMAKE_CURRENT_SOURCE_DIR}/../../pubspec.yaml")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UPDATER_PUBSPEC}")
+file(STRINGS "${UPDATER_PUBSPEC}" UPDATER_VERSION_LINE REGEX "^version:")
+if(NOT UPDATER_VERSION_LINE MATCHES "^version:[ \t]+([0-9]+\\.[0-9]+\\.[0-9]+)(\\+[0-9]+)?$")
+  message(FATAL_ERROR "client/pubspec.yaml 缺少合法的三段版本名")
+endif()
+set(UPDATER_VERSION "${CMAKE_MATCH_1}")
+
 # 版本宏只传给真正使用版本号的 4 个源文件；挂在 target 上会让整个更新器失去编译缓存。
 set_source_files_properties(
   "gui.cpp" "install.cpp" "main.cpp" "update.cpp"

@@ -12,25 +12,17 @@
 """
 
 import os
-import re
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from tools.update_manifest import client_version
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 UPDATER = (
-    PROJECT_ROOT
-    / "client"
-    / "build"
-    / "windows"
-    / "x64"
-    / "runner"
-    / "Release"
-    / "Updater.exe"
+    PROJECT_ROOT / "client" / "build" / "windows" / "x64" / "runner" / "Release" / "Updater.exe"
 )
-
-VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+")
 
 
 @unittest.skipUnless(os.name == "nt", "Windows 更新器只能在 Windows 上运行")
@@ -49,12 +41,10 @@ class UpdaterCommandLine(unittest.TestCase):
             check=False,  # 断言由调用方看 returncode 做，这里不抛异常
         )
 
-    def test_version_reports_a_semantic_version(self):
+    def test_version_matches_the_client_pubspec(self):
         result = self.run_updater("--version")
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = (result.stdout or "").strip()
-        if output:
-            self.assertRegex(output, VERSION_PATTERN)
+        self.assertEqual((result.stdout or "").strip(), "magicjudge-updater " + client_version())
 
     def test_help_lists_the_documented_commands(self):
         result = self.run_updater("--help")
