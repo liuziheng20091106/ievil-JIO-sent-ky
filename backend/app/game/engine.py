@@ -184,6 +184,11 @@ def convert_daily(game, events):
     game["witch_checked_day"] = game["day"]
     destiny = game["public"].get("witch_destiny")
     day = game["day"]
+    conversion = {"day": day, "skip": False}
+    plugins.emit(game, events, "witch_conversion", conversion)
+    if conversion["skip"]:
+        begin_night(game, events)
+        return
 
     def legal(cid):
         c = game["cards"][cid]

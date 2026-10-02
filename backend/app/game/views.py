@@ -250,8 +250,7 @@ def status_cards(game, own):
             text = f"你是魔女阵营：第{faction.index(own['id']) + 1}天你的当前牌会魔女化。"
             add("witch_destiny", "danger", "魔女化命运", text)
         else:
-            # 别把「不会魔女化」说成整局的承诺：第四天起魔典仍可能转化任何合法目标。
-            text = "本局你会魔女化。" if will else "前三天你不会魔女化；第四天起魔典仍可能转化你。"
+            text = "本局你会魔女化。" if will else "前三天你不会按开局命运魔女化。"
             add("witch_destiny", "danger" if will else "info", "魔女化命运", text)
     protected = next(
         (card for card in cards if card["states"].get("treasure_protected_day", -1) >= game["day"]),
