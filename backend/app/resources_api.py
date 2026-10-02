@@ -1,7 +1,9 @@
 """Public endpoints for explicitly published, independent media packs."""
 
 import json
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
@@ -9,6 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from . import resource_packs, storage
 
 router = APIRouter(prefix="/api/resources")
+available_resource_urls: set[str] = set()
 
 
 def resource_error(error: Exception) -> HTTPException:
@@ -73,8 +76,25 @@ def get_file(pack: str, path: str):
             _ = parsed.port
         except (ValueError, RecursionError) as error:
             raise HTTPException(503, "Resource download configuration is invalid") from error
+        download_url = f"{base_url.rstrip('/')}/{entry['md5']}"
+        if download_url not in available_resource_urls:
+            # Probe GET, not HEAD: Cloudflare may cache different results for each method.
+            request = Request(
+                download_url,
+                headers={"Range": "bytes=0-0", "User-Agent": "MagicJudgeReleaseCheck/1.0"},
+            )
+            try:
+                with urlopen(request, timeout=5) as response:
+                    if response.status in (200, 206):
+                        available_resource_urls.add(download_url)
+            except HTTPError as error:
+                error.close()
+            except URLError, OSError:
+                pass
+        if download_url not in available_resource_urls:
+            return FileResponse(file, headers={"Cache-Control": "no-cache"})
         return RedirectResponse(
-            f"{base_url.rstrip('/')}/{entry['md5']}",
+            download_url,
             status_code=302,
             headers={"Cache-Control": "no-cache"},
         )

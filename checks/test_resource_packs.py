@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -31,6 +33,9 @@ class ResourcePacks(unittest.TestCase):
         data_patch = patch.object(storage, "DATA_DIR", self.root)
         data_patch.start()
         self.addCleanup(data_patch.stop)
+        cache_patch = patch.object(resources_api, "available_resource_urls", set())
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
         app = FastAPI()
         app.include_router(resources_api.router)
         self.client = TestClient(app)
@@ -41,6 +46,29 @@ class ResourcePacks(unittest.TestCase):
 
     def write_manifest(self, value, pack="animation"):
         (self.root / pack / "manifest.json").write_text(json.dumps(value), encoding="utf-8")
+
+    def start_remote(self, responses):
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                status, body = responses.get(self.path, (404, b"missing"))
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}", requests
 
     def animation(self):
         return {
@@ -257,16 +285,23 @@ class ResourcePacks(unittest.TestCase):
 
     def test_redirect_downloads_preserve_boundaries_and_read_configuration_fresh(self):
         valid = self.publish()
+        digest = valid["files"][0]["md5"]
+        base_url, _ = self.start_remote(
+            {
+                f"/resources/{digest}": (200, b"frame"),
+                f"/new-prefix/{digest}": (200, b"frame"),
+            }
+        )
         configuration = self.root / "resource-downloads.json"
         configuration.write_text(
-            json.dumps({"base_url": "https://s3.tkcloud.online/resources/"}), encoding="utf-8"
+            json.dumps({"base_url": f"{base_url}/resources/"}), encoding="utf-8"
         )
         url = "/api/resources/animation/files/frame.png"
         response = self.client.get(url, follow_redirects=False)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
             response.headers["location"],
-            f"https://s3.tkcloud.online/resources/{valid['files'][0]['md5']}",
+            f"{base_url}/resources/{digest}",
         )
         self.assertEqual(response.headers["cache-control"], "no-cache")
         (self.root / "animation" / "unpublished.png").write_bytes(b"private")
@@ -314,19 +349,56 @@ class ResourcePacks(unittest.TestCase):
         configuration.write_text("{broken", encoding="utf-8")
         self.assertEqual(self.client.get(url, follow_redirects=False).status_code, 503)
         configuration.write_text(
-            json.dumps({"base_url": "http://cdn.example.org/new-prefix"}), encoding="utf-8"
+            json.dumps({"base_url": f"{base_url}/new-prefix"}), encoding="utf-8"
         )
         response = self.client.get(url, follow_redirects=False)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
             response.headers["location"],
-            f"http://cdn.example.org/new-prefix/{valid['files'][0]['md5']}",
+            f"{base_url}/new-prefix/{digest}",
         )
         configuration.unlink()
         response = self.client.get(url, follow_redirects=False)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"frame")
         self.assertNotIn("location", response.headers)
+
+    def test_remote_missing_falls_back_then_recovers_and_caches_available_urls(self):
+        valid = self.publish()
+        digest = valid["files"][0]["md5"]
+        remote_responses = {}
+        base_url, requests = self.start_remote(remote_responses)
+        configuration = self.root / "resource-downloads.json"
+        configuration.write_text(
+            json.dumps({"base_url": f"{base_url}/resources"}), encoding="utf-8"
+        )
+        url = "/api/resources/animation/files/frame.png"
+        for status in (404, 403, 503):
+            with self.subTest(remote_status=status):
+                remote_responses[f"/resources/{digest}"] = (status, b"unavailable")
+                response = self.client.get(url, follow_redirects=False)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, b"frame")
+                self.assertNotIn("location", response.headers)
+        self.assertEqual(requests, [f"/resources/{digest}"] * 3)
+        remote_responses[f"/resources/{digest}"] = (200, b"frame")
+        for _ in range(2):
+            response = self.client.get(url, follow_redirects=False)
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.headers["location"], f"{base_url}/resources/{digest}")
+        self.assertEqual(requests, [f"/resources/{digest}"] * 4)
+        configuration.write_text(
+            json.dumps({"base_url": f"{base_url}/new-prefix"}), encoding="utf-8"
+        )
+        response = self.client.get(url, follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"frame")
+        self.assertNotIn("location", response.headers)
+        self.assertEqual(requests[-1], f"/new-prefix/{digest}")
+        remote_responses[f"/new-prefix/{digest}"] = (206, b"frame")
+        response = self.client.get(url, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["location"], f"{base_url}/new-prefix/{digest}")
 
     def test_corrupt_metadata_fails_closed_and_is_read_fresh(self):
         valid = self.publish()
