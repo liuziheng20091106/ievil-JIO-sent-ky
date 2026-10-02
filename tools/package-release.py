@@ -580,17 +580,18 @@ def verify_remote(values: dict, uploaded: dict) -> list[str]:
     """上传后逐个回读远端对象：大小必须一致，ETag 与本地 MD5 不一致时只提示。"""
     problems = []
     for item in uploaded:
+        label = f"{item['path']} -> {item['key']}" if "path" in item else item["key"]
         headers = head_object(values, item["key"])
         remote_size = int(headers.get("Content-Length") or -1)
         remote_etag = (headers.get("ETag") or "").strip('"')
         if remote_size != item["size"]:
             problems.append(
-                f"{item['key']} 大小不一致：本地 {item['size']}，远端 {remote_size}"
+                f"{label} 大小不一致：本地 {item['size']}，远端 {remote_size}"
             )
-            log(f"  校验失败 {item['key']}：本地 {item['size']} B，远端 {remote_size} B")
+            log(f"  校验失败 {label}：本地 {item['size']} B，远端 {remote_size} B")
             continue
         note = "" if remote_etag == item["md5"] else f"，与本地 MD5 不同（{item['md5']}）"
-        log(f"  校验通过 {item['key']}：{remote_size} B，ETag {remote_etag or '缺失'}{note}")
+        log(f"  校验通过 {label}：{remote_size} B，ETag {remote_etag or '缺失'}{note}")
     return problems
 
 
@@ -605,13 +606,14 @@ def verify_public(values: dict, uploaded: list[dict]) -> list[str]:
     必须走真实 GET（而不是 HEAD）：实测 Cloudflare 对 HEAD 不回缓存、对 GET 回缓存，
     只测 HEAD 会漏掉「客户端下到上一版旧包」这种事故。
 
-    刚上传完的自定义域可能短暂返回 403/404（对象还没传播到边缘），这类瞬时错误
-    按短退避重试；但**长度不一致不重试**——那正是要被拦住的缓存旧对象。
+    刚上传完的自定义域可能短暂返回 403/404，按短退避重试；缓存的旧404需要清理CDN，
+    不能靠重传对象消除。长度不一致不重试——那正是要被拦住的缓存旧对象。
     """
     base = values["S3_PUBLIC_BASE"].rstrip("/")
     problems = []
     for item in uploaded:
         url = f"{base}/{urllib.parse.quote(item['key'], safe='/~')}"
+        label = f"{item.get('path', item['key'])} ({url})"
         total = -1
         cache = ""
         failure = None
@@ -632,18 +634,27 @@ def verify_public(values: dict, uploaded: list[dict]) -> list[str]:
             except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as error:
                 failure = error
                 total = -1
+                cache = ""
+                if isinstance(error, urllib.error.HTTPError):
+                    cache = ", ".join(
+                        f"{name}={error.headers[name]}"
+                        for name in ("CF-Cache-Status", "Age", "Cache-Control", "CF-Ray")
+                        if error.headers.get(name)
+                    )
+                    error.close()
+                detail = f"{label} 取不到：{error}{('，' + cache) if cache else ''}"
                 if attempt < PUBLIC_VERIFY_ATTEMPTS:
-                    log(f"  对外地址第 {attempt} 次取不到（{error}），{PUBLIC_VERIFY_DELAY_SECONDS}s 后重试")
+                    log(f"  {detail}；第 {attempt} 次，{PUBLIC_VERIFY_DELAY_SECONDS}s 后重试")
                     time.sleep(PUBLIC_VERIFY_DELAY_SECONDS)
         if failure is not None:
-            problems.append(f"{url} 取不到：{failure}")
+            problems.append(detail)
             continue
         if total != item["size"]:
             problems.append(
-                f"{url} 对外长度 {total} 与本地 {item['size']} 不一致（CDN 缓存了旧对象）"
+                f"{label} 对外长度 {total} 与本地 {item['size']} 不一致（CDN 缓存了旧对象）"
             )
             continue
-        log(f"  对外可下载 {item['key']}：{total} B{('，' + cache) if cache else ''}")
+        log(f"  对外可下载 {label}：{total} B{('，' + cache) if cache else ''}")
     return problems
 
 
