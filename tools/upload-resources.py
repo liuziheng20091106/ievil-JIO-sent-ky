@@ -64,6 +64,9 @@ def main():
 
         release.with_retry(put, f"Upload {key}")
         item = {"key": key, "size": size, "md5": digest}
+        print(
+            f"Verifying {file.relative_to(args.resources_dir).as_posix()} -> {key}", flush=True
+        )
         problems = release.verify_remote(values, [item]) + release.verify_public(values, [item])
         if problems:
             raise ValueError("\n".join(problems))
