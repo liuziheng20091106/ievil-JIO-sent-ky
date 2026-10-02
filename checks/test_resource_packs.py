@@ -13,7 +13,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.app import resource_packs as packs, resources_api
+from backend.app import resource_packs as packs, resources_api, storage
 
 
 class ResourcePacks(unittest.TestCase):
@@ -28,6 +28,9 @@ class ResourcePacks(unittest.TestCase):
         self.patch = patch.object(packs, "RESOURCES_DIR", self.root)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        data_patch = patch.object(storage, "DATA_DIR", self.root)
+        data_patch.start()
+        self.addCleanup(data_patch.stop)
         app = FastAPI()
         app.include_router(resources_api.router)
         self.client = TestClient(app)
@@ -251,6 +254,79 @@ class ResourcePacks(unittest.TestCase):
         self.assertEqual(
             self.client.get("/api/resources/animation/files/frame.png").status_code, 404
         )
+
+    def test_redirect_downloads_preserve_boundaries_and_read_configuration_fresh(self):
+        valid = self.publish()
+        configuration = self.root / "resource-downloads.json"
+        configuration.write_text(
+            json.dumps({"base_url": "https://s3.tkcloud.online/resources/"}), encoding="utf-8"
+        )
+        url = "/api/resources/animation/files/frame.png"
+        response = self.client.get(url, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.headers["location"],
+            f"https://s3.tkcloud.online/resources/{valid['files'][0]['md5']}",
+        )
+        self.assertEqual(response.headers["cache-control"], "no-cache")
+        (self.root / "animation" / "unpublished.png").write_bytes(b"private")
+        for path in (
+            "unknown/files/frame.png",
+            "memes/files/face.gif",
+            "animation/files/unpublished.png",
+            "animation/files/manifest.json",
+            "animation/files/%2E%2E/memes/face.gif",
+            "animation/files/C%3A/frame.png",
+            "animation/files/%2Ehidden.png",
+            "animation/files/a%5Cframe.png",
+        ):
+            with self.subTest(path=path):
+                rejected = self.client.get(f"/api/resources/{path}", follow_redirects=False)
+                self.assertEqual(rejected.status_code, 404)
+                self.assertNotIn("location", rejected.headers)
+        self.write_manifest({**valid, "version": "0" * 32})
+        self.assertEqual(self.client.get(url, follow_redirects=False).status_code, 503)
+        self.write_manifest(valid)
+        frame = self.root / "animation" / "frame.png"
+        frame.write_bytes(b"changed size")
+        self.assertEqual(self.client.get(url, follow_redirects=False).status_code, 503)
+        frame.unlink()
+        self.assertEqual(self.client.get(url, follow_redirects=False).status_code, 404)
+        frame.write_bytes(b"frame")
+        for value in (
+            {},
+            [],
+            {"base_url": None},
+            {"base_url": "/resources"},
+            {"base_url": "ftp://example.org/resources"},
+            {"base_url": "https:///resources"},
+            {"base_url": "https://user:secret@example.org/resources"},
+            {"base_url": "https://example.org/resources?token=secret"},
+            {"base_url": "https://example.org/resources#fragment"},
+            {"base_url": "https://example.org:invalid/resources"},
+            {"base_url": "https://example.org/\nresources"},
+        ):
+            with self.subTest(configuration=value):
+                configuration.write_text(json.dumps(value), encoding="utf-8")
+                rejected = self.client.get(url, follow_redirects=False)
+                self.assertEqual(rejected.status_code, 503)
+                self.assertNotIn("location", rejected.headers)
+        configuration.write_text("{broken", encoding="utf-8")
+        self.assertEqual(self.client.get(url, follow_redirects=False).status_code, 503)
+        configuration.write_text(
+            json.dumps({"base_url": "http://cdn.example.org/new-prefix"}), encoding="utf-8"
+        )
+        response = self.client.get(url, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.headers["location"],
+            f"http://cdn.example.org/new-prefix/{valid['files'][0]['md5']}",
+        )
+        configuration.unlink()
+        response = self.client.get(url, follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"frame")
+        self.assertNotIn("location", response.headers)
 
     def test_corrupt_metadata_fails_closed_and_is_read_fresh(self):
         valid = self.publish()

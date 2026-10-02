@@ -16,7 +16,7 @@ flutter build windows --debug
 
 安卓后台保活：应用启动后拉起前台服务（`KeepAliveService`，常驻低优先级通知 + PARTIAL 唤醒锁）维持 WebSocket 心跳；首次连接服务器后若未加入「忽略电池优化」白名单，大厅顶部横幅可一键跳转授权，也可以点「忽略」不再提示（记在 `shared_preferences`）。
 
-版本检查与应用内更新：所有请求都带 `seven-double-flutter/<版本> (<平台>)` 的 UA（完整发行版本唯一源码是 `lib/src/client_version.dart` 的 `kClientVersion`，当前为 `1.1.1`）。从 1.1.0 起正常补丁发版只改该常量；`pubspec.yaml` 固定 `version: 1.1.0+1`，仅跨 `x.y` 系列才改 `x.y`，`+1` 不动。连接服务器后读 `/api/health` 下发的 `client_latest` / `client_minimum` 与 `update` 详情；大厅每 5 秒轮询 `/api/online`，它回一句「有没有更新」，说有更新时客户端再请求一次 `/api/health` 取版本字段与更新日志（同一服务地址、同一 latest 标签 10 分钟内只查一次）。低于 latest 提示可更新、低于 minimum 强制更新（强制更新时不提供「稍后」，且服务端会拒绝以玩家身份入局，其它功能不受限）。 Flutter 要求三段合法 SemVer，跨系列使用 x.y.0+1；这是固定包基线，并非跟随补丁发行版本同步。
+版本检查与应用内更新：所有请求都带 `seven-double-flutter/<版本> (<平台>)` 的 UA（完整发行版本唯一源码是 `lib/src/client_version.dart` 的 `kClientVersion`，当前为 `1.1.2`）。从 1.1.0 起正常补丁发版只改该常量；`pubspec.yaml` 固定 `version: 1.1.0+1`，仅跨 `x.y` 系列才改 `x.y`，`+1` 不动。连接服务器后读 `/api/health` 下发的 `client_latest` / `client_minimum` 与 `update` 详情；大厅每 5 秒轮询 `/api/online`，它回一句「有没有更新」，说有更新时客户端再请求一次 `/api/health` 取版本字段与更新日志（同一服务地址、同一 latest 标签 10 分钟内只查一次）。低于 latest 提示可更新、低于 minimum 强制更新（强制更新时不提供「稍后」，且服务端会拒绝以玩家身份入局，其它功能不受限）。 Flutter 要求三段合法 SemVer，跨系列使用 x.y.0+1；这是固定包基线，并非跟随补丁发行版本同步。
 
 APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`；Windows runner 系统文件版本同样来自固定包基线。客户端 UA、更新比较、发布清单 `latest`、三条上传对象键与 `Updater.exe --version` 使用完整 `kClientVersion`。更新器 CMake 从 Dart 常量读取版本，将该文件登记到 `CMAKE_CONFIGURE_DEPENDS`，版本宏保持 source scoped；不使用 `--build-name` / `--build-number` 补丁同步，也不做 `flutter clean`，改变 Dart 常量仍正常重编 Dart AOT。本地输出名不变，上传名为「原 stem-完整发行版本.扩展名」（如 `app-release-1.1.0.apk`）。1.1.0 的版本来源迁移已完成；正式发行按 `docs/客户端编译发行手册.md` 执行。
 
@@ -33,6 +33,7 @@ APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`
 
 缓存位于应用数据目录的 `resources/`，资源文件直接以 MD5 命名，不按服务器或包名分目录。`animation.json`、`memes.json` 各自记录原始路径与 MD5，相同内容跨路径与跨包只保存一份；增量下载先验证已有文件，新增内容大小和 MD5 通过后才替换所选包的映射。更新后按服务器两包清单的并集删除未引用文件，不保留服务器已移除的旧资源；另一包可以不下载，但清理必须取得它的清单，网络或清单故障时停止清理并报告。服务端添加、替换或删除素材后运行 `.venv\Scripts\python.exe -X utf8 tools\update-resource-manifests.py`，两包各自的 `manifest.json` 即时生效；单包可加 `--pack animation` 或 `--pack memes`。MD5 用于完整性判断，不替代 HTTPS。
 资源缓存的符号链接校验从系统提供的应用支持目录开始，允许 Android 等系统在该目录上层使用路径别名；应用内的 resources 目录、临时下载目录、清单与 MD5 文件仍拒绝符号链接，不读取或写入缓存之外的文件。
+从1.1.2起下载支持HTTP(S)的302/CDN重定向，最多5次，下载请求不携带登录令牌或Cookie。后端在 `data/resource-downloads.json` 配置 `base_url` 后可将文件下载跳转至R2公网地址下的MD5对象；资源清单与本地缓存格式不变，下载完成仍校验大小和MD5。1.1.1及更早客户端禁止重定向，使用该下载方式需要更新客户端。
 
 动画播放器采用 `lottie` 3.6.1 的纯 Dart 引擎，资源管理里的“预览动画”可选择已下载的脚本全屏播放、暂停和重播。首次接入播放器需更新一次 App，后续更换 `animation/scripts/*.json` 与包内图片后刷新清单即可更新动画，不再更新 App。同一播放器支持不同 Lottie 样式，不执行下发 JavaScript，不支持直接播放 AEP 或 AE 的任意插件。`AnimationPlayer(resources: ..., scriptPath: ...)` 只读取已校验的 MD5 缓存；图片必须在 animation 包已安装清单中，缺失或损坏时手动预览显示错误，实时效果直接跳过，绝不偷偷下载外链。对局所有主动/被动技能展示框由后端附带默认横幅脚本、当前收件人可见的角色图和文字；魔女本人及已确认主持拿 EX＋魔女，其他获准收件人只拿普通版，私密技能不向他人下发。顺序发言每位发言人起点播放审问开始；新动画立即停止并替换旧动画，不排队，历史/初始同步/重连不补播。效果在根 Navigator 最上层显示，黑色蒙版独立半透明、主体正常绘制，退出对局立即清理。短/长技能名都保持在横幅区域内，缩小字号时同步调整段落纵向偏移。旧客户端猜测阶段的动画接口已删除，不做兼容；后续效果只以原生客户端为准，Web预览服务已停止。
 

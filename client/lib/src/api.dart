@@ -68,7 +68,8 @@ class GameApi {
 
   Future<Map<String, dynamic>> resourceManifest(String pack) async =>
       jsonObject(await _request(
-        'GET', '/api/resources/${Uri.encodeComponent(pack)}/manifest',
+        'GET',
+        '/api/resources/${Uri.encodeComponent(pack)}/manifest',
       ));
 
   /// 用户协议（Markdown）：客户端首次连接服务器时展示；服务端未配置时正文为空。
@@ -103,8 +104,8 @@ class GameApi {
     try {
       final request =
           await _client.getUrl(uri).timeout(const Duration(seconds: 25));
-      // 与其它请求一致：不跟随重定向，避免把下载引到协议外的地址。
-      request.followRedirects = false;
+      request.followRedirects = true;
+      request.maxRedirects = 5;
       request.headers.set(HttpHeaders.acceptHeader, '*/*');
       final response =
           await request.close().timeout(const Duration(seconds: 25));
@@ -134,6 +135,8 @@ class GameApi {
       throw ApiException('无法连接服务器：${error.message}');
     } on HandshakeException {
       throw const ApiException('TLS 证书验证失败');
+    } on HttpException catch (error) {
+      throw ApiException('下载失败：${error.message}');
     }
   }
 

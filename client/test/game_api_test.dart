@@ -53,6 +53,7 @@ void main() {
   final routes = <String, Object?>{};
   // 按路径覆盖状态码：模拟旧服务端没有 PoW 领题接口（404）。
   final statusByPath = <String, int>{};
+  final redirects = <String, String>{};
 
   setUp(() async {
     requests.clear();
@@ -60,6 +61,7 @@ void main() {
     bodies.clear();
     routes.clear();
     statusByPath.clear();
+    redirects.clear();
     status = 200;
     body = stateJson();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -70,6 +72,14 @@ void main() {
         bodies.add(await utf8.decoder.bind(request).join());
       }
       final path = request.uri.path;
+      final location = redirects[path];
+      if (location != null) {
+        request.response.statusCode = HttpStatus.found;
+        request.response.headers.set(HttpHeaders.locationHeader, location);
+        request.response.cookies.add(Cookie('session', 'private'));
+        await request.response.close();
+        return;
+      }
       request.response.statusCode = statusByPath[path] ?? status;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(routes[path] ?? body));
@@ -99,17 +109,97 @@ void main() {
     // PoW 领题与挑战创建都是无令牌请求：两个请求都不该带 Authorization。
     await api.createChallenge();
     expect(
-      requests.every((headers) =>
-          headers.value(HttpHeaders.authorizationHeader) == null),
+      requests.every(
+          (headers) => headers.value(HttpHeaders.authorizationHeader) == null),
       isTrue,
     );
     expect(calls, contains('POST /api/native/auth/challenges'));
     api.close();
   });
 
+  test('downloadTo follows CDN redirects without session headers', () async {
+    final cdn = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => cdn.close(force: true));
+    final cdnRequests = <HttpHeaders>[];
+    final bytes = <int>[0, 255, 128, 10, 13, 42];
+    cdn.listen((request) async {
+      cdnRequests.add(request.headers);
+      expect(request.uri.path, '/resource-md5');
+      request.response.contentLength = bytes.length;
+      request.response.add(bytes);
+      await request.response.close();
+    });
+    redirects['/download'] = 'http://127.0.0.1:${cdn.port}/resource-md5';
+    final directory = await Directory.systemTemp.createTemp('api-download-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/resource');
+    final api = GameApi(endpoint, token: 'private-token');
+    addTearDown(api.close);
+    await api.me();
+    expect(requests.single.value(HttpHeaders.authorizationHeader),
+        'Bearer private-token');
+    requests.clear();
+    final progress = <(int, int)>[];
+    final received = await api.downloadTo('/download', file,
+        onProgress: (received, total) => progress.add((received, total)));
+    expect(received, bytes.length);
+    expect(await file.readAsBytes(), bytes);
+    expect(progress.last, (bytes.length, bytes.length));
+    var previous = 0;
+    for (final (received, total) in progress) {
+      expect(received, greaterThan(previous));
+      expect(received, lessThanOrEqualTo(bytes.length));
+      expect(total, bytes.length);
+      previous = received;
+    }
+    expect(requests, hasLength(1));
+    expect(cdnRequests, hasLength(1));
+    for (final headers in [...requests, ...cdnRequests]) {
+      expect(headers.value(HttpHeaders.authorizationHeader), isNull);
+      expect(headers.value(HttpHeaders.cookieHeader), isNull);
+    }
+  });
+
+  test('downloadTo rejects redirect loops before writing a file', () async {
+    redirects['/loop-a'] = '/loop-b';
+    redirects['/loop-b'] = '/loop-a';
+    final directory = await Directory.systemTemp.createTemp('api-download-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/resource');
+    final api = GameApi(endpoint);
+    addTearDown(api.close);
+    await expectLater(
+      api.downloadTo('/loop-a', file),
+      throwsA(isA<ApiException>().having((error) => error.message, 'message',
+          contains('Redirect loop detected'))),
+    );
+    expect(await file.exists(), isFalse);
+    expect(calls, ['GET /loop-a', 'GET /loop-b', 'GET /loop-a']);
+  });
+
+  test('downloadTo refuses non-HTTP redirect destinations', () async {
+    redirects['/download'] = 'ftp://127.0.0.1:${server.port}/forbidden';
+    final directory = await Directory.systemTemp.createTemp('api-download-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/resource');
+    final api = GameApi(endpoint);
+    addTearDown(api.close);
+    await expectLater(
+      api.downloadTo('/download', file),
+      throwsA(isA<ArgumentError>().having((error) => error.message, 'message',
+          contains("Unsupported scheme 'ftp'"))),
+    );
+    expect(await file.exists(), isFalse);
+    expect(calls, ['GET /download']);
+  });
+
   test('PoW 开启：先领题求解，再把证明带进挑战创建请求', () async {
     const token = 'v1.123.4.abc.deadbeef';
-    routes['/api/pow/challenges'] = {'required': true, 'difficulty': 3, 'token': token};
+    routes['/api/pow/challenges'] = {
+      'required': true,
+      'difficulty': 3,
+      'token': token
+    };
     final api = GameApi(endpoint);
     await api.createChallenge();
     expect(calls[0], 'POST /api/pow/challenges');
@@ -129,7 +219,8 @@ void main() {
     routes['/api/pow/challenges'] = {'required': false};
     final api = GameApi(endpoint);
     await api.createChallenge();
-    expect(calls, ['POST /api/pow/challenges', 'POST /api/native/auth/challenges']);
+    expect(calls,
+        ['POST /api/pow/challenges', 'POST /api/native/auth/challenges']);
     // 未开启防护：创建挑战不带证明字段（body 为空字符串，即无 JSON 体）。
     expect(bodies.last, isEmpty);
     api.close();
@@ -139,7 +230,8 @@ void main() {
     statusByPath['/api/pow/challenges'] = 404;
     final api = GameApi(endpoint);
     await api.createChallenge();
-    expect(calls, ['POST /api/pow/challenges', 'POST /api/native/auth/challenges']);
+    expect(calls,
+        ['POST /api/pow/challenges', 'POST /api/native/auth/challenges']);
     // 回退时同样不带证明，行为与旧客户端一致。
     expect(bodies.last, isEmpty);
     api.close();
@@ -175,8 +267,12 @@ void main() {
         action: 'vote.cast',
         payload: {'target': '2'},
         asSeat: '2');
-    expect(jsonDecode(bodies.last),
-        {'expected_version': 3, 'action': 'vote.cast', 'payload': {'target': '2'}, 'as_seat': '2'});
+    expect(jsonDecode(bodies.last), {
+      'expected_version': 3,
+      'action': 'vote.cast',
+      'payload': {'target': '2'},
+      'as_seat': '2'
+    });
 
     body = {
       'id': 7,
@@ -198,7 +294,10 @@ void main() {
   });
 
   test('傀儡代读：读消息带 as_seat，自己的消息不带', () async {
-    routes['/api/games/g1/messages'] = {'messages': <dynamic>[], 'has_more': false};
+    routes['/api/games/g1/messages'] = {
+      'messages': <dynamic>[],
+      'has_more': false
+    };
     final api = GameApi(endpoint, token: 'token-abc');
     // 控制者代读受控席位所在频道的聊天：服务端只认 as_seat 这一条只读口径。
     await api.messages('g1', asSeat: '2');
@@ -276,8 +375,10 @@ void main() {
       ],
       'has_more': true,
     };
-    final page = await api.history(before: '2026-09-26T03:00:00+00:00', limit: 5);
-    expect(calls.last, 'GET /api/history?limit=5&before=2026-09-26T03%3A00%3A00%2B00%3A00');
+    final page =
+        await api.history(before: '2026-09-26T03:00:00+00:00', limit: 5);
+    expect(calls.last,
+        'GET /api/history?limit=5&before=2026-09-26T03%3A00%3A00%2B00%3A00');
     expect(page.hasMore, isTrue);
     expect(page.matches.single.winner, 'witch');
     expect(page.matches.single.players.single.roleIds, ['marg', 'sherry']);
