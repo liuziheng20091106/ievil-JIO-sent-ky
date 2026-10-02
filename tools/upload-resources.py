@@ -23,7 +23,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources-dir", type=Path, default=RESOURCES_DIR)
     parser.add_argument("--env", type=Path, default=release.DEFAULT_ENV_FILE)
+    parser.add_argument(
+        "--prefix",
+        default="resources",
+        help="Upload object prefix; enable only after successful verification",
+    )
     args = parser.parse_args()
+    prefix = args.prefix.strip("/")
+    if not prefix or "\\" in prefix or any(part in ("", ".", "..") for part in prefix.split("/")):
+        raise ValueError("Resource object prefix is invalid")
     values = release.load_env(args.env)
     release.check_config(values, args.env)
     files = {}
@@ -35,13 +43,13 @@ def main():
                 raise ValueError(f"Published resource changed: {pack}/{entry['path']}")
             files.setdefault(entry["md5"], (file, entry["size"]))
     print(
-        f"Uploading {len(files)} unique resources to {values['S3_PUBLIC_BASE']}/resources",
+        f"Uploading {len(files)} unique resources to {values['S3_PUBLIC_BASE']}/{prefix}",
         flush=True,
     )
 
     def publish(item):
         digest, (file, size) = item
-        key = f"resources/{digest}"
+        key = f"{prefix}/{digest}"
         url = release.object_url(values, key)
         sha256 = release.sha256_file(file)
         headers = {
@@ -63,10 +71,9 @@ def main():
                 )
 
         release.with_retry(put, f"Upload {key}")
-        item = {"key": key, "size": size, "md5": digest}
-        print(
-            f"Verifying {file.relative_to(args.resources_dir).as_posix()} -> {key}", flush=True
-        )
+        path = file.relative_to(args.resources_dir).as_posix()
+        item = {"key": key, "size": size, "md5": digest, "path": path}
+        print(f"Verifying {path} -> {key}", flush=True)
         problems = release.verify_remote(values, [item]) + release.verify_public(values, [item])
         if problems:
             raise ValueError("\n".join(problems))
@@ -77,7 +84,7 @@ def main():
     print(
         f"Uploaded and verified {len(published)} objects ({sum(item['size'] for item in published)} bytes)."
     )
-    print(f"Resource base URL: {values['S3_PUBLIC_BASE'].rstrip('/')}/resources")
+    print(f"Resource base URL: {values['S3_PUBLIC_BASE'].rstrip('/')}/{prefix}")
     return 0
 
 

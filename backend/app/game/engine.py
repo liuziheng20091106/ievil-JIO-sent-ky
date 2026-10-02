@@ -1417,6 +1417,8 @@ def player_command(game, actor, events, action, data, *, by_host=False):
                 },
             )
         sync_declarations(game)
+        # Publish a changed speaking turn first, so its intro cannot replace the skill cut-in.
+        sync_speaker(game, events)
         suffix = "该技能不可质疑。" if ability in {"photo", "love", "gaze"} else "其他玩家可质疑。"
         # 文本与结构化载荷共同保留在历史；按收件人的裁剪在 storage.message_view 完成。
         notify(

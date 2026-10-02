@@ -1,5 +1,6 @@
 """Game animations: recipient privacy, event-time snapshots and real HTTP/WS delivery."""
 
+import json
 import unittest
 from contextlib import ExitStack
 from copy import deepcopy
@@ -7,7 +8,7 @@ from unittest.mock import patch
 
 from backend.app import storage
 from backend.app.game import CATALOG, apply_command
-from backend.app.game import animations, engine
+from backend.app.game import animations, engine, plugins
 from backend.app.game.roles import nanoka
 from backend.app.game.state import passive_card_payload
 from checks.rule_factory import PAIRS, arranged_game, player
@@ -139,9 +140,13 @@ class GameAnimationProjection(unittest.TestCase):
                     snapshot = animations.skill_animation_snapshot(
                         role["id"], skill["id"], skill["name"], True
                     )
-                    self.assertEqual(snapshot["public"]["script"], animations.SKILL_SCRIPT)
-                    self.assertEqual(snapshot["owner"]["script"], animations.SKILL_SCRIPT)
-                    self.assertEqual(snapshot["public"]["texts"]["skill-name"], skill["name"])
+                    if (role["id"], skill["id"]) != ("emma", "interrupt"):
+                        for branch, variant in (("public", "normal"), ("owner", "EX")):
+                            self.assertEqual(snapshot[branch]["script"], animations.SKILL_SCRIPT)
+                            self.assertEqual(
+                                snapshot[branch]["images"],
+                                {"skill-portrait": f"{role['id']}/{variant}/1.png"},
+                            )
         with patch.dict(
             animations.SKILL_SCRIPTS,
             {
@@ -246,6 +251,124 @@ class GameAnimationDelivery(unittest.TestCase):
             if frame["type"] == "state" and frame["state"]["version"] >= version:
                 return messages
         raise AssertionError("the command's state frame was not delivered")
+
+    def test_emma_interrupt_and_private_hiro_forgery_keep_frozen_slots(self):
+        emma = self.room.seat_headers(self.players, "1")
+        hiro = self.room.seat_headers(self.players, "2")
+        for witch in (False, True):
+            with self.subTest(witch=witch):
+
+                def arrange(game, witch=witch):
+                    game["day"] += 1
+                    game["phase"] = "speech"
+                    game["speech_passed"] = []
+                    game["speech_queued"] = {}
+                    game["public"].update(
+                        speaker="2", speech_order=["2", "1", "3", "4", "5", "6", "7"]
+                    )
+                    game["seats"][0]["cards"] = ["emma", "millia"]
+                    game["cards"]["emma"]["witch"] = witch
+                    game["cards"]["hiro"]["witch"] = witch
+                    game["declarations"] = []
+                    game["rule_plugins"] = plugins.manifest(["hiro_forgery"])
+
+                self.room.edit_state(arrange)
+                before = {item["id"] for item in self.history(self.room.host)}
+                self.room.command(emma, "day.skill", {"ability": "interrupt", "target": "2"})
+                self.room.command(hiro, "hiro_forgery.publish", {"text": "公开正文"})
+                delivered = {
+                    name: [item for item in self.history(headers) if item["id"] not in before]
+                    for name, headers in {
+                        "emma": emma,
+                        "hiro": hiro,
+                        "other": self.headers["5"],
+                        "host": self.room.host,
+                        "unentered": self.unentered,
+                    }.items()
+                }
+                for name, messages in delivered.items():
+                    animated = [
+                        item for item in messages if item.get("payload", {}).get("animation")
+                    ]
+                    self.assertEqual(animated[0]["kind"], "speech_turn")
+                    self.assertEqual(animated[0]["payload"]["seat_id"], "1")
+                    self.assertEqual(animated[1]["payload"]["ability"], "interrupt")
+                    interrupt = next(
+                        item
+                        for item in messages
+                        if item.get("payload", {}).get("ability") == "interrupt"
+                    )
+                    animation = interrupt["payload"]["animation"]
+                    self.assertEqual(animation["script"], "scripts/emma-interrupt.json")
+                    self.assertEqual(
+                        animation["images"],
+                        {
+                            "skill-portrait" + (f"-{index}" if index > 1 else ""): (
+                                "emma/EX/1.png"
+                                if witch and name in {"emma", "host"}
+                                else f"scripts/images/emma-interrupt/portrait-{index}.webp"
+                            )
+                            for index in range(1, 4)
+                        },
+                    )
+                    public = next(item for item in messages if item["text"] == "公开正文")
+                    self.assertEqual(public["kind"], "notice")
+                    self.assertNotIn("payload", public)
+                    private = [
+                        item
+                        for item in messages
+                        if item.get("payload", {}).get("type") == "animation"
+                    ]
+                    if name not in {"hiro", "host"}:
+                        self.assertEqual(private, [])
+                        continue
+                    self.assertEqual(len(private), 1)
+                    payload = private[0]["payload"]
+                    self.assertEqual(set(payload), {"type", "animation"})
+                    self.assertEqual(payload["type"], "animation")
+                    self.assertEqual(payload["animation"]["script"], "scripts/hiro-forgery.json")
+                    self.assertEqual(
+                        payload["animation"]["images"],
+                        {
+                            "skill-portrait"
+                            + (
+                                f"-{index}" if index > 1 else ""
+                            ): f"scripts/images/hiro-forgery/portrait-{'ex-' if witch else ''}{index}.webp"
+                            for index in range(1, 4)
+                        },
+                    )
+
+                def change_identity(game, witch=witch):
+                    game["cards"]["emma"]["witch"] = not witch
+                    game["cards"]["hiro"]["witch"] = not witch
+
+                self.room.edit_state(change_identity)
+                for name, headers in (("emma", emma), ("hiro", hiro), ("host", self.room.host)):
+                    archived = {item["id"]: item for item in self.history(headers)}
+                    for item in delivered[name]:
+                        self.assertEqual(archived[item["id"]].get("payload"), item.get("payload"))
+                hint = next(
+                    item
+                    for item in delivered["host"]
+                    if item.get("payload", {}).get("type") == "animation"
+                )
+                with storage.transaction() as db:
+                    raw = db.execute(
+                        "SELECT payload FROM messages WHERE id=?", (hint["id"],)
+                    ).fetchone()["payload"]
+                owner_id = json.loads(raw)["actor_participant_id"]
+                self.assertEqual(
+                    storage.project_message_payload(
+                        raw,
+                        {"kind": "player", "access_ids": ["controller", owner_id]},
+                        "information",
+                    ),
+                    hint["payload"],
+                )
+                for actor in (UNENTERED, {"kind": "player", "access_ids": ["replacement"]}):
+                    self.assertIsNone(storage.project_message_payload(raw, actor, "information"))
+                for kind in (None, "notice", "alert"):
+                    self.assertIsNone(storage.project_message_payload(raw, HOST, kind))
 
     def test_http_and_live_skill_privacy_and_private_passive_audience(self):
         viewers = {

@@ -5,7 +5,10 @@ from .catalog import ROLES
 SKILL_SCRIPT = "scripts/skill-cut-in.json"
 SPEECH_SCRIPT = "scripts/interrogation-start.json"
 # Specific role/ability scripts replace the default here, for both active and passive cards.
-SKILL_SCRIPTS = {}
+SKILL_SCRIPTS = {
+    ("emma", "interrupt"): "scripts/emma-interrupt.json",
+    ("hiro", "forgery"): "scripts/hiro-forgery.json",
+}
 
 
 def skill_animation_snapshot(role_id, ability, ability_name, witch):
@@ -13,9 +16,20 @@ def skill_animation_snapshot(role_id, ability, ability_name, witch):
     role_name = ROLES[role_id]["name"]
 
     def animation(ex):
+        images = {"skill-portrait": f"{role_id}/{'EX' if ex else 'normal'}/1.png"}
+        if (role_id, ability) in {("emma", "interrupt"), ("hiro", "forgery")}:
+            images = {
+                "skill-portrait" + (f"-{index}" if index > 1 else ""): (
+                    "emma/EX/1.png"
+                    if role_id == "emma" and ex
+                    else f"scripts/images/{role_id}-{'interrupt' if role_id == 'emma' else 'forgery'}/"
+                    f"portrait-{'ex-' if role_id == 'hiro' and ex else ''}{index}.webp"
+                )
+                for index in range(1, 4)
+            }
         return {
             "script": script,
-            "images": {"skill-portrait": f"{role_id}/{'EX' if ex else 'normal'}/1.png"},
+            "images": images,
             "texts": {
                 "role-title": f"{role_name} · {'魔女' if ex else '普通'}",
                 "skill-name": ability_name,

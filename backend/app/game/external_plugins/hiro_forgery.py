@@ -1,5 +1,6 @@
 """希罗每日一次发布伪造的全场系统消息。"""
 
+from ..animations import skill_animation_snapshot
 from ..state import can_use_ability, current, notify, player_seat, require
 
 ID = "hiro_forgery"
@@ -55,7 +56,18 @@ def publish(game, actor, events, payload, *, by_host=False):
     text = payload["text"].strip()
     require(bool(text), "系统消息不能为空")
     game["plugin_state"].setdefault(ID, {})["day"] = game["day"]
-    notify(game, events, "你已使用伪证。", [seat["id"]], "伪证")
+    notify(
+        game,
+        events,
+        "你已使用伪证。",
+        [seat["id"]],
+        "伪证",
+        payload={
+            "type": "animation",
+            "actor_participant_id": seat["occupant_id"],
+            "_animation": skill_animation_snapshot("hiro", "forgery", "伪证", card["witch"]),
+        },
+    )
     notify(
         game,
         events,
