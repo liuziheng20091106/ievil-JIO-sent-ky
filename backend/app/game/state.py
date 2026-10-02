@@ -823,6 +823,7 @@ DEAL_EXCLUDED_PAIRS = (
     ("coco", "sherry"),
     ("millia", "hiro"),
     ("emma", "noah"),
+    ("hanna", "emma"),
 )
 
 # 艾玛、米莉亚、亚里沙不会发给同一个人，且必须放在每席两张牌的下层（牌序索引为奇数）。
