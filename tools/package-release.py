@@ -149,9 +149,7 @@ def check_config(values: dict, env_path: Path) -> None:
         elif any(ch in value for ch in PLACEHOLDER_CHARS):
             missing.append(f"{key}（仍是占位符 {value}）")
     if missing:
-        raise ReleaseError(
-            f"配置文件 {env_path} 还没填完：\n  - " + "\n  - ".join(missing)
-        )
+        raise ReleaseError(f"配置文件 {env_path} 还没填完：\n  - " + "\n  - ".join(missing))
     endpoint = values["S3_ENDPOINT"]
     if not endpoint.startswith(("http://", "https://")):
         raise ReleaseError(f"S3_ENDPOINT 必须以 http:// 或 https:// 开头，现在是 {endpoint}")
@@ -237,7 +235,12 @@ def _sign(key: bytes, message: str) -> bytes:
 
 
 def build_signature(
-    values: dict, method: str, canonical_uri: str, host: str, payload_hash: str, extra: dict,
+    values: dict,
+    method: str,
+    canonical_uri: str,
+    host: str,
+    payload_hash: str,
+    extra: dict,
     query: str = "",
 ) -> tuple[str, str]:
     """按 AWS SigV4 计算请求头，返回 (x-amz-date 的值, Authorization 头的值)。
@@ -337,8 +340,14 @@ def describe_http_error(error: urllib.error.HTTPError) -> str:
     return detail
 
 
-def request_once(url: str, method: str, data=None, headers: dict | None = None, timeout: int = 300,
-                 read_body: bool = False):
+def request_once(
+    url: str,
+    method: str,
+    data=None,
+    headers: dict | None = None,
+    timeout: int = 300,
+    read_body: bool = False,
+):
     request = urllib.request.Request(url, data=data, method=method)
     for name, value in (headers or {}).items():
         request.add_header(name, value)
@@ -385,9 +394,17 @@ def with_retry(action, what: str, attempts: int = 3):
     raise ReleaseError(f"{what} 连续 {attempts} 次失败：{last}")
 
 
-def _signed_request(values: dict, method: str, url: str, payload_hash: str, extra: dict,
-                    query_params: dict | None = None, data=None, read_body: bool = False,
-                    timeout: int | None = None):
+def _signed_request(
+    values: dict,
+    method: str,
+    url: str,
+    payload_hash: str,
+    extra: dict,
+    query_params: dict | None = None,
+    data=None,
+    read_body: bool = False,
+    timeout: int | None = None,
+):
     """构造并发送一个 SigV4 签名请求，返回 (status, headers, body)。
 
     `timeout` 缺省用 `S3_TIMEOUT`；分片 PUT 会传 `S3_PART_TIMEOUT`，避免一条卡住的
@@ -425,7 +442,12 @@ def _s3_object_put(values: dict, local: Path, key: str) -> None:
         # 每次尝试都重新签名；文件句柄在 send 里打开，重试时从头开始读。
         with local.open("rb") as handle:
             return _signed_request(
-                values, "PUT", url, payload_hash, extra, data=handle.read(size),
+                values,
+                "PUT",
+                url,
+                payload_hash,
+                extra,
+                data=handle.read(size),
             )
 
     status, _, _ = with_retry(send, f"上传 {key}")
@@ -447,8 +469,13 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
 
     def create():
         return _signed_request(
-            values, "POST", url, empty, {"Content-Type": content_type},
-            {"uploads": ""}, read_body=True,
+            values,
+            "POST",
+            url,
+            empty,
+            {"Content-Type": content_type},
+            {"uploads": ""},
+            read_body=True,
         )
 
     status, _, body = with_retry(create, f"发起分片上传 {key}")
@@ -457,8 +484,10 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
     if status != 200 or not match:
         raise ReleaseError(f"发起分片上传 {key} 失败：HTTP {status}，响应里没有 UploadId")
     upload_id = match.group(1)
-    log(f"分片上传 {key}（{human(size)}，{MULTIPART_PART_SIZE // (1024 * 1024)}MB/片 × "
-        f"{MULTIPART_CONCURRENCY} 路，{part_timeout}s 无进展换连接重传）…")
+    log(
+        f"分片上传 {key}（{human(size)}，{MULTIPART_PART_SIZE // (1024 * 1024)}MB/片 × "
+        f"{MULTIPART_CONCURRENCY} 路，{part_timeout}s 无进展换连接重传）…"
+    )
 
     # 2) 计算分片并并发 PUT（partNumber 从 1 开始，除最后一片外都必须等长）。
     parts = part_ranges(size, MULTIPART_PART_SIZE)
@@ -478,8 +507,13 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
 
         def attempt():
             _, response_headers, _ = _signed_request(
-                values, "PUT", url, digest, {},
-                {"partNumber": number, "uploadId": upload_id}, data=block,
+                values,
+                "PUT",
+                url,
+                digest,
+                {},
+                {"partNumber": number, "uploadId": upload_id},
+                data=block,
                 timeout=part_timeout,
             )
             return response_headers.get("ETag") or ""
@@ -501,7 +535,11 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
         # 有失败分片就放弃整个上传（abort 清掉服务端残留），用户重跑即可。
         try:
             _signed_request(
-                values, "DELETE", url, empty, {},
+                values,
+                "DELETE",
+                url,
+                empty,
+                {},
                 {"uploadId": upload_id},
             )
         except Exception:  # pragma: no cover - 清理失败不影响报错
@@ -523,8 +561,13 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
 
     def complete():
         _, response_headers, _ = _signed_request(
-            values, "POST", url, body_hash, {},
-            {"uploadId": upload_id}, data=payload,
+            values,
+            "POST",
+            url,
+            body_hash,
+            {},
+            {"uploadId": upload_id},
+            data=payload,
         )
         return response_headers
 
@@ -532,12 +575,16 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
     elapsed = time.monotonic() - started
     speed = size / elapsed if elapsed > 0 else 0
     slowest = max(part_seconds.values()) if part_seconds else 0
-    log(f"  完成，用时 {elapsed:.1f}s（{human(int(speed))}/s，{len(parts)} 片，"
-        f"最慢一片 {slowest:.1f}s）")
+    log(
+        f"  完成，用时 {elapsed:.1f}s（{human(int(speed))}/s，{len(parts)} 片，"
+        f"最慢一片 {slowest:.1f}s）"
+    )
     if elapsed >= SLOW_UPLOAD_MIN_SECONDS and speed < SLOW_UPLOAD_BYTES_PER_SECOND:
-        log("  提示：本次明显慢于实测基线（8MB×6 约 3 MB/s），多半是本机上行被占用"
+        log(
+            "  提示：本次明显慢于实测基线（8MB×6 约 3 MB/s），多半是本机上行被占用"
             "或对象存储侧抖动；分片超过 "
-            f"{part_timeout}s 没有进展会自动换连接重传，重跑发布即可。")
+            f"{part_timeout}s 没有进展会自动换连接重传，重跑发布即可。"
+        )
 
 
 def upload(values: dict, local: Path, key: str) -> dict:
@@ -585,9 +632,7 @@ def verify_remote(values: dict, uploaded: dict) -> list[str]:
         remote_size = int(headers.get("Content-Length") or -1)
         remote_etag = (headers.get("ETag") or "").strip('"')
         if remote_size != item["size"]:
-            problems.append(
-                f"{label} 大小不一致：本地 {item['size']}，远端 {remote_size}"
-            )
+            problems.append(f"{label} 大小不一致：本地 {item['size']}，远端 {remote_size}")
             log(f"  校验失败 {label}：本地 {item['size']} B，远端 {remote_size} B")
             continue
         note = "" if remote_etag == item["md5"] else f"，与本地 MD5 不同（{item['md5']}）"
@@ -693,11 +738,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env", type=Path, default=DEFAULT_ENV_FILE, help="配置文件路径")
     parser.add_argument("--dry-run", action="store_true", help="只打包并打印计划，不联网、不改配置")
     parser.add_argument("--skip-zip", action="store_true", help="跳过打包，直接复用已有 zip")
-    parser.add_argument("--skip-upload", action="store_true", help="复用已上传的对象，只做校验与配置刷新")
+    parser.add_argument(
+        "--skip-upload", action="store_true", help="复用已上传的对象，只做校验与配置刷新"
+    )
     parser.add_argument("--no-downloads", action="store_true", help="不更新 data/downloads.json")
     parser.add_argument("--no-updater", action="store_true", help="不上传 Updater.exe")
     parser.add_argument("--no-updates", action="store_true", help="不刷新 data/updates.json")
-    parser.add_argument("--data-dir", type=Path, default=None, help="data 目录（默认 GAME_DATA_DIR 或 ./data）")
+    parser.add_argument(
+        "--data-dir", type=Path, default=None, help="data 目录（默认 GAME_DATA_DIR 或 ./data）"
+    )
     args = parser.parse_args(argv)
 
     values = load_env(args.env)

@@ -32,9 +32,7 @@ class ManifestRefresh(unittest.TestCase):
         self.path = Path(self.directory.name) / "updates.json"
 
     def write(self, payload):
-        self.path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def read(self):
         return json.loads(self.path.read_text(encoding="utf-8"))

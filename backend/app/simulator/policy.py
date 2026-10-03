@@ -9,7 +9,6 @@ import random
 from dataclasses import dataclass, field, replace
 
 
-
 @dataclass
 class Decision:
     """一次决策：行动 id 与载荷；``note`` 只用于日志。
@@ -163,7 +162,11 @@ class HeuristicPolicy:
             # 艾玛、米莉亚、亚里沙必须放下层，上层只能从另一牌里选。
             fixed_lower = {"emma", "millia", "arisa"}
             top = next(
-                (card["id"] for card in view["self"]["cards"] if card["role_id"] not in fixed_lower),
+                (
+                    card["id"]
+                    for card in view["self"]["cards"]
+                    if card["role_id"] not in fixed_lower
+                ),
                 self_card_ids[0],
             )
             return Decision("lobby.order", {"top": top}, "选上层")
@@ -312,7 +315,9 @@ class HeuristicPolicy:
             if self.speak:
                 hint = client.action("speech.speak")
                 if hint is not None:
-                    return Decision("speech.speak", {"text": self._speech_text(client)}, "预提交发言")
+                    return Decision(
+                        "speech.speak", {"text": self._speech_text(client)}, "预提交发言"
+                    )
             skip = client.action("speech.done")
             if skip is not None:
                 return Decision("speech.done", {}, "本轮不发言")
@@ -323,7 +328,9 @@ class HeuristicPolicy:
         dead = [s["id"] for s in view["seats"] if not s["alive"]]
         lead = f"第{view['day']}天我的看法："
         if dead:
-            return lead + "、".join(f"{sid}号" for sid in dead) + "号的角色牌已经出局，先听后续发言。"
+            return (
+                lead + "、".join(f"{sid}号" for sid in dead) + "号的角色牌已经出局，先听后续发言。"
+            )
         return lead + "目前没有确定的线索，先按顺序听完再做判断。"
 
     # ------------------------------------------------------------------ 提名
@@ -382,7 +389,9 @@ class HeuristicPolicy:
             if options:
                 # 临刑枪是连发：先打到子弹用完（每枪重新选目标），没有枪可开时再收手。
                 # 顺序反过来就永远走不到「命中率递增 / 打空即结束」这条分支。
-                return Decision("execution.shoot", {"target": self.random.choice(options)}, "临刑开枪")
+                return Decision(
+                    "execution.shoot", {"target": self.random.choice(options)}, "临刑开枪"
+                )
         confirm = client.action("execution.confirm")
         if confirm is not None:
             return Decision("execution.confirm", {}, "收手（不再开枪）")
@@ -406,7 +415,11 @@ class HeuristicPolicy:
             finally:
                 client.view = real
             if decision is not None:
-                return replace(decision, as_seat=panel["seat_id"], note=f"傀儡{panel['seat_id']}号 {decision.note}")
+                return replace(
+                    decision,
+                    as_seat=panel["seat_id"],
+                    note=f"傀儡{panel['seat_id']}号 {decision.note}",
+                )
         return None
 
     def _puppet_decision(self, client):
@@ -463,9 +476,7 @@ class HeuristicPolicy:
                 if card_id in self._evidence_submitted:
                     continue
                 self._evidence_submitted.add(card_id)
-                return Decision(
-                    action_id, {"card_id": card_id, "text": "模拟遗留证物"}, "提交证物"
-                )
+                return Decision(action_id, {"card_id": card_id, "text": "模拟遗留证物"}, "提交证物")
             if action_id == "hiro.exit":
                 return None
         return None

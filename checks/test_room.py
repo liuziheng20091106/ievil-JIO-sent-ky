@@ -72,14 +72,12 @@ class BackendFlow(unittest.TestCase):
             },
         )
         bound.raise_for_status()
-        completed = self.client.get(
-            "/api/native/auth/host/challenges/" + challenge["id"]
-        )
+        completed = self.client.get("/api/native/auth/host/challenges/" + challenge["id"])
         completed.raise_for_status()
         self.assertEqual(completed.json().get("status"), "completed")
-        return {
-            "Authorization": "Bearer " + completed.json()["session_token"]
-        }, completed.json()["session"]["actor"]
+        return {"Authorization": "Bearer " + completed.json()["session_token"]}, completed.json()[
+            "session"
+        ]["actor"]
 
     def account(self, qq_id):
         challenge = self.client.post("/api/native/auth/challenges").json()
@@ -95,15 +93,13 @@ class BackendFlow(unittest.TestCase):
             },
         )
         bound.raise_for_status()
-        completed = self.client.get(
-            "/api/native/auth/challenges/" + challenge["id"]
-        )
+        completed = self.client.get("/api/native/auth/challenges/" + challenge["id"])
         completed.raise_for_status()
         # 原生客户端同样按 status 判断登录完成，缺了它会继续轮询已消费的挑战。
         self.assertEqual(completed.json().get("status"), "completed")
-        return {
-            "Authorization": "Bearer " + completed.json()["session_token"]
-        }, completed.json()["session"]["actor"]
+        return {"Authorization": "Bearer " + completed.json()["session_token"]}, completed.json()[
+            "session"
+        ]["actor"]
 
     def command(self, headers, action, payload=None, status=200):
         state = self.client.get(self.root + "/state", headers=headers)
@@ -179,7 +175,9 @@ class BackendFlow(unittest.TestCase):
         with auth_storage.connect() as db:
             rows = db.execute("SELECT token_hash FROM login_tokens").fetchall()
             self.assertNotIn(raw_cookie, {row["token_hash"] for row in rows})
-            self.assertTrue(any(row["token_hash"] == auth_storage.secret_hash(raw_cookie) for row in rows))
+            self.assertTrue(
+                any(row["token_hash"] == auth_storage.secret_hash(raw_cookie) for row in rows)
+            )
 
     def test_open_join_stable_account_capacity_and_spectator_projection(self):
         waiting, _ = self.account("11000")
@@ -222,9 +220,7 @@ class BackendFlow(unittest.TestCase):
         left = self.client.post(self.root + "/leave", headers=spectator)
         self.assertEqual(left.status_code, 200, left.text)
         # 离开即不再是本局参与身份，但重新观战仍然可以（参与身份只是置为不活跃）。
-        self.assertEqual(
-            self.client.get(self.root + "/state", headers=spectator).status_code, 401
-        )
+        self.assertEqual(self.client.get(self.root + "/state", headers=spectator).status_code, 401)
         notice = self.client.get(self.root + "/messages", headers=self.host).json()["messages"]
         self.assertTrue(any("已离开对局" in message["text"] for message in notice))
         rejoined = self.client.post(
@@ -438,9 +434,7 @@ class BackendFlow(unittest.TestCase):
         invited = self.client.get(self.root + "/state", headers=second).json()
         pending = next(item for item in invited["channels"] if item["id"] == channel["id"])
         self.assertEqual(pending["invitation"], "pending")
-        active = self.command(
-            second, "channel.accept", {"channel_id": channel["id"]}
-        ).json()
+        active = self.command(second, "channel.accept", {"channel_id": channel["id"]}).json()
         channel = next(item for item in active["channels"] if item["id"] == channel["id"])
         self.assertEqual(channel["status"], "active")
         public = self.client.post(
@@ -456,9 +450,9 @@ class BackendFlow(unittest.TestCase):
             json={"channel_id": channel["id"], "text": "secret"},
         )
         private.raise_for_status()
-        hidden = self.client.get(
-            self.root + "/messages?scope=private", headers=stranger
-        ).json()["messages"]
+        hidden = self.client.get(self.root + "/messages?scope=private", headers=stranger).json()[
+            "messages"
+        ]
         self.assertNotIn(private.json()["id"], [message["id"] for message in hidden])
         host_busy = self.command(
             self.host,
@@ -467,9 +461,7 @@ class BackendFlow(unittest.TestCase):
             status=409,
         )
         self.assertIn("其他私信", host_busy.text)
-        ended = self.command(
-            second, "channel.end", {"channel_id": channel["id"]}
-        ).json()
+        ended = self.command(second, "channel.end", {"channel_id": channel["id"]}).json()
         channel = next(item for item in ended["channels"] if item["id"] == channel["id"])
         self.assertEqual(channel["status"], "ended")
         restored = self.client.post(
@@ -478,9 +470,9 @@ class BackendFlow(unittest.TestCase):
             json={"channel_id": "public", "text": "restored"},
         )
         restored.raise_for_status()
-        host_scope = self.client.get(
-            self.root + "/messages?scope=host", headers=self.host
-        ).json()["messages"]
+        host_scope = self.client.get(self.root + "/messages?scope=host", headers=self.host).json()[
+            "messages"
+        ]
         self.assertIn(private.json()["id"], [message["id"] for message in host_scope])
         self.assertTrue(all(message["channel_id"] != "public" for message in host_scope))
         system = self.client.get(self.root + "/messages?scope=system", headers=second).json()
@@ -499,9 +491,7 @@ class BackendFlow(unittest.TestCase):
         players = [self.join(f"1270{i}") for i in range(1, 8)]
         headers = [item[0] for item in players]
         actors = [item[1] for item in players]
-        prompt = self.client.get(self.root + "/state", headers=headers[0]).json()[
-            "action_prompt"
-        ]
+        prompt = self.client.get(self.root + "/state", headers=headers[0]).json()["action_prompt"]
         self.assertIsNone(prompt["hint"])
         # 已经准备完的席位不再被催。
         self.command(headers[0], "lobby.ready")
@@ -539,7 +529,9 @@ class BackendFlow(unittest.TestCase):
         system = self.client.get(self.root + "/messages?scope=system", headers=stranger).json()[
             "messages"
         ]
-        self.assertEqual([message["id"] for message in system], [message["id"] for message in baseline])
+        self.assertEqual(
+            [message["id"] for message in system], [message["id"] for message in baseline]
+        )
 
     def test_spectator_channel_is_private_to_spectators_and_host(self):
         """观战频道由观战者独享：观战互见、主持人可见可发言，玩家不可见不可入。"""
@@ -593,18 +585,14 @@ class BackendFlow(unittest.TestCase):
 
         # 观战者频道投影：只有观战频道与系统频道，没有建私信入口。
         view = self.client.get(self.root + "/state", headers=first).json()
-        self.assertEqual(
-            [channel["id"] for channel in view["channels"]], ["spectator", "system"]
-        )
+        self.assertEqual([channel["id"] for channel in view["channels"]], ["spectator", "system"])
         self.assertFalse(any(action["id"] == "channel.create" for action in view["actions"]))
         self.assertEqual(view["channels"][0]["label"], "观战频道")
         self.assertTrue(view["channels"][0]["can_send"])
 
         # 观战者不能发起私信，也不能接受被邀请；玩家端邀请名单不再出现观战者。
         # 观战者投影里没有建私信入口；就算直接构造命令也会被拒绝（行动未列出或身份拒绝）。
-        blocked = self.command(
-            first, "channel.create", {"participant_ids": ["host"]}, status=422
-        )
+        blocked = self.command(first, "channel.create", {"participant_ids": ["host"]}, status=422)
         self.assertIn("不可用", blocked.text)
         desc = next(
             (
@@ -617,15 +605,10 @@ class BackendFlow(unittest.TestCase):
             None,
         )
         if desc is not None:
-            labels = {
-                option["label"]
-                for option in desc["fields"][0]["options"]
-            }
+            labels = {option["label"] for option in desc["fields"][0]["options"]}
             self.assertFalse(any("观战" in label for label in labels))
         # 玩家直接尝试邀请观战者：名单校验拒绝（观战者已不在有效成员里）。
-        self.command(
-            player, "channel.create", {"participant_ids": [first_actor["id"]]}, status=422
-        )
+        self.command(player, "channel.create", {"participant_ids": [first_actor["id"]]}, status=422)
 
         # 实时推送共用 visible_message：玩家身份对观战频道聊天不可见，观战者可见。
         self.assertFalse(
@@ -803,12 +786,8 @@ class BackendFlow(unittest.TestCase):
         )
         self.assertIn("出局", create["description"])
         # 出局者不能邀请别人，别人也不能再把出局者拉进私信。
-        self.command(
-            first, "channel.create", {"participant_ids": [second_actor["id"]]}, status=403
-        )
-        self.command(
-            second, "channel.create", {"participant_ids": [first_actor["id"]]}, status=403
-        )
+        self.command(first, "channel.create", {"participant_ids": [second_actor["id"]]}, status=403)
+        self.command(second, "channel.create", {"participant_ids": [first_actor["id"]]}, status=403)
         offered = next(
             item
             for item in self.client.get(self.root + "/state", headers=second).json()["actions"]
@@ -836,9 +815,7 @@ class BackendFlow(unittest.TestCase):
         set_seat_alive(True)
         restored = self.client.get(self.root + "/state", headers=first).json()
         self.assertIn("player.surrender", [item["id"] for item in restored["actions"]])
-        reborn = next(
-            item for item in restored["actions"] if item["id"] == "channel.create"
-        )
+        reborn = next(item for item in restored["actions"] if item["id"] == "channel.create")
         self.assertIn(
             second_actor["name"], [option["label"] for option in reborn["fields"][0]["options"]]
         )
@@ -875,7 +852,11 @@ class BackendFlow(unittest.TestCase):
         )
         master_card = seats[controller_actor["seat_id"]]["current_card_id"]
         puppet_card = seats[victim_actor["seat_id"]]["current_card_id"]
-        self.command(self.host, "host.state", {"card_id": master_card, "state": "witch", "value": True, "reason": "测试"})
+        self.command(
+            self.host,
+            "host.state",
+            {"card_id": master_card, "state": "witch", "value": True, "reason": "测试"},
+        )
         self.command(
             self.host,
             "host.state",
@@ -1028,7 +1009,11 @@ class BackendFlow(unittest.TestCase):
                     break
             self.assertTrue(delivered, "傀儡席私信里的回话必须实时推给控制者")
         # 主持人自行代操作仍走主持人授权路径。
-        self.command(self.host, "host.state", {"card_id": puppet_card, "state": "injured", "value": True, "reason": "测试"})
+        self.command(
+            self.host,
+            "host.state",
+            {"card_id": puppet_card, "state": "injured", "value": True, "reason": "测试"},
+        )
         # 傀儡当前牌出局且该席下层仍存活：控制解除，原玩家收到恢复通知并能自己行动。
         self.command(
             self.host,
@@ -1050,12 +1035,10 @@ class BackendFlow(unittest.TestCase):
         )
         back.raise_for_status()
         self.assertEqual(back.json()["sender_name"], victim_actor["name"])
-        notices = self.client.get(
-            self.root + "/messages?scope=all", headers=victim
-        ).json()["messages"]
-        self.assertTrue(
-            any("重新回到游戏" in message["text"] for message in notices), notices
-        )
+        notices = self.client.get(self.root + "/messages?scope=all", headers=victim).json()[
+            "messages"
+        ]
+        self.assertTrue(any("重新回到游戏" in message["text"] for message in notices), notices)
         # 控制关系已解除：控制者不再拿到该席的傀儡面板。
         after_death = self.client.get(self.root + "/state", headers=controller).json()
         self.assertEqual(after_death["self"]["puppet_controls"], [])
@@ -1079,9 +1062,7 @@ class BackendFlow(unittest.TestCase):
         self.client.get("/api/lobby", headers=headers).raise_for_status()
         self.assertIn(actor["account_id"], realtime.online_keys())
         roster = self.client.get("/api/online", headers=self.host).json()
-        self.assertEqual(
-            [item["name"] for item in roster["accounts"]], ["QQ20001"]
-        )
+        self.assertEqual([item["name"] for item in roster["accounts"]], ["QQ20001"])
         realtime.presence[actor["account_id"]] -= realtime.PRESENCE_SECONDS + 1
         roster = self.client.get("/api/online", headers=self.host).json()
         self.assertEqual(roster["accounts"], [])
@@ -1104,24 +1085,18 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(lobby["invites"][0]["id"], invite_id)
         self.assertEqual(lobby["invites"][0]["from_name"], "主持人(主持10001)")
         self.assertFalse(lobby["invites"][0]["game"]["can_join_player"])
-        blocked = self.client.post(
-            f"/api/invites/{invite_id}/accept", headers=guest
-        )
+        blocked = self.client.post(f"/api/invites/{invite_id}/accept", headers=guest)
         self.assertEqual(blocked.status_code, 409, blocked.text)
         self.assertIn("尚未开放", blocked.text)
         self.open_join()
-        accepted = self.client.post(
-            f"/api/invites/{invite_id}/accept", headers=guest
-        )
+        accepted = self.client.post(f"/api/invites/{invite_id}/accept", headers=guest)
         accepted.raise_for_status()
         self.assertEqual(accepted.json()["actor"]["kind"], "player")
         self.assertIsNotNone(accepted.json()["actor"]["seat_id"])
         lobby = self.client.get("/api/lobby", headers=guest).json()
         self.assertEqual(lobby["invites"], [])
         with storage.connect() as db:
-            row = db.execute(
-                "SELECT status FROM invites WHERE id=?", (invite_id,)
-            ).fetchone()
+            row = db.execute("SELECT status FROM invites WHERE id=?", (invite_id,)).fetchone()
         self.assertEqual(row["status"], "accepted")
         self.assertNotEqual(first_actor["id"], accepted.json()["actor"]["id"])
 
@@ -1159,27 +1134,21 @@ class BackendFlow(unittest.TestCase):
         )
         invited.raise_for_status()
         invite_id = invited.json()["id"]
-        rejected = self.client.post(
-            f"/api/invites/{invite_id}/reject", headers=offline
-        )
+        rejected = self.client.post(f"/api/invites/{invite_id}/reject", headers=offline)
         rejected.raise_for_status()
         with storage.connect() as db:
-            row = db.execute(
-                "SELECT status FROM invites WHERE id=?", (invite_id,)
-            ).fetchone()
+            row = db.execute("SELECT status FROM invites WHERE id=?", (invite_id,)).fetchone()
         self.assertEqual(row["status"], "rejected")
         state = self.client.get(self.root + "/state", headers=self.host).json()
-        names = {
-            seat["name"] for seat in state["seats"] if seat.get("occupant_id")
-        }
+        names = {seat["name"] for seat in state["seats"] if seat.get("occupant_id")}
         self.assertNotIn("QQ22003", names)
-
 
 
 class Migration(unittest.TestCase):
     def test_initialization_preserves_existing_game_while_dropping_legacy_auth_tables(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            storage, "DATA_DIR", Path(directory)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(storage, "DATA_DIR", Path(directory)),
         ):
             path = Path(directory) / "seven-double.sqlite3"
             game = create_game(DEFAULT_CODEX)
@@ -1198,7 +1167,13 @@ class Migration(unittest.TestCase):
                 )
                 db.execute(
                     "INSERT INTO games VALUES(?,?,?,?,?)",
-                    (game["id"], storage.dumps(game), game["version"], game["status"], storage.now_text()),
+                    (
+                        game["id"],
+                        storage.dumps(game),
+                        game["version"],
+                        game["status"],
+                        storage.now_text(),
+                    ),
                 )
                 db.execute(
                     "INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,"
@@ -1223,14 +1198,20 @@ class Migration(unittest.TestCase):
             storage.initialize()
             with storage.connect() as db:
                 self.assertIsNotNone(storage.load_game(db, game["id"]))
-                tables = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                tables = {
+                    row["name"]
+                    for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                }
                 self.assertNotIn("sessions", tables)
                 # 旧的邀请码 invites 表必须被替换为新的定向邀请表（带 account_id）。
                 self.assertIn(
                     "account_id",
                     {row["name"] for row in db.execute("PRAGMA table_info(invites)")},
                 )
-                self.assertIn("account_id", {row["name"] for row in db.execute("PRAGMA table_info(participants)")})
+                self.assertIn(
+                    "account_id",
+                    {row["name"] for row in db.execute("PRAGMA table_info(participants)")},
+                )
                 columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
                 self.assertNotIn("mimic_seat_id", columns)
                 legacy = db.execute("SELECT * FROM messages WHERE sender_id='legacy'").fetchone()
@@ -1280,14 +1261,12 @@ class NoOriginGate(unittest.TestCase):
             },
         )
         bound.raise_for_status()
-        completed = self.client.get(
-            "/api/native/auth/host/challenges/" + challenge["id"]
-        )
+        completed = self.client.get("/api/native/auth/host/challenges/" + challenge["id"])
         completed.raise_for_status()
         self.assertEqual(completed.json().get("status"), "completed")
-        return {
-            "Authorization": "Bearer " + completed.json()["session_token"]
-        }, completed.json()["session"]["actor"]
+        return {"Authorization": "Bearer " + completed.json()["session_token"]}, completed.json()[
+            "session"
+        ]["actor"]
 
     def test_write_without_origin_or_token_reaches_route(self):
         # 主持人专属写接口在没有令牌时由路由自身鉴权返回 401，
@@ -1354,9 +1333,7 @@ class NoOriginGate(unittest.TestCase):
         calls = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in ("accept", "close") and isinstance(
-                    node.func.value, ast.Name
-                ):
+                if node.func.attr in ("accept", "close") and isinstance(node.func.value, ast.Name):
                     calls.append((node.lineno, node.func.attr))
         self.assertTrue(calls, "live() 里没有对 socket 调用 accept")
         calls.sort()
@@ -1382,9 +1359,7 @@ class NoOriginGate(unittest.TestCase):
             "/api/live", headers={"Authorization": "Bearer " + token}
         ) as socket:
             message = socket.receive_json()
-        self.assertEqual(
-            message["type"], "sync", "有效会话必须能建立实时连接并收到首帧状态"
-        )
+        self.assertEqual(message["type"], "sync", "有效会话必须能建立实时连接并收到首帧状态")
 
 
 if __name__ == "__main__":

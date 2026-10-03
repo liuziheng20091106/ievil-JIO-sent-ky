@@ -59,7 +59,9 @@ class SetupRules(unittest.TestCase):
             for seat in visible["seats"]:
                 self.assertEqual(len(seat["cards"]), 2)
                 roles = {card["role_id"] for card in seat["cards"]}
-                self.assertTrue(all(not {left, right}.issubset(roles) for left, right in DEAL_EXCLUDED_PAIRS))
+                self.assertTrue(
+                    all(not {left, right}.issubset(roles) for left, right in DEAL_EXCLUDED_PAIRS)
+                )
 
     def test_upgrade_game_adds_the_new_rule_fields_without_replacing_history(self):
         game = create_game(DEFAULT_CODEX)
@@ -186,9 +188,7 @@ class SetupRules(unittest.TestCase):
         self.assertEqual(game["declarations"], [])
         self.assertEqual(game["public"]["declarations"], [])
         # 旧声明归档保留，而不是随玩法一起丢掉。
-        self.assertEqual(
-            [item["id"] for item in game["legacy_declarations"]], ["legacy-balloon"]
-        )
+        self.assertEqual([item["id"] for item in game["legacy_declarations"]], ["legacy-balloon"])
         sync_declarations(game)
         visible = game_view(game, players(game)[0])
         self.assertEqual(visible["phase"], "nomination")
@@ -216,9 +216,9 @@ class SetupRules(unittest.TestCase):
         # 主持人仍看得到完整的命运表，才能核对与纠错。
         self.assertIn(
             "witch_destiny",
-            game_view(game, {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]})[
-                "public"
-            ],
+            game_view(
+                game, {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
+            )["public"],
         )
         game["status"] = "lobby"
         for seat in visible["seats"]:
@@ -427,12 +427,12 @@ class WitchFactionRules(unittest.TestCase):
         }
         for index, seat_id in enumerate(faction):
             occupant = "participant-" + seat_id
-            self.assertEqual(notices[occupant], f"你是魔女阵营：第{index + 1}天你的当前牌会魔女化。")
+            self.assertEqual(
+                notices[occupant], f"你是魔女阵营：第{index + 1}天你的当前牌会魔女化。"
+            )
         # 非阵营席位照旧只知道自己会不会魔女化，不会看到「魔女阵营」这四个字。
         faction_occupants = {"participant-" + seat_id for seat_id in faction}
-        others = [
-            text for occupant, text in notices.items() if occupant not in faction_occupants
-        ]
+        others = [text for occupant, text in notices.items() if occupant not in faction_occupants]
         self.assertTrue(others)
         self.assertTrue(all("魔女阵营" not in text for text in others))
 
@@ -538,12 +538,8 @@ class WitchFactionRules(unittest.TestCase):
 
         game = staged_game(day=2, half="day", phase="discussion")
         for actor in players(game):
-            self.assertNotIn(
-                "host.hanna_witch", [item["id"] for item in actions_for(game, actor)]
-            )
-        toggle = next(
-            item for item in actions_for(game, HOST) if item["id"] == "host.hanna_witch"
-        )
+            self.assertNotIn("host.hanna_witch", [item["id"] for item in actions_for(game, actor)])
+        toggle = next(item for item in actions_for(game, HOST) if item["id"] == "host.hanna_witch")
         self.assertEqual(toggle["label"], "汉娜魔化：已关闭")
         self.assertEqual(toggle["fields"][0]["default"], "off")
         events = apply_command(game, HOST, "host.hanna_witch", {"value": "on"})
@@ -560,9 +556,7 @@ class WitchFactionRules(unittest.TestCase):
 
         # 第三天夜里（入夜后的夜间行动）不再允许改开关。
         game = staged_game(day=3, half="night", phase="night")
-        self.assertNotIn(
-            "host.hanna_witch", [item["id"] for item in actions_for(game, HOST)]
-        )
+        self.assertNotIn("host.hanna_witch", [item["id"] for item in actions_for(game, HOST)])
         with self.assertRaises(GameError):
             apply_command(game, HOST, "host.hanna_witch", {"value": "on"})
 
