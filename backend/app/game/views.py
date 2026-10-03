@@ -35,6 +35,7 @@ from .state import (
     require,
     role_card,
     seat_operable,
+    witch_destiny_notice,
 )
 
 
@@ -241,19 +242,19 @@ def status_cards(game, own):
     destiny = game["public"].get("witch_destiny")
     if destiny and game["status"] != "lobby" and int(own["id"]) <= len(destiny["seats"]):
         will = destiny["seats"][int(own["id"]) - 1]
-        faction = list(destiny.get("first", []))
         now = current(game, own)
         if now is not None and now["witch"]:
             # 状态卡由实际状态派生：已经魔女化就陈述事实，不再预告（旧文案会和界面上的
             # 实际状态互相打脸，也能被截图当成「我不会魔女化」的伪证）。
             add("witch_destiny", "danger", "魔女化命运", "你的当前牌已魔女化：每夜可选择魔女刀。")
-        elif own["id"] in faction:
-            # A、B 是魔女阵营：本人的那一份要说清是哪一天当值，而不是笼统的「会魔女化」。
-            text = f"你是魔女阵营：第{faction.index(own['id']) + 1}天你的当前牌会魔女化。"
-            add("witch_destiny", "danger", "魔女化命运", text)
         else:
-            text = "本局你会魔女化。" if will else "前三天你不会按开局命运魔女化。"
-            add("witch_destiny", "danger" if will else "info", "魔女化命运", text)
+            # 发牌私信与这里共用一份文案：A、B 说清当值日，艾玛席只能给条件式预告。
+            add(
+                "witch_destiny",
+                "danger" if will else "info",
+                "魔女化命运",
+                witch_destiny_notice(game, own["id"]),
+            )
     protected = next((card for card in cards if treasure_protected(game, card["id"])), None)
     if protected:
         add(

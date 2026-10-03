@@ -163,6 +163,22 @@ def witch_faction(game):
     return list(destiny.get("first", []))
 
 
+def witch_destiny_notice(game, seat_id):
+    """「魔女化命运」的文案：发牌私信与「我的」页状态卡共用同一份，避免两处口径漂移。
+
+    A、B 两席说清当值日；艾玛席只能给条件式预告——艾玛按最高优先级魔女化，
+    但只有她当天以当前牌登场才算数，说成必定兑现会与第三天的实际结果打架。
+    """
+    destiny = game["public"].get("witch_destiny") or {}
+    faction = list(destiny.get("first", []))
+    if seat_id in faction:
+        return f"你是魔女阵营：第{faction.index(seat_id) + 1}天你的当前牌会魔女化。"
+    seats = destiny.get("seats") or []
+    if int(seat_id) <= len(seats) and seats[int(seat_id) - 1]:
+        return "本局你会魔女化：第三天如果你的当前牌是艾玛，她将以最高优先级魔女化。"
+    return "前三天你不会按开局命运魔女化。"
+
+
 def hanna_witch_window(game):
     """「汉娜魔化」开关只在第三天入夜前可调；第三天当晚的检测尚未结算时仍可补开。"""
     return game["status"] == "playing" and (
@@ -850,10 +866,10 @@ def deal_cards(game):
     }
     eligible_seats = [i for i in range(7) if i not in ineligible]
     first = rng.sample(eligible_seats, 2) if len(eligible_seats) >= 2 else eligible_seats
-    # 艾玛席第三天必定魔女化（艾玛存活时），因此对当事人也必须预告会魔女化。
-    # 这里只写入逐席布尔值：客户端只读自己那一位，不再单独下发艾玛席号，
-    # 否则调序阶段就会把「哪一席是艾玛」提前公开。first 是按当值顺序排列的
-    # 魔女阵营 A、B 席位，胜负与第三天补位都读它。
+    # 艾玛席第三天以当前牌登场时按最高优先级魔女化，所以本人也要拿到一份
+    # 条件式预告（见 witch_destiny_notice）；这里只写入逐席布尔值：客户端只读
+    # 自己那一位，不再单独下发艾玛席号，否则调序阶段就会把「哪一席是艾玛」
+    # 提前公开。first 是按当值顺序排列的魔女阵营 A、B 席位，胜负与第三天补位都读它。
     destiny = [i in first or i == emma_seat for i in range(7)]
     game["public"]["witch_destiny"] = {
         "seats": destiny,

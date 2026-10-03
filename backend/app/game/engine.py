@@ -91,6 +91,7 @@ from .state import (
     surrendered_today,
     uid,
     vote_denominator,
+    witch_destiny_notice,
     witch_faction,
 )
 
@@ -1289,18 +1290,15 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         ):
             deal_cards(game)
             notify(game, events, "全员首次准备完成，已私下发牌；请调整上下牌并再次准备。")
-            destiny = game["public"]["witch_destiny"]
-            faction = list(destiny.get("first", []))
-            for i, s in enumerate(game["seats"]):
-                sid = s["id"]
-                if sid in faction:
-                    # A、B 是魔女阵营：第1天 A、第2天 B 的当前牌魔女化。
-                    text = f"你是魔女阵营：第{faction.index(sid) + 1}天你的当前牌会魔女化。"
-                elif destiny["seats"][i]:
-                    text = "本局你会魔女化。"
-                else:
-                    text = "本局你不会魔女化。"
-                notify(game, events, text, [sid], "魔女化命运")
+            for s in game["seats"]:
+                # A、B 说清当值日，艾玛席只给条件式预告，其余席位只回答前三天。
+                notify(
+                    game,
+                    events,
+                    witch_destiny_notice(game, s["id"]),
+                    [s["id"]],
+                    "魔女化命运",
+                )
             plugins.emit(
                 game, events, "phase_enter", {"from": "lobby", "to": "ordering", "day": game["day"]}
             )
