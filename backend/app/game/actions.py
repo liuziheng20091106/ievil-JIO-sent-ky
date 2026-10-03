@@ -1213,6 +1213,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
     if (
         game["half"] == "day"
         and game["phase"] in CHALLENGE_PHASES
+        and current(game, active_seat)
         and not lost_by_challenge(game, active_seat)
     ):
         for declaration in game["declarations"]:

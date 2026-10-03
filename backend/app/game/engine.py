@@ -1427,6 +1427,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         # 质疑与「白天技能声明」同一时窗：处决名单一旦进入结算（execution/dusk），
         # 已经定稿的结果不再接受质疑改写。
         require(game["phase"] in CHALLENGE_PHASES, "当前阶段不能再质疑")
+        require(card, "已整席出局，不能质疑")
         d = next(d for d in game["declarations"] if d["id"] == data["declaration_id"])
         require(d["status"] == "open", "该技能声明已结束")
         require(d["seat_id"] != sid, "不可质疑自己")

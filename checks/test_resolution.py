@@ -1100,6 +1100,33 @@ class PlaytestFixes(unittest.TestCase):
         self.assertEqual(game["declarations"][0]["status"], "stopped")
         self.assertTrue(game["cards"]["millia"]["alive"])
 
+    def test_only_seats_with_a_living_card_can_challenge(self):
+        for eliminated_cards in (0, 1, 2):
+            with self.subTest(eliminated_cards=eliminated_cards):
+                game = arranged_game("discussion")
+                game["seats"][6]["cards"] = ["honoka", "nanoka"]
+                game["cards"]["honoka"]["states"]["disguise"] = "emma"
+                command(
+                    game, player(game, "7"), "day.skill", {"ability": "interrupt", "target": "1"}
+                )
+                declaration_id = game["declarations"][0]["id"]
+                for card_id in game["seats"][1]["cards"][:eliminated_cards]:
+                    game["cards"][card_id]["alive"] = False
+                challenger = player(game, "2")
+                action_ids = [a["id"] for a in game_view(game, challenger)["actions"]]
+                payload = {"declaration_id": declaration_id}
+                if eliminated_cards == 2:
+                    self.assertNotIn("day.challenge", action_ids)
+                    before = deepcopy(game)
+                    with self.assertRaises(GameError):
+                        command(game, challenger, "day.challenge", payload)
+                    self.assertEqual(game, before)
+                    self.assertEqual(game["declarations"][0]["status"], "open")
+                else:
+                    self.assertIn("day.challenge", action_ids)
+                    command(game, challenger, "day.challenge", payload)
+                    self.assertEqual(game["declarations"][0]["status"], "stopped")
+
     def test_failed_challenge_still_eliminates_the_challenger(self):
         game = arranged_game("discussion")
         game["seats"][0]["cards"] = ["emma", "millia"]
