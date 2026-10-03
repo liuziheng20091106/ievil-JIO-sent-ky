@@ -59,7 +59,7 @@ from backend.app.game.state import (
     seat_choice,
 )
 from backend.app.game.views import host_tasks
-from checks.rule_factory import arranged_game, player
+from checks.rule_factory import arranged_game, force_after_wait, player
 from backend.app.views import action_prompt
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
@@ -639,7 +639,7 @@ class EmmaSoloVictory(unittest.TestCase):
         check_winner(game)
         self.assertIsNone(game["winner_candidate"])
         command(game, player(game, "1"), "night.confirm")
-        command(game, HOST, "host.advance")
+        force_after_wait(game, HOST)
         self.assertEqual(game["phase"], "night_review")
         check_winner(game)
         self.assertIsNone(game["winner_candidate"])
@@ -657,7 +657,7 @@ class EmmaSoloVictory(unittest.TestCase):
         command(game, player(game, "1"), "night.confirm")
         command(game, player(game, "2"), "night.submit", {"ability": "knife", "target": "1"})
         command(game, player(game, "2"), "night.confirm")
-        command(game, HOST, "host.advance")
+        force_after_wait(game, HOST)
         command(game, HOST, "host.advance")
         self.assertFalse(game["cards"]["emma"]["alive"])
         self.assertTrue(
@@ -690,7 +690,7 @@ class EmmaSoloVictory(unittest.TestCase):
                 card["states"]["protected_day"] = game["day"]
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
         command(game, player(game, "1"), "night.confirm")
-        command(game, HOST, "host.advance")
+        force_after_wait(game, HOST)
         self.assertEqual(game["night"]["preview"]["deaths"], [])
         command(game, HOST, "host.advance")
         self.assertEqual(game["deaths"], [])
@@ -715,7 +715,7 @@ class EmmaSoloVictory(unittest.TestCase):
                 begin_night(game, [])
                 command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
                 command(game, player(game, "1"), "night.confirm")
-                command(game, HOST, "host.advance")
+                force_after_wait(game, HOST)
                 self.assertEqual((game["day"], game["phase"], game["half"]), (1, "speech", "day"))
                 self.assertEqual(game["night"], snapshot["state"]["night"])
                 self.assertEqual(game["deaths"], [])
@@ -1335,7 +1335,7 @@ class NightReveal(unittest.TestCase):
         self.assertIsNone(held[2]["previous_role_id"])
         self.assertTrue(held[2]["alive"])
         game["pending"] = []
-        events = command(game, HOST, "host.advance")
+        events = force_after_wait(game, HOST)
         # 天亮只发一条汇总：夜终死讯按席位合并，不再逐条 + 角色名各发一遍。
         self.assertIn(
             f"第{game['day']}夜：3号 · 梅露露一张角色牌出局。",
@@ -1672,7 +1672,7 @@ class NightSummaryAndWitness(unittest.TestCase):
         death = next(item for item in game["deaths"] if item["target_card"] == "millia")
         # 主持人处理掉当夜的目击待办后推进到天亮（下层牌登场、死亡公告发出）。
         game["pending"] = []
-        command(game, HOST, "host.advance")
+        force_after_wait(game, HOST)
         self.assertEqual(game["half"], "day")
         revive_action = [
             item for item in actions_for(game, player(game, "3")) if item["id"] == "meruru.revive"
@@ -1777,6 +1777,9 @@ class KnifeWitnessAlways(unittest.TestCase):
             command(game, player(game, "1"), "night.confirm", {})
         command(game, player(game, "2"), "night.submit", {"ability": "knife", "target": target})
         command(game, player(game, "2"), "night.confirm", {})
+        # 本组只检查刀的结算，其余玩家真实确认放弃，不依赖主持人立即强制超时。
+        for sid in list(outstanding_seats(game)):
+            command(game, player(game, sid), "night.confirm")
         return game
 
     def suspects_pending(self, game, seat):
@@ -1893,7 +1896,7 @@ class KnifeWitnessAlways(unittest.TestCase):
         command(game, player(game, "3"), "night.submit", {"ability": "protect", "target": "4"})
         command(game, player(game, "3"), "night.confirm", {})
         command(game, player(game, "3"), "water.use", {"target": "4"})
-        command(game, HOST, "host.advance")
+        force_after_wait(game, HOST)
         self.assertEqual(game["deaths"], [])
         self.assertTrue(game["night"]["preview"]["injured"]["marg"])
         command(game, HOST, "host.advance")
@@ -1908,7 +1911,7 @@ class KnifeWitnessAlways(unittest.TestCase):
         command(game, player(game, "1"), "night.confirm", {})
         command(game, HOST, "host.water", {"seat_id": "3"})
         command(game, player(game, "3"), "water.use", {"target": "4"})
-        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        force_after_wait(game, HOST)  # 等保护到点，锁夜并预结算
         command(game, HOST, "host.advance")  # 未隐藏死因：系统直接发固定四人目击
         death = next(item for item in game["deaths"] if item["target_card"] == "marg")
         self.assertEqual(game["witness"]["death_id"], death["id"])
@@ -2205,7 +2208,7 @@ class WitchEmmaMassacre(unittest.TestCase):
         game["cards"]["hiro"]["alive"] = False
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
         command(game, player(game, "1"), "night.confirm", {})
-        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        force_after_wait(game, HOST)  # 等保护到点，锁夜并预结算
         command(game, HOST, "host.advance")  # 发布夜间结果
         self.assertEqual(game["phase"], "night_results")
         self.assertEqual(game["night"].get("massacre"), "emma")
@@ -2219,7 +2222,7 @@ class WitchEmmaMassacre(unittest.TestCase):
             game["cards"][cid]["alive"] = False
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
         command(game, player(game, "1"), "night.confirm", {})
-        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        force_after_wait(game, HOST)  # 等保护到点，锁夜并预结算
         command(game, HOST, "host.advance")  # 发布夜间结果
         self.assertEqual(game["winner_candidate"]["winner"], "emma")
 
@@ -2229,7 +2232,7 @@ class WitchEmmaMassacre(unittest.TestCase):
         game["cards"]["hiro"]["alive"] = False
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
         command(game, player(game, "1"), "night.confirm", {})
-        command(game, HOST, "host.advance")  # 锁夜 + 预结算
+        force_after_wait(game, HOST)  # 等保护到点，锁夜并预结算
         # 清空预结算，模拟全场都被挡住、这一夜无人出局。
         game["night"]["preview"] = {"deaths": [], "injured": {}, "witch_targets": []}
         command(game, HOST, "host.advance")  # 发布夜间结果
@@ -2269,7 +2272,7 @@ class SpeechOrder(unittest.TestCase):
             game["cards"][seat["cards"][0]]["witch"] = True
             command(game, HOST, "host.advance")
             game["pending"] = []
-            command(game, HOST, "host.advance")
+            force_after_wait(game, HOST)
             self.assertEqual(game["public"]["speech_order"], expected)
             self.assertEqual(game["public"]["speaker"], expected[0])
 
@@ -2705,7 +2708,7 @@ class NominationFlow(unittest.TestCase):
     def test_pre_nominations_confirm_themselves_when_the_phase_opens(self):
         game = arranged_game("discussion")
         command(game, player(game, "1"), "vote.nominate", {"target": "3"})
-        command(game, HOST, "host.advance", {})
+        force_after_wait(game, HOST)
         self.assertEqual(game["phase"], "nomination")
         self.assertEqual(game["nominations"][0]["by"], "1")
         self.assertNotIn("1", pending_nominators(game))
@@ -2741,7 +2744,7 @@ class NominationFlow(unittest.TestCase):
                 game = arranged_game("nomination")
                 command(game, player(game, "1"), "vote.nominate", {"target": "3"})
                 command(game, player(game, "2"), "vote.nominate", {"target": "4"})
-                command(game, HOST, "host.advance")
+                force_after_wait(game, HOST)
                 rounds = [item["card_id"] for item in nomination_rounds(game)]
                 descriptor = next(
                     item
@@ -2985,7 +2988,7 @@ class HostTodo(unittest.TestCase):
         self.assertFalse(advance["blocking"])
 
     def test_unfinished_player_actions_no_longer_block_the_advance(self):
-        """未完成的玩家行动不再是阻塞项：主持人可以直接推进让它们立刻超时。"""
+        """玩家待办可先警告，阶段开始满45秒后允许主持人强制推进。"""
         game = arranged_game("voting")
         candidate = current(game, game["seats"][2])["id"]
         game["nominations"] = [{"seat_id": "3", "card_id": candidate, "by": None}]
@@ -3037,8 +3040,7 @@ class ReviveTodo(unittest.TestCase):
         # 待办挂在「警告」上：这条待办不是要主持人替她决定复活，而是提醒他先等一等。
         self.assertEqual(revive["action"], "host.warn")
         self.assertEqual(revive["payload"], {"seat_id": "3"})
-        # 复活算本阶段未完成的玩家行动：推进按钮不再显示为就绪，但仍然可用
-        # （推进会立刻把它按超时＝放弃处理）。
+        # 复活算本阶段未完成的玩家行动：推进按钮不显示就绪，45秒后可强制放弃。
         self.assertIn("3", outstanding_seats(game))
         advance = next(item for item in tasks if item["id"] == "advance")
         self.assertFalse(advance["blocking"])
@@ -3077,7 +3079,7 @@ class ReviveTodo(unittest.TestCase):
 
     def test_advancing_forfeits_the_undecided_revive(self):
         game = self.night_results_with_revive()
-        events = command(game, HOST, "host.advance")
+        events = force_after_wait(game, HOST)
         self.assertEqual(game["phase"], "speech")
         self.assertTrue(game["night"]["revive_declined"])
         # 推进＝按超时处理：本人只私下收到一条提示，死亡照旧成立。
@@ -3113,13 +3115,13 @@ class ReviveTodo(unittest.TestCase):
 
 
 class ForceAdvance(unittest.TestCase):
-    """主持人推进就是强制推进：未完成的玩家行动立刻按超时（视为放弃）处理。"""
+    """主持人等阶段开始满45秒后，可把未完成的玩家行动按超时处理。"""
 
     def test_force_advance_skips_the_rest_of_the_speech_round(self):
         game = arranged_game("speech")
         command(game, HOST, "host.speech", {"start": "1", "direction": "asc"})
         command(game, player(game, "4"), "speech.speak", {"text": "我提前写好了"})
-        events = command(game, HOST, "host.advance", {})
+        events = force_after_wait(game, HOST)
         self.assertEqual(game["phase"], "discussion")
         self.assertIsNone(game["public"]["speaker"])
         # 提前写好的内容不随强制推进丢失，仍以玩家消息公开。
@@ -3134,11 +3136,11 @@ class ForceAdvance(unittest.TestCase):
         game = arranged_game("nomination")
         command(game, player(game, "2"), "vote.nominate", {"target": "3"})
         # 其余席位未提名或放弃：强制推进把它们按超时处理，直接进入投票。
-        command(game, HOST, "host.advance", {})
+        force_after_wait(game, HOST)
         self.assertEqual(game["phase"], "voting")
         candidate = nomination_rounds(game)[0]["card_id"]
         command(game, player(game, "1"), "vote.cast", {candidate: "yes"})
-        command(game, HOST, "host.advance", {})
+        force_after_wait(game, HOST)
         self.assertEqual(seat_choice(game, "1", candidate), "yes")
         for sid in ("2", "3", "4", "5", "6", "7"):
             # 强制推进＝视为放弃：没交卷的席位整份选票记弃票。
@@ -3151,7 +3153,7 @@ class ForceAdvance(unittest.TestCase):
         begin_night(game, [])
         waiting = outstanding_seats(game)
         self.assertTrue(waiting)
-        command(game, HOST, "host.advance", {})
+        force_after_wait(game, HOST)
         self.assertEqual(set(game["night"]["confirmed"]), set(game["night"]["actors"]))
         self.assertTrue(game["night"]["locked"])
         self.assertIsNotNone(game["night"]["preview"])
@@ -3177,7 +3179,7 @@ class ForceAdvance(unittest.TestCase):
             witness_seat="1",
             suspects=["honoka", "emma", "noah", "coco"],
         )
-        command(game, HOST, "host.advance", {})
+        force_after_wait(game, HOST)
         self.assertEqual(game["pending"], [])
         self.assertEqual(game["witness"]["seat_id"], "1")
         self.assertIn("穗乃香", game["witness"]["text"])
@@ -3426,7 +3428,7 @@ class RuleRevisions(unittest.TestCase):
         self.assertIn("rest", self.night_abilities(game, "6"))
         command(game, player(game, "6"), "night.submit", {"ability": "rest"})
         command(game, player(game, "6"), "night.confirm", {})
-        command(game, HOST, "host.advance")
+        force_after_wait(game, HOST)
         self.assertEqual(game["night"]["rest"], {"seat_id": "6", "card_id": "annan", "day": 2})
 
         witch = arranged_game("night", "night")

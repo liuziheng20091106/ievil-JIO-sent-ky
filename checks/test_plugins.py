@@ -268,6 +268,14 @@ class PluginHTTP(unittest.TestCase):
             json={"expected_version": version, "action": name, "payload": payload or {}},
         )
 
+    def complete_night(self, by_seat):
+        # 未选技能的玩家真实确认放弃；可可解锁后再确认一次，不绕过45秒保护。
+        for _ in range(2):
+            for headers in by_seat.values():
+                view = self.client.get(self.root + "/state", headers=headers).json()
+                if any(action["id"] == "night.confirm" for action in view["actions"]):
+                    self.command(headers, "night.confirm").raise_for_status()
+
     def test_real_http_selection_auth_version_and_intent(self):
         self.command(self.host, "room.open_join", {"open": True}).raise_for_status()
         players = []
@@ -386,6 +394,7 @@ class PluginHTTP(unittest.TestCase):
             by_seat[attacker["id"]], "night.submit", {"ability": "knife", "target": victim["id"]}
         ).raise_for_status()
         self.command(by_seat[attacker["id"]], "night.confirm").raise_for_status()
+        self.complete_night(by_seat)
         self.command(self.host, "host.advance").raise_for_status()
         with storage.connect() as db:
             game = storage.load_game(db, host_view["id"])
@@ -471,6 +480,7 @@ class PluginHTTP(unittest.TestCase):
             ),
         )
         self.command(empty_seats[witch["id"]], "night.confirm").raise_for_status()
+        self.complete_night(empty_seats)
         self.command(self.host, "host.advance").raise_for_status()
         with storage.connect() as db:
             plain_game = storage.load_game(db, plain["id"])

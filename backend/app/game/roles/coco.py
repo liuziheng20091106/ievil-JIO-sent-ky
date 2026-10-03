@@ -36,12 +36,12 @@ def witch_information(game, events):
 def unlock_coco(game, events):
     from .. import plugins
     from ..resolution import information, night_text
-    from ..state import role_card
+    from ..state import role_card, start_phase
 
     cs = coco_seat(game)
     others = set(game["night"]["actors"]) - ({cs} if cs else set())
     if cs and others.issubset(game["night"]["confirmed"]) and game["phase"] == "night":
-        game["phase"] = "night_coco"
+        start_phase(game, "night_coco")
         information(
             game,
             events,

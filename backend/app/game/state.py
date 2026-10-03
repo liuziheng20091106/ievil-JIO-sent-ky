@@ -6,6 +6,7 @@ from random import SystemRandom
 from uuid import uuid4
 
 from .animations import skill_animation_snapshot
+from . import clock
 from .catalog import DAY_ABILITIES, NIGHT_ABILITIES, ROLES
 from .roles import emma
 
@@ -21,6 +22,12 @@ def require(condition, text="此时不能执行该操作"):
 
 def uid():
     return uuid4().hex
+
+
+def start_phase(game, phase):
+    """记录真正进入阶段的时间；同阶段回溯也重新从此刻开始。"""
+    game["phase"] = phase
+    game["public"]["phase_started_at"] = clock.now()
 
 
 # 昵称在界面上的展示上限：存储里保留完整昵称，发往客户端的展示名一律不超过 16 个
@@ -875,7 +882,7 @@ def deal_cards(game):
         "seats": destiny,
         "first": [str(i + 1) for i in first],
     }
-    game["phase"] = "ordering"
+    start_phase(game, "ordering")
 
 
 def upgrade_game(game):
@@ -949,6 +956,8 @@ def upgrade_game(game):
     }.items():
         add(spiritual, key, value)
     public = game.setdefault("public", {})
+    # 旧存档缺少阶段起点时只补一次；storage.load_game 会持久化这次补齐。
+    add(public, "phase_started_at", clock.now())
     add(public, "declarations", [])
     add(public, "witch_destiny", None)
     # 顺序发言的30秒倒计时是新加字段：旧局补齐为「还没有倒计时」，
@@ -1005,7 +1014,7 @@ def upgrade_game(game):
     # 热气球玩法已整体移除：停在热气球阶段的旧局直接改判为提名，并清掉该玩法的
     # 全部状态，否则旧阶段名与旧技能会在 PHASES／DAY_ABILITIES 里查表失败。
     if game.get("phase") == "balloon":
-        game["phase"] = "nomination"
+        start_phase(game, "nomination")
         changed = True
     for key in ("balloon_choices", "balloon_proposal"):
         if key in game:
@@ -1152,6 +1161,7 @@ def create_game(codex, rule_plugins=None):
             "persistent_states": {},
         },
         "public": {
+            "phase_started_at": clock.now(),
             "speaker": None,
             "speech_order": [],
             "votes": {},
@@ -1296,6 +1306,7 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
             game["generated_witches"].append("hiro")
     game["warnings"] = {}
     game["deadline"] = None
+    start_phase(game, game["phase"])
     # 顺序发言的倒计时不跟着快照回到过去：回溯点里的截止时间早已过期，留着它
     # 会让恢复出来的发言人一秒钟内被自动顺延。丢掉后由引擎按恢复的发言人重新计时。
     game["public"].pop("speech_deadline", None)

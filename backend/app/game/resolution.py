@@ -29,6 +29,7 @@ from .state import (
     release_puppet,
     require,
     seat,
+    start_phase,
     uid,
 )
 
@@ -95,7 +96,7 @@ def sync_night_confirmations(game, events):
 def begin_night(game, events):
     previous = game["phase"]
     game["half"] = "night"
-    game["phase"] = "night"
+    start_phase(game, "night")
     # 上一夜未使用的13水过期收回；米莉亚的换血目标单独持久保存，直到下次有效换血覆盖。
     game["water"] = {"holders": []}
     game["night"] = {
@@ -159,7 +160,7 @@ def lock_night(game, events):
             notify(game, events, night_text(game, actions), [photo["sender"]], "照片授权的夜间行动")
     annan.publish_rest(game, events)
     previous = game["phase"]
-    game["phase"] = "night_review"
+    start_phase(game, "night_review")
     prepare_night_preview(game, events)
     if not game.get("rewound_night"):
         plugins.emit(

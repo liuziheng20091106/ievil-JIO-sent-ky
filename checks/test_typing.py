@@ -48,9 +48,7 @@ class TypingRelay(unittest.TestCase):
         self.addCleanup(self.client.__exit__, None, None, None)
         self.host, host_actor = self.host_login("10001")
         self.host_actor_id = host_actor["id"]
-        created = self.client.post(
-            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX}
-        )
+        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
         created.raise_for_status()
         self.game_id = created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
@@ -78,9 +76,9 @@ class TypingRelay(unittest.TestCase):
         completed = self.client.get("/api/native/auth/host/challenges/" + challenge["id"])
         completed.raise_for_status()
         self.assertEqual(completed.json().get("status"), "completed")
-        return {
-            "Authorization": "Bearer " + completed.json()["session_token"]
-        }, completed.json()["session"]["actor"]
+        return {"Authorization": "Bearer " + completed.json()["session_token"]}, completed.json()[
+            "session"
+        ]["actor"]
 
     def account(self, qq_id):
         challenge = self.client.post("/api/native/auth/challenges").json()
@@ -218,16 +216,15 @@ class TypingRelay(unittest.TestCase):
         first_actor = self.join_player(first, "15004")
         second_actor = self.join_player(second, "15005")
         self.join_player(stranger, "15006")
-        created = self.command(
-            first, "channel.create", {"participant_ids": [second_actor["id"]]}
-        )
-        channel = next(
-            item for item in created["channels"] if item["id"].startswith("private:")
-        )
+        created = self.command(first, "channel.create", {"participant_ids": [second_actor["id"]]})
+        channel = next(item for item in created["channels"] if item["id"].startswith("private:"))
         self.command(second, "channel.accept", {"channel_id": channel["id"]})
-        with self.connect(self.host) as h, self.connect(first) as a, self.connect(
-            second
-        ) as b, self.connect(stranger) as c:
+        with (
+            self.connect(self.host) as h,
+            self.connect(first) as a,
+            self.connect(second) as b,
+            self.connect(stranger) as c,
+        ):
             a.send_json({"type": "typing", "channel_id": channel["id"]})
             frames = self.collect_typing_until(b, first_actor["id"])
             self.assertEqual(len(frames), 1)
@@ -259,9 +256,7 @@ class TypingRelay(unittest.TestCase):
         state = self.client.get(self.root + "/state", headers=solo).json()
         self.assertIn(state["phase"], {"night", "witch", "night_coco"})
         public = next(item for item in state["channels"] if item["id"] == "public")
-        self.assertFalse(
-            public["can_send"], f"夜间公屏应当不可发言：{state['phase']}"
-        )
+        self.assertFalse(public["can_send"], f"夜间公屏应当不可发言：{state['phase']}")
         self.assertFalse(public["blocked_transient"], "夜间是频道级失效，不是临时等待")
         with self.connect(self.host) as h, self.connect(solo) as a, self.connect(other) as b:
             # 没有发言权的公屏输入帧必须被服务端忽略：b 在同步点之前收不到 1 号帧。
@@ -293,12 +288,8 @@ class TypingRelay(unittest.TestCase):
             time.sleep(1.05)
             h.send_json({"type": "typing", "channel_id": "public"})
             frames = self.collect_typing_until(b, self.host_actor_id)
-            from_first = [
-                frame for frame in frames if frame["participant_id"] == first_actor["id"]
-            ]
-            self.assertEqual(
-                len(from_first), 1, f"1 秒内重复帧应当被节流：{frames}"
-            )
+            from_first = [frame for frame in frames if frame["participant_id"] == first_actor["id"]]
+            self.assertEqual(len(from_first), 1, f"1 秒内重复帧应当被节流：{frames}")
 
     def test_public_channel_marks_speech_wait_as_transient(self):
         players = [
@@ -310,12 +301,22 @@ class TypingRelay(unittest.TestCase):
         for actor in players:
             self.command(self.account(self._qq_by_actor[actor["id"]]), "lobby.ready")
         self.command(self.host, "host.start")
-        # 连续推进离开夜间流程：night* 阶段玩家未完成的行动按超时处理，
-        # 直到进入第一天的顺序发言（强制推进是主持人的合法手段）。
+        # 玩家真实确认放弃夜间行动后推进到顺序发言，不依赖立即强制超时。
         for _ in range(10):
             state = self.client.get(self.root + "/state", headers=self.host).json()
             if state["phase"] == "speech":
                 break
+            if state["phase"] in {"night", "night_coco"}:
+                for actor in players:
+                    headers = self.account(self._qq_by_actor[actor["id"]])
+                    own = self.client.get(self.root + "/state", headers=headers).json()
+                    if any(action["id"] == "night.confirm" for action in own["actions"]):
+                        self.command(headers, "night.confirm")
+                if (
+                    self.client.get(self.root + "/state", headers=self.host).json()["phase"]
+                    != state["phase"]
+                ):
+                    continue
             self.command(self.host, "host.advance")
         # 座位是随机分配的，players[1] 有可能是本轮发言人（那时公屏本来就能发言）：
         # 断言的是「没轮到的人看到的是临时等待」，所以要显式挑一个非发言人。

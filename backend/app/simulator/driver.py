@@ -108,11 +108,10 @@ class HostBrain:
         advance = next((t for t in tasks if t["kind"] == "advance" and t.get("blocking")), None)
         if advance:
             return self._advance(host)
-        # 「夜间结果与证物」阶段梅露露还没决定复活时，主持人待办里只有这一条阻塞项，
-        # 推进按钮不再显示为就绪。真人主持人可以直接推进（＝视为放弃），脚本主持人
-        # 也照此收尾，否则玩家端一旦没能提交复活，整局会永远停在这一步。
-        if any(t["kind"] == "revive" for t in tasks):
-            return self._advance(host)
+        # 讨论与未决定复活仍有玩家待办，阶段开始满45秒后才可强制收尾。
+        if view["phase"] == "discussion" or any(t["kind"] == "revive" for t in tasks):
+            if game_clock.now() >= view["public"]["phase_started_at"] + 45:
+                return self._advance(host)
         return None
 
     # ------------------------------------------------------------------ 细节
@@ -428,6 +427,13 @@ class Simulation:
         if self.fast_forward and advance is not None and advance.get("blocking"):
             # 待办说「可以推进」时直接推：不必等系统那 5 秒倒计时。
             # night_coco 等阶段系统不会自己计时，只能由主持人推进。
+            return self._advance_now()
+        if self.host_brain is not None and (
+            view["phase"] == "discussion" or any(t["kind"] == "revive" for t in tasks)
+        ):
+            remaining = view["public"]["phase_started_at"] + 45 - self.clock.now()
+            if remaining > 0:
+                self.clock.sleep(remaining)
             return self._advance_now()
         ready_at = view["public"].get("auto_advance_at")
         if ready_at is None and not any(t["kind"] == "advance" for t in tasks):

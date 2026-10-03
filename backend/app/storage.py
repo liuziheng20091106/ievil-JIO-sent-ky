@@ -161,8 +161,15 @@ def load_game(db, game_id):
     from .game.state import upgrade_game
     from .game.plugins import require_compatible
 
+    missing_phase_start = "phase_started_at" not in game.get("public", {})
     upgrade_game(game)
     require_compatible(game)
+    if missing_phase_start:
+        # 普通读取也要持久化旧局的安全起点；已有写事务交给调用方统一提交。
+        in_transaction = db.in_transaction
+        save_game(db, game)
+        if not in_transaction:
+            db.commit()
     return game
 
 

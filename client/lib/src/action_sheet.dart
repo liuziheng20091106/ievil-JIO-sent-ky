@@ -178,6 +178,11 @@ class _ActionFormSheetState extends State<ActionFormSheet> {
     values.addAll(widget.store
         .draftFor(widget.action, asSeat: widget.asSeat, initial: widget.initial));
     values.addAll(widget.initial ?? const <String, dynamic>{});
+    final allowed = {
+      ...widget.action.payload.keys,
+      for (final field in widget.action.fields) field.name,
+    };
+    values.removeWhere((name, _) => !allowed.contains(name));
     for (final field in widget.action.fields) {
       if (!values.containsKey(field.name) && field.raw.containsKey('default')) {
         values[field.name] = field.raw['default'];

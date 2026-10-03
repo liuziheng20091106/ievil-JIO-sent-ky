@@ -2020,6 +2020,24 @@ class GameStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      Iterable<ActionDescriptor> available = current.allActions;
+      if (asSeat != null) {
+        if (actor?.isHost == true) {
+          available = (await seatPerspective(asSeat)).allActions;
+        } else {
+          available = current.puppetControls
+              .where((panel) => panel.seatId == asSeat)
+              .expand((panel) => panel.actions.followedBy(
+                  panel.channels.expand((channel) => channel.actions)));
+        }
+      }
+      // 已打开的表单不能借刷新后的版本号提交旧候选或旧权限。
+      if (!available.any((item) => item.protocolKey == action.protocolKey)) {
+        throw const ApiException(
+          '行动已变化，请关闭表单后重新打开并确认',
+          statusCode: HttpStatus.conflict,
+        );
+      }
       final payload = <String, dynamic>{...action.payload, ...values};
       _applyView(await api!.command(
         id,

@@ -5,6 +5,8 @@ from copy import deepcopy
 from .actions import (
     actions_for,
     discussion_end_required,
+    discussion_end_reached,
+    discussion_present_seats,
     outstanding_seats,
     puppet_action_panels,
 )
@@ -61,14 +63,13 @@ def host_tasks(game):
         return tasks
 
     def warn_task(kind, seat_id, title):
-        # 未完成的玩家行动不再是「阻塞项」：主持人可以直接强制推进，让它们立刻超时。
-        # 这条待办只提示主持人还能先警告、再等30秒。
+        # 玩家待办可先警告30秒，或等阶段开始满45秒后强制推进。
         tasks.append(
             {
                 "id": f"{kind}:{seat_id}" if seat_id else kind,
                 "kind": kind,
                 "title": title,
-                "detail": "可直接推进（未完成的行动立刻按超时处理），或先警告并等待30秒。",
+                "detail": "阶段开始满45秒后可强制推进（未完成行动按超时处理），或先警告并等待30秒。",
                 "seats": [seat_id] if seat_id else [],
                 "action": "host.warn",
                 "payload": {"seat_id": seat_id} if seat_id else {},
@@ -127,14 +128,13 @@ def host_tasks(game):
         if revive_seat:
             # 「夜间结果与证物」是复活窗口的最后一站：推进到白天就公示死讯、下层登场，
             # 撤销会把公开信息悄悄回滚。因此还没决定的复活标成阻塞待办提醒主持人；
-            # 它仍是一条玩家行动：先「警告30秒」，或直接推进——推进照常生效，
-            # 未决定的复活和别的玩家行动一样立刻按超时（视为放弃）处理。
+            # 它仍是一条玩家行动：先警告30秒，或等阶段开始满45秒后强制推进放弃。
             tasks.append(
                 {
                     "id": "revive",
                     "kind": "revive",
                     "title": f"{revive_seat}号尚未决定当夜是否复活",
-                    "detail": f"推进即视为放弃这次复活；也可以先对{revive_seat}号发「警告」并等30秒。",
+                    "detail": f"阶段开始满45秒后强制推进即视为放弃复活；也可以先对{revive_seat}号发「警告」并等30秒。",
                     "seats": [revive_seat],
                     "action": "host.warn",
                     "payload": {"seat_id": revive_seat},
@@ -178,14 +178,26 @@ def host_tasks(game):
         )
     if game["phase"] != "night_review":
         waiting = outstanding_seats(game)
-        ready = not game["pending"] and not waiting and not game["winner_candidate"]
+        discussion_waiting = (
+            phase == "discussion"
+            and discussion_present_seats(game)
+            and not discussion_end_reached(game)
+        )
+        ready = (
+            not game["pending"]
+            and not waiting
+            and not game["winner_candidate"]
+            and not discussion_waiting
+        )
         if ready:
             detail = PHASES[game["phase"]] + "：现在可以推进"
         elif waiting and not game["pending"] and not game["winner_candidate"]:
             detail = (
                 PHASES[game["phase"]]
-                + f"：仍{len(waiting)}个席位未完成，推进将立刻把它们按超时处理"
+                + f"：仍{len(waiting)}个席位未完成，阶段开始满45秒后强制推进将把它们按超时处理"
             )
+        elif discussion_waiting and not game["pending"] and not game["winner_candidate"]:
+            detail = PHASES[phase] + "：等待玩家提交结束请求，阶段开始满45秒后可强制推进"
         else:
             detail = PHASES[game["phase"]] + "：先处理上方待办，或等待玩家完成行动"
         tasks.append(

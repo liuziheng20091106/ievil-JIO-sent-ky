@@ -13,6 +13,7 @@ from .actions import (
     challengeable,
     day_fake_allowed,
     discussion_end_reached,
+    discussion_present_seats,
     evidence_public_text,
     night_abilities,
     outstanding_seats,
@@ -88,6 +89,7 @@ from .state import (
     seat,
     seat_choice,
     seat_operable,
+    start_phase,
     surrendered_today,
     uid,
     vote_denominator,
@@ -478,7 +480,7 @@ def enter_execution(game, events):
         nanoka_card = game["cards"].get("nanoka")
         if nanoka_card:
             nanoka_card["uses"]["shot_misses"] = 0
-    game["phase"] = "execution"
+    start_phase(game, "execution")
     game["execution_ready"] = []
     game["execution_shots"] = []
     game["public"]["votes"]["execution_seats"] = list(
@@ -500,7 +502,8 @@ def open_vote(game, events):
     if index >= len(rounds):
         enter_execution(game, events)
         return
-    game["phase"] = "voting"
+    if game["phase"] != "voting":
+        start_phase(game, "voting")
     # 投票一开始就冻结分母：轮次表、门槛都按这一刻有投票权的人数算，中途有人出局也
     # 不会让已经下发到玩家表单上的票数门槛在计票时悄悄变掉（见 state.vote_denominator）。
     frozen = game.get("vote_freeze") or {}
@@ -610,7 +613,7 @@ def advance(game, events):
         apply_damage(game, events, game["night"]["preview"])
         if game.get("rewound_night"):
             return
-        game["phase"] = "night_results"
+        start_phase(game, "night_results")
         check_winner(game)
     elif phase == "night_results":
         require(
@@ -618,7 +621,7 @@ def advance(game, events):
             "本夜已有胜负候选，请先完成连锁并宣判，不能切换为白天后重新判定",
         )
         game["half"] = "day"
-        game["phase"] = "speech"
+        start_phase(game, "speech")
         # 下层牌在第二天白天自动登场：公开头像改为当前牌，本人收到私密提示。
         for before in game["queued_reveals"]:
             s = seat(game, before["seat_id"])
@@ -681,9 +684,9 @@ def advance(game, events):
         # 不要停在它身上；后面还有人可发言时下面的 require 仍会照常拒绝推进。
         sync_speaker(game, events)
         require(game["public"]["speaker"] is None, "仍有顺序发言未完成，请玩家确认或警告超时")
-        game["phase"] = "discussion"
+        start_phase(game, "discussion")
     elif phase == "discussion":
-        game["phase"] = "nomination"
+        start_phase(game, "nomination")
         game["discussion_end_requests"] = []
     elif phase == "nomination":
         require(not pending_nominators(game), "仍有玩家未提名或放弃，可警告后等待30秒")
@@ -720,13 +723,13 @@ def advance(game, events):
         apply_damage(game, events, preview)
         if game.get("rewound_night"):
             return
-        game["phase"] = "dusk"
+        start_phase(game, "dusk")
     elif phase == "dusk":
         require(not game["winner_candidate"], "已有胜负候选，请确认本半天所有效果后宣判或裁定纠错")
         sherry.finish_day_binding(game, events)
         game["day"] += 1
         game["half"] = "night"
-        game["phase"] = "witch"
+        start_phase(game, "witch")
         game["public"]["speaker"] = None
         # 打断标记属于当天：不清理会留到第二天的顺序发言里，把发言人拉回旧席位。
         game["public"].pop("interrupted_speaker", None)
@@ -977,7 +980,7 @@ def host_command(game, events, action, data):
         # 未登场的穗乃香保留已选的示人角色，等她登场时再自动套用（见 state.apply_honoka_disguise）。
         honoka.apply_disguise(game, honoka_seat)
         game["status"] = "playing"
-        game["phase"] = "witch"
+        start_phase(game, "witch")
         sherry.start_binding(game, events)
         sid = honoka_seat["id"]
         # 穗乃香的「开局前获知上层牌」是普通技能，不吃中毒/信息骰：这里恒发真表。
@@ -1858,9 +1861,10 @@ def timeout_outstanding(game, events):
     每轮都要求至少有一个席位真的被处理，避免任何意外分支让命令空转。
     """
     timed_out = []
+    phase = game["phase"]
     for _ in range(len(game["seats"]) * 2 + 2):
         targets = outstanding_seats(game)
-        if not targets or game["status"] != "playing":
+        if not targets or game["status"] != "playing" or game["phase"] != phase:
             break
         progressed = False
         for sid in targets:
@@ -1884,11 +1888,27 @@ def timeout_outstanding(game, events):
 
 
 def force_advance(game, events):
-    """主持人的强制推进：先让所有未完成的玩家行动立刻超时，再推进阶段。
-
-    待裁定事项不算玩家行动，仍由 advance() 拒绝，必须由主持人逐项处理。
-    """
+    """有玩家待办时，阶段开始满45秒后才允许主持人强制推进。"""
+    require(
+        not any(item["kind"] != "honoka_witness" for item in game["pending"]),
+        "仍有待裁定事项，请先在「裁决」里逐项处理后再推进",
+    )
+    if game["phase"] in {"night_results", "dusk"}:
+        require(not game["winner_candidate"], "已有胜负候选，请先完成连锁并宣判")
+    waiting = outstanding_seats(game)
+    discussion_waiting = (
+        game["phase"] == "discussion"
+        and discussion_present_seats(game)
+        and not discussion_end_reached(game)
+    )
+    if waiting or discussion_waiting:
+        elapsed = clock.now() - game["public"]["phase_started_at"]
+        require(elapsed >= 45, "本阶段开始不足45秒，仍有玩家待完成行动，请等待或先警告")
+    phase = game["phase"]
     timeout_outstanding(game, events)
+    # 超时确认其余夜间行动可能刚解锁可可；新阶段须留给她自己的行动窗口。
+    if game["phase"] != phase:
+        return
     advance(game, events)
 
 

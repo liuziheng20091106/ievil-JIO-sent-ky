@@ -148,7 +148,7 @@ class SpeechTimerRelay(unittest.TestCase):
     # ------------------------------------------------------------------ 夹具
 
     def speaking_phase(self):
-        """凑齐七人、连续准备两轮后开局，再强制推进到第一天的顺序发言。"""
+        """凑齐七人、连续准备两轮开局，再由玩家确认放弃夜间行动走到顺序发言。"""
         players = [
             self.join_player(self.account(str(16000 + index)), str(16000 + index))
             for index in range(7)
@@ -158,8 +158,18 @@ class SpeechTimerRelay(unittest.TestCase):
                 self.command(self.account(self._qq_by_actor[actor["id"]]), "lobby.ready")
         self.command(self.host, "host.start")
         for _ in range(10):
-            if self.state(self.host)["phase"] == "speech":
+            state = self.state(self.host)
+            if state["phase"] == "speech":
                 break
+            if state["phase"] in {"night", "night_coco"}:
+                for actor in players:
+                    headers = self.account(self._qq_by_actor[actor["id"]])
+                    if any(
+                        action["id"] == "night.confirm" for action in self.state(headers)["actions"]
+                    ):
+                        self.command(headers, "night.confirm")
+                if self.state(self.host)["phase"] != state["phase"]:
+                    continue
             self.command(self.host, "host.advance")
         state = self.state(self.host)
         self.assertEqual(state["phase"], "speech", "推进后应到达顺序发言阶段")

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import storage
 from backend.app.game.catalog import ROLES
+from backend.app.game.clock import FakeClock
 from backend.app.main import app
 from backend.app.simulator.client import ProtocolClient
 from backend.app.simulator.harness import Harness
@@ -47,6 +48,11 @@ class SimulatorCase(unittest.TestCase):
         )
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
+        self.clock = FakeClock()
+        self.enterContext(self.clock.installed())
+        self.enterContext(
+            patch("backend.app.simulator.driver.SystemClock", return_value=self.clock)
+        )
 
     def test_harness_seats_all_seven_players_and_deals(self):
         """入场与发牌：七个虚拟玩家各自拿到随机席位，无人重复。"""
@@ -85,11 +91,7 @@ class SimulatorCase(unittest.TestCase):
             result = harness.run()
             self.assertEqual(result.status, "ended")
             view = harness.host.view
-            cards = {
-                card["id"]: card
-                for seat in view["seats"]
-                for card in seat.get("cards", [])
-            }
+            cards = {card["id"]: card for seat in view["seats"] for card in seat.get("cards", [])}
             self.assertEqual(len(cards), 14)
             # 每个席位同时只有一张「当前」牌：两张牌都在场会让上下层机制失效。
             # 下层牌本身仍是 alive 的，所以这里看 current_card_id 而不是 alive 数量。
@@ -293,8 +295,7 @@ class SimulatorCase(unittest.TestCase):
     def test_host_brain_advances_past_an_undecided_revive(self):
         """梅露露没决定复活时待办里只有这一条阻塞项：脚本主持人推进＝放弃，不能空转。
 
-        真人主持人可以直接推进（这时推进按钮仍然可用），脚本主持人也照此收尾；
-        否则玩家端一旦没能提交复活，整局会永远停在「夜间结果与证物」。
+        主持人需等待阶段开始满45秒后才能强制放弃，脚本主持人遵循相同保护。
         """
         from backend.app.simulator.driver import HostBrain
 
@@ -310,6 +311,8 @@ class SimulatorCase(unittest.TestCase):
         view = {
             "status": "playing",
             "day": 2,
+            "phase": "night_results",
+            "public": {"phase_started_at": 1000},
             "host": {
                 "tasks": [
                     {
@@ -332,8 +335,13 @@ class SimulatorCase(unittest.TestCase):
                 ]
             },
         }
-        self.assertEqual(HostBrain().act(FakeHost(view)), "host.advance")
-        self.assertEqual(submitted, [("host.advance", {})])
+        clock = FakeClock(1000)
+        with clock.installed():
+            self.assertIsNone(HostBrain().act(FakeHost(view)))
+            self.assertEqual(submitted, [])
+            clock.advance(45)
+            self.assertEqual(HostBrain().act(FakeHost(view)), "host.advance")
+            self.assertEqual(submitted, [("host.advance", {})])
 
     def test_policy_drives_puppet_panels_through_as_seat(self):
         """傀儡席没有自主行动，策略必须像真人控制者那样用 as_seat 代提交。
@@ -361,7 +369,9 @@ class SimulatorCase(unittest.TestCase):
             "public": {"speaker": "2", "speech_order": ["2", "3"]},
             "self": {
                 "seat_id": "5",
-                "puppet_controls": [{"seat_id": "2", "name": "虚拟玩家2", "actions": panel_actions}],
+                "puppet_controls": [
+                    {"seat_id": "2", "name": "虚拟玩家2", "actions": panel_actions}
+                ],
             },
             "actions": [],
         }
