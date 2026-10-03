@@ -156,12 +156,12 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
   void maybeShowActionTutorial() {
     if (_showingActionTutorial || !mounted) return;
-    final action = widget.store.takeActionTutorial();
-    if (action == null) return;
+    final actions = widget.store.takeActionTutorials();
+    if (actions.isEmpty) return;
     _showingActionTutorial = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
-        if (mounted) await showActionPreview(context, action);
+        if (mounted) await showActionPreviews(context, actions);
       } finally {
         _showingActionTutorial = false;
         if (mounted) maybeShowActionTutorial();
@@ -393,6 +393,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
               else
                 _PrivateInfoBanner(
                   message: store.pendingPrivateInfo!,
+                  store: store,
                   onOpen: () {
                     setState(() => index = 0);
                     store.markMessagesRead();
@@ -3188,7 +3189,7 @@ class MessageBubble extends StatelessWidget {
                     SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        '私密信息 · 仅你与主持人可见',
+                        '私密信息 · ${_privateInfoScope(message, store) ?? '仅你与主持人可见'}',
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
@@ -3386,20 +3387,39 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
   }
 }
 
+String? _privateInfoScope(GameMessage message, GameStore? store) {
+  final audience = message.raw['audience'];
+  final participants = store?.view?.host['participants'];
+  if (audience is! List || participants is! List) return null;
+  final seats = <String>{
+    for (final participant in participants)
+      if (participant is Map &&
+          audience.contains(participant['id']) &&
+          participant['seat_id'] != null)
+        '${participant['seat_id']}号',
+  };
+  if (seats.isNotEmpty) return '发给${seats.join('、')}玩家';
+  return audience.every((id) => id == 'host') ? '仅主持人可见' : null;
+}
+
 /// 新私密信息横幅：比记录里的一条消息更显眼；点「查看」跳到对局记录。
 class _PrivateInfoBanner extends StatelessWidget {
   const _PrivateInfoBanner({
     required this.message,
+    required this.store,
     required this.onOpen,
     required this.onDismiss,
   });
 
   final GameMessage message;
+  final GameStore store;
   final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) {
+    final scope = _privateInfoScope(message, store);
+    return Padding(
         padding:
             EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
         child: Container(
@@ -3421,7 +3441,9 @@ class _PrivateInfoBanner extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '新的私密信息',
+                      scope == null
+                          ? '新的私密信息'
+                          : '新的私密信息 · $scope',
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
@@ -3451,6 +3473,7 @@ class _PrivateInfoBanner extends StatelessWidget {
           ),
         ),
       );
+  }
 }
 
 /// 状态页：牌桌 + 阶段信息。

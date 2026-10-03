@@ -37,75 +37,98 @@ Future<void> showActionForm(
   );
 }
 
-/// 轻预览：长按行动按钮时展示，不提交。
-Future<void> showActionPreview(BuildContext context, ActionDescriptor action) =>
+/// 新行动说明：同批合并展示，不提交。
+Future<void> showActionPreviews(
+  BuildContext context,
+  List<ActionDescriptor> actions,
+) =>
     showPredictiveSheet<void>(
       context: context,
-      builder: (context) => Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpacing.xl,
-          0,
-          AppSpacing.xl,
-          AppSpacing.xxl,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .85,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                ActionIconBadge(
-                  actionId: action.id,
-                  group: action.group,
-                  danger: action.raw['danger'] == true,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl,
+            0,
+            AppSpacing.xl,
+            AppSpacing.xxl,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final action in actions) ...[
+                if (action != actions.first)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
+                    child: Divider(height: 1),
+                  ),
+                Row(
+                  children: [
+                    ActionIconBadge(
+                      actionId: action.id,
+                      group: action.group,
+                      danger: action.raw['danger'] == true,
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            action.label,
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: context.palette.text,
+                            ),
+                          ),
+                          Text(
+                            '短名：${action.shortLabel} · ${action.group}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: context.palette.textTertiary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        action.label,
-                        style:  TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: context.palette.text,
-                        ),
-                      ),
-                      Text(
-                        '短名：${action.shortLabel} · ${action.group}',
-                        style:  TextStyle(
-                          fontSize: 12,
-                          color: context.palette.textTertiary,
-                        ),
-                      ),
-                    ],
+                const SizedBox(height: AppSpacing.lg),
+                Text(
+                  action.description.isEmpty ? action.label : action.description,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.6,
+                    color: context.palette.textSecondary,
                   ),
                 ),
+                if (action.unsupportedReason != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    action.unsupportedReason!,
+                    style: TextStyle(
+                      color: context.palette.danger,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ],
-            ),
-             SizedBox(height: AppSpacing.lg),
-            Text(
-              action.description.isEmpty ? action.label : action.description,
-              style:  TextStyle(
-                fontSize: 14,
-                height: 1.6,
-                color: context.palette.textSecondary,
-              ),
-            ),
-            if (action.unsupportedReason != null) ...[
-               SizedBox(height: AppSpacing.md),
+              const SizedBox(height: AppSpacing.lg),
               Text(
-                action.unsupportedReason!,
-                style:  TextStyle(color: context.palette.danger, fontSize: 13),
+                '预览不会提交；点击行动按钮后填写参数，确认一次即会提交。',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.palette.textTertiary,
+                ),
               ),
             ],
-             SizedBox(height: AppSpacing.lg),
-             Text(
-              '预览不会提交；点击行动按钮后填写参数，确认一次即会提交。',
-              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
-            ),
-          ],
+          ),
         ),
       ),
     );

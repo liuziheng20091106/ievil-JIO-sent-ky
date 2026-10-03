@@ -10,7 +10,7 @@ import 'package:seven_double_client/src/store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  testWidgets('新增行动只弹一次服务端说明，描述变化不重弹', (tester) async {
+  testWidgets('同批新增行动合并展示，关闭后不逐个重弹', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final base = {
       'ui_version': 1,
@@ -41,7 +41,7 @@ void main() {
       gameId: 'game-1',
     );
     store.applyView(GameView.fromJson(base));
-    expect(store.takeActionTutorial(), isNull);
+    expect(store.takeActionTutorials(), isEmpty);
     final action = {
       'id': 'speech.done',
       'label': '结束发言',
@@ -49,13 +49,20 @@ void main() {
       'description': '请在轮到你时结束本轮发言。',
       'ui_version': 1
     };
+    final secondAction = {
+      'id': 'day.skill',
+      'label': '声明白天技能',
+      'short_label': '技能',
+      'description': '白天可选择当前角色的技能进行声明。',
+      'ui_version': 1
+    };
     final updated = {
       ...base,
       'version': 2,
-      'actions': [action]
+      'actions': [action, secondAction]
     };
     store.applyLiveEvent({'type': 'state', 'state': updated});
-    expect(store.newActionCount, 1);
+    expect(store.newActionCount, 2);
     await tester.binding.setSurfaceSize(const Size(420, 880));
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
@@ -63,13 +70,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('请在轮到你时结束本轮发言。'), findsOneWidget);
+    expect(find.text(secondAction['description'] as String), findsOneWidget);
+    expect(find.byType(BottomSheet), findsOneWidget);
     store.applyLiveEvent({
       'type': 'state',
       'state': {
         ...updated,
         'version': 3,
         'actions': [
-          {...action, 'description': '新的服务端行动说明。'}
+          {...action, 'description': '新的服务端行动说明。'},
+          secondAction,
         ],
       }
     });
@@ -77,6 +87,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('新的服务端行动说明。'), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.text(secondAction['description'] as String), findsNothing);
   });
 
   test('本局已看行动不重弹，准备和房间开关不弹', () async {
@@ -125,23 +137,23 @@ void main() {
     final ready = action('lobby.ready', '准备发牌');
     final open = action('room.open_join', '允许加入');
     store.applyView(GameView.fromJson(state('game-1', [ready, open])));
-    expect(store.takeActionTutorial(), isNull);
+    expect(store.takeActionTutorials(), isEmpty);
     store.applyView(GameView.fromJson(state('game-1', [
       action('lobby.ready', '取消准备'),
       action('room.open_join', '禁止加入'),
       action('host.auto', '暂停自动推进'),
       action('host.hanna_witch', '汉娜魔化：已开启'),
     ])));
-    expect(store.takeActionTutorial(), isNull);
+    expect(store.takeActionTutorials(), isEmpty);
 
     final speech = action('speech.done', '结束发言');
     store.applyView(GameView.fromJson(state('game-1', [speech])));
-    expect(store.takeActionTutorial()?.id, 'speech.done');
+    expect(store.takeActionTutorials().single.id, 'speech.done');
     store.applyView(GameView.fromJson(state('game-1', [])));
     store.applyView(GameView.fromJson(state('game-1', [
       {...speech, 'description': '变化后的说明'},
     ])));
-    expect(store.takeActionTutorial(), isNull);
+    expect(store.takeActionTutorials(), isEmpty);
 
     final resumed = GameStore.forPreview(
       preferences: preferences,
@@ -152,7 +164,7 @@ void main() {
     );
     resumed.applyView(empty);
     resumed.applyView(GameView.fromJson(state('game-1', [speech])));
-    expect(resumed.takeActionTutorial(), isNull);
+    expect(resumed.takeActionTutorials(), isEmpty);
 
     final otherGame = GameView.fromJson(state('game-2', []));
     final newStore = GameStore.forPreview(
@@ -164,7 +176,7 @@ void main() {
     );
     newStore.applyView(otherGame);
     newStore.applyView(GameView.fromJson(state('game-2', [speech])));
-    expect(newStore.takeActionTutorial()?.id, 'speech.done');
+    expect(newStore.takeActionTutorials().single.id, 'speech.done');
   });
 
   testWidgets('发言分隔符实时落在本轮起点，结束和重连后保留', (tester) async {

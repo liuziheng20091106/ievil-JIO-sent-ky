@@ -41,7 +41,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Builder(
         builder: (context) => TextButton(
-          onPressed: () => showActionPreview(context, action),
+          onPressed: () => showActionPreviews(context, [action]),
           child: const Text('预览'),
         ),
       ),

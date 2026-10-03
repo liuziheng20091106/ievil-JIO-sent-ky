@@ -350,16 +350,16 @@ class GameStore extends ChangeNotifier {
   final Set<String> _viewedActionTutorialIds = {};
   final List<ActionDescriptor> _pendingActionTutorials = [];
 
-  ActionDescriptor? takeActionTutorial() {
-    if (_pendingActionTutorials.isEmpty) return null;
-    final action = _pendingActionTutorials.removeAt(0);
-    if (_viewedActionTutorialIds.add(action.id)) {
-      unawaited(preferences.setStringList(
-        _preferenceKey('action_tutorials_seen'),
-        _viewedActionTutorialIds.toList(),
-      ));
-    }
-    return action;
+  List<ActionDescriptor> takeActionTutorials() {
+    if (_pendingActionTutorials.isEmpty) return const [];
+    final actions = _pendingActionTutorials.toList();
+    _pendingActionTutorials.clear();
+    _viewedActionTutorialIds.addAll(actions.map((action) => action.id));
+    unawaited(preferences.setStringList(
+      _preferenceKey('action_tutorials_seen'),
+      _viewedActionTutorialIds.toList(),
+    ));
+    return actions;
   }
 
   String? _privateStateBaseline;
