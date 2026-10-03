@@ -25,7 +25,7 @@ shape_layer = SAMPLES.shape_layer
 composition = SAMPLES.composition
 
 SLOT = (736, 1024)
-END = 91
+END = 108
 SHATTER_START = 60
 
 
@@ -127,10 +127,11 @@ def text_layer(name, value, size, y, color, index):
                     (3, [-980, y, 0]),
                     (13, [156, y, 0]),
                     (58, [126, y - 12, 0]),
-                    (68, [-980, y - 90, 0]),
+                    (91, [126, y - 12, 0]),
+                    (106, [-980, y - 90, 0]),
                 ]
             ),
-            opacity=animated([(3, 0), (12, 100), (60, 100), (67, 0)]),
+            opacity=animated([(3, 0), (12, 100), (91, 100), (106, 0)]),
         ),
         "t": {
             "d": {
@@ -157,7 +158,7 @@ def text_layer(name, value, size, y, color, index):
             "a": [],
         },
         "ip": 3,
-        "op": 68,
+        "op": END,
         "st": 0,
         "bm": 0,
     }
@@ -166,12 +167,9 @@ def text_layer(name, value, size, y, color, index):
 def build(scripts, name, title, skill, color, source_folder, prefix, glass, movie, alternate=None):
     directory = scripts / "images" / name
     directory.mkdir(parents=True, exist_ok=True)
-    assets = []
     for index in range(1, 4):
         filename = f"portrait-{index}.webp"
         portrait(source_folder / f"{prefix}_{index:03d}.png", directory / filename)
-        asset_id = "skill-portrait" if index == 1 else f"skill-portrait-{index}"
-        assets.append(bitmap(asset_id, filename, SLOT, name))
         if alternate:
             portrait(
                 source_folder / f"{alternate}_{index:03d}.png",
@@ -181,10 +179,57 @@ def build(scripts, name, title, skill, color, source_folder, prefix, glass, movi
         band = original.convert("RGBA")
         band.thumbnail((960, 540), Image.Resampling.LANCZOS)
     webp(band, directory / "stained-glass.webp")
-    assets.append(bitmap("stained-glass", "stained-glass.webp", band.size, name))
     extract_shatter(movie, directory)
+    for expression in range(1, 4):
+        build_script(scripts, name, title, skill, color, expression, band.size)
+    (scripts / f"{name}.json").unlink(missing_ok=True)
+
+
+def build_script(scripts, name, title, skill, color, expression, band_size):
+    directory = scripts / "images" / name
+    assets = [
+        bitmap("skill-portrait", f"portrait-{expression}.webp", SLOT, name),
+        bitmap("stained-glass", "stained-glass.webp", band_size, name),
+    ]
 
     layers = []
+
+    layers.append(text_layer("role-title", title, 52, 598, [1, 0.9, 0.94], len(layers) + 1))
+    layers.append(text_layer("skill-name", skill, 118, 758, [1, 1, 1], len(layers) + 1))
+    line = shape_layer(
+        "title-rule",
+        len(layers) + 1,
+        [[156, 628], [856, 628], [842, 632], [156, 632]],
+        color,
+        transforms(opacity=animated([(6, 0), (14, 100), (91, 100), (106, 0)])),
+        op=END,
+    )
+    layers.append(line)
+
+    position = animated(
+        [
+            (0, [2280, 130, 0]),
+            (10, [840, 70, 0]),
+            (58, [800, 54, 0]),
+            (91, [800, 54, 0]),
+            (98, [590, -70, 0]),
+            (106, [-1420, -250, 0]),
+        ]
+    )
+    opacity = animated([(0, 0), (8, 100), (91, 100), (106, 0)])
+    layers.append(
+        image_layer(
+            "skill-portrait",
+            len(layers) + 1,
+            "skill-portrait",
+            position,
+            (0, 0),
+            opacity,
+            scale=fixed([145, 145, 100]),
+            op=END,
+        )
+    )
+    # Lottie draws earlier layers on top: shatter stays behind all portrait poses.
     for frame in range(31):
         asset_id = f"shatter-{frame:02d}"
         assets.append(bitmap(asset_id, f"{asset_id}.webp", (960, 540), name))
@@ -202,47 +247,14 @@ def build(scripts, name, title, skill, color, source_folder, prefix, glass, movi
             )
         )
 
-    layers.append(text_layer("role-title", title, 52, 598, [1, 0.9, 0.94], len(layers) + 1))
-    layers.append(text_layer("skill-name", skill, 118, 758, [1, 1, 1], len(layers) + 1))
-    line = shape_layer(
-        "title-rule",
-        len(layers) + 1,
-        [[156, 628], [856, 628], [842, 632], [156, 632]],
-        color,
-        transforms(opacity=animated([(6, 0), (14, 100), (59, 100), (65, 0)])),
-        op=68,
-    )
-    layers.append(line)
-
-    position = animated(
-        [
-            (0, [2280, 130, 0]),
-            (10, [840, 70, 0]),
-            (58, [800, 54, 0]),
-            (69, [590, -70, 0]),
-            (77, [-1420, -250, 0]),
-        ]
-    )
-    opacity = animated([(0, 0), (8, 100), (61, 100), (70, 0)])
-    # The three source poses remain intact; hard cuts avoid blended faces.
-    for index, start, stop in [(1, 0, 23), (2, 23, 33), (3, 33, 77)]:
-        asset_id = "skill-portrait" if index == 1 else f"skill-portrait-{index}"
-        layers.append(
-            image_layer(
-                asset_id,
-                len(layers) + 1,
-                asset_id,
-                position,
-                (0, 0),
-                opacity,
-                scale=fixed([145, 145, 100]),
-                ip=start,
-                op=stop,
-            )
-        )
-
     band_position = animated(
-        [(0, [2150, 130, 0]), (9, [0, 130, 0]), (59, [-36, 118, 0]), (69, [-2180, -90, 0])]
+        [
+            (0, [2150, 130, 0]),
+            (9, [0, 130, 0]),
+            (59, [-36, 118, 0]),
+            (91, [-36, 118, 0]),
+            (106, [-2180, -90, 0]),
+        ]
     )
     band_layer = image_layer(
         "stained-glass-band",
@@ -250,9 +262,9 @@ def build(scripts, name, title, skill, color, source_folder, prefix, glass, movi
         "stained-glass",
         band_position,
         (0, 0),
-        animated([(0, 0), (7, 100), (60, 100), (64, 0)]),
+        animated([(0, 0), (7, 100), (91, 100), (106, 0)]),
         scale=fixed([200, 200, 100]),
-        op=69,
+        op=END,
     )
     mask(band_layer, [[0, 100], [960, 5], [960, 335], [0, 415]])
     layers.append(band_layer)
@@ -262,8 +274,8 @@ def build(scripts, name, title, skill, color, source_folder, prefix, glass, movi
             len(layers) + 1,
             [[-100, 462], [1920, 245], [1920, 840], [-100, 1055]],
             [component * 0.2 for component in color[:3]] + [1],
-            transforms(band_position, opacity=animated([(0, 0), (8, 92), (60, 92), (65, 0)])),
-            op=69,
+            transforms(band_position, opacity=animated([(0, 0), (8, 92), (91, 92), (106, 0)])),
+            op=END,
         )
     )
     result = composition(name, layers, assets, END)
@@ -281,8 +293,9 @@ def build(scripts, name, title, skill, color, source_folder, prefix, glass, movi
         {"tm": 0, "cm": "intro", "dr": 10},
         {"tm": 10, "cm": "hold", "dr": 50},
         {"tm": 60, "cm": "shatter", "dr": 31},
+        {"tm": 91, "cm": "exit", "dr": 17},
     ]
-    target = scripts / f"{name}.json"
+    target = scripts / f"{name}-{expression}.json"
     # Native Lottie consumes a shape's type before its properties; keep insertion order.
     target.write_text(
         json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":")),

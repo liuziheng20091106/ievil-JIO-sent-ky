@@ -35,4 +35,5 @@ jailer -> honoka / 穗乃香（用户所说的 hnk，项目实际角色 id 为 h
 目录 normal/、EX/ 保持不变，角色图片改为数字文件名，PNG 内容不变。根目录的 manifest.json 是资源分发清单，由 tools/update-resource-manifests.py 生成；说明文字不进入资源包。animation 包只额外发布 scripts/ 下的动画 JSON（不发布 manifest.json），memes 不发布 JSON。更新脚本或图片后刷新清单，客户端按 MD5 增量更新即可，无需重新编译已安装播放器的 App。
 资源图片继续遵循项目 resources/ 的 Git 忽略规则；本介绍文件单独纳入版本管理。
 
-魔裁论破工程素材由 tools/build-skill-animations.py --source-dir "解压后的魔裁论破工程文件夹" 生成：scripts/emma-interrupt.json 对应艾玛打断发言，scripts/hiro-forgery.json 对应希罗伪证。原PNG立绘转透明无损WebP，两个MOV只作离线输入，各转31张960×540透明WebP承载原玻璃破碎层；整个动画由现有Lottie时间线重组。resources不保存原MOV、AEP或ZIP。生成后更新清单并运行 tools/upload-resources.py --prefix resources/skill-cutins-31f4ad6f 上传R2；客户端更新animation包即可，不需更新App。
+魔裁论破工程素材由 tools/build-skill-animations.py --source-dir "解压后的魔裁论破工程文件夹" 生成：scripts/emma-interrupt-1.json、-2.json、-3.json 对应艾玛打断发言三种表情，scripts/hiro-forgery-1.json、-2.json、-3.json 对应希罗伪证三种表情；每份脚本只用一种表情，不在一次播放内切换。原PNG立绘转透明无损WebP，两个MOV只作离线输入，各转31张960×540透明WebP承载原玻璃破碎层；整个动画由现有Lottie时间线重组。resources不保存原MOV、AEP或ZIP。生成后更新清单并运行 tools/upload-resources.py --prefix resources/skill-cutins-31f4ad6f 上传R2；客户端更新animation包即可，不需更新App。
+六份动画均为108帧/30fps（3.6秒）：全部本地图片解码就绪后起播，60至90帧连续播放31张破碎WebP，破碎层始终位于角色立绘下方；角色、文字、分隔线及背景装饰都保留到第91帧，再统一开始离场。后端每次技能触发随机选择一种表情，在事件中冻结；同一事件各收件人使用同一编号，普通/魔女资源仍按权限裁剪。资源包“预览动画”列表可分别播放六份脚本，旧混合表情脚本已移除。

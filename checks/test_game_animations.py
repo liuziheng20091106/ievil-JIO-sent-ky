@@ -4,6 +4,7 @@ import json
 import unittest
 from contextlib import ExitStack
 from copy import deepcopy
+from itertools import product
 from unittest.mock import patch
 
 from backend.app import storage
@@ -255,8 +256,8 @@ class GameAnimationDelivery(unittest.TestCase):
     def test_emma_interrupt_and_private_hiro_forgery_keep_frozen_slots(self):
         emma = self.room.seat_headers(self.players, "1")
         hiro = self.room.seat_headers(self.players, "2")
-        for witch in (False, True):
-            with self.subTest(witch=witch):
+        for witch, expression in product((False, True), range(1, 4)):
+            with self.subTest(witch=witch, expression=expression):
 
                 def arrange(game, witch=witch):
                     game["day"] += 1
@@ -274,8 +275,9 @@ class GameAnimationDelivery(unittest.TestCase):
 
                 self.room.edit_state(arrange)
                 before = {item["id"] for item in self.history(self.room.host)}
-                self.room.command(emma, "day.skill", {"ability": "interrupt", "target": "2"})
-                self.room.command(hiro, "hiro_forgery.publish", {"text": "公开正文"})
+                with patch.object(animations.SystemRandom, "randrange", return_value=expression):
+                    self.room.command(emma, "day.skill", {"ability": "interrupt", "target": "2"})
+                    self.room.command(hiro, "hiro_forgery.publish", {"text": "公开正文"})
                 delivered = {
                     name: [item for item in self.history(headers) if item["id"] not in before]
                     for name, headers in {
@@ -299,16 +301,17 @@ class GameAnimationDelivery(unittest.TestCase):
                         if item.get("payload", {}).get("ability") == "interrupt"
                     )
                     animation = interrupt["payload"]["animation"]
-                    self.assertEqual(animation["script"], "scripts/emma-interrupt.json")
+                    self.assertEqual(
+                        animation["script"], f"scripts/emma-interrupt-{expression}.json"
+                    )
                     self.assertEqual(
                         animation["images"],
                         {
-                            "skill-portrait" + (f"-{index}" if index > 1 else ""): (
+                            "skill-portrait": (
                                 "emma/EX/1.png"
                                 if witch and name in {"emma", "host"}
-                                else f"scripts/images/emma-interrupt/portrait-{index}.webp"
+                                else f"scripts/images/emma-interrupt/portrait-{expression}.webp"
                             )
-                            for index in range(1, 4)
                         },
                     )
                     public = next(item for item in messages if item["text"] == "公开正文")
@@ -326,15 +329,13 @@ class GameAnimationDelivery(unittest.TestCase):
                     payload = private[0]["payload"]
                     self.assertEqual(set(payload), {"type", "animation"})
                     self.assertEqual(payload["type"], "animation")
-                    self.assertEqual(payload["animation"]["script"], "scripts/hiro-forgery.json")
+                    self.assertEqual(
+                        payload["animation"]["script"], f"scripts/hiro-forgery-{expression}.json"
+                    )
                     self.assertEqual(
                         payload["animation"]["images"],
                         {
-                            "skill-portrait"
-                            + (
-                                f"-{index}" if index > 1 else ""
-                            ): f"scripts/images/hiro-forgery/portrait-{'ex-' if witch else ''}{index}.webp"
-                            for index in range(1, 4)
+                            "skill-portrait": f"scripts/images/hiro-forgery/portrait-{'ex-' if witch else ''}{expression}.webp"
                         },
                     )
 
