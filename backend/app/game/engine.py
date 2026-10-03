@@ -1741,6 +1741,7 @@ def apply_command(game, actor, action, payload, *, by_host=False):
             game,
             events,
             f"主持人为{actor['seat_id']}号完成了本阶段操作（内容不公开）。",
+            seats=[actor["seat_id"]],
         )
     # 这条命令可能杀掉了主人：傀儡当前牌跟着出局（见 sync_puppet_bonds）。
     meruru.sync_puppet_bonds(game, events)

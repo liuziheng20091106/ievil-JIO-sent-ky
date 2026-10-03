@@ -314,6 +314,58 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(replaced["cards"], after["cards"])
         self.assertEqual(self.client.get(self.root + "/state", headers=spectator).status_code, 200)
 
+    def test_host_delegation_notice_is_private_to_the_seat(self):
+        self.open_join()
+        player, actor, _ = self.join("12901")
+        stranger, _, _ = self.join("12902")
+        spectator, _, _ = self.join("12903", "spectator")
+        _, account = self.account("12999")
+        self.client.post(
+            f"/api/hosts/{account['account_id']}", headers=self.host, json={"level": 5}
+        ).raise_for_status()
+        unconfirmed_host, _ = self.host_login("12999")
+        history = self.client.get(self.root + "/messages", headers=self.host).json()["messages"]
+        after = history[-1]["id"]
+        state = self.client.get(self.root + "/state", headers=self.host).json()
+        delegated = self.client.post(
+            self.root + "/commands",
+            headers=self.host,
+            json={
+                "expected_version": state["version"],
+                "action": "lobby.ready",
+                "payload": {},
+                "as_seat": actor["seat_id"],
+            },
+        )
+        self.assertEqual(delegated.status_code, 200, delegated.text)
+        seat = next(item for item in delegated.json()["seats"] if item["id"] == actor["seat_id"])
+        self.assertTrue(seat["ready"])
+        notices = self.client.get(
+            self.root + "/messages", headers=self.host, params={"after": after}
+        ).json()["messages"]
+        notice = notices[0]
+        self.assertEqual(notice["kind"], "information")
+        self.assertEqual(notice["channel_id"], "information")
+        self.assertEqual(notice["audience"], [actor["id"]])
+        for headers, allowed in (
+            (self.host, True),
+            (player, True),
+            (stranger, False),
+            (spectator, False),
+            (unconfirmed_host, False),
+        ):
+            with self.subTest(headers=headers, allowed=allowed):
+                messages = self.client.get(
+                    self.root + "/messages", headers=headers, params={"after": after}
+                ).json()["messages"]
+                self.assertEqual(any(item["id"] == notice["id"] for item in messages), allowed)
+                information = self.client.get(self.root + "/state", headers=headers).json()[
+                    "information"
+                ]
+                self.assertEqual(
+                    any(item["text"] == notice["text"] for item in information), allowed
+                )
+
     def test_unconfirmed_host_sees_no_cards_and_no_private_history(self):
         """未确认进入管理界面的主持人只有观察者投影：没有全席双牌，也读不到本局私聊。
 
