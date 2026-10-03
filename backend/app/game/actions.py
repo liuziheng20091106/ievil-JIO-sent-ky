@@ -138,7 +138,7 @@ DESCRIPTIONS = {
 # 主持人待办的说明：标题已经写明是哪件事，这里补上「裁定后按什么结算」。
 PENDING_DESCRIPTIONS = {
     "information": "这段裁定信息会按标题指定的范围发给当事人。",
-    "suspects": "为夜间死者或被魔女袭击指到而未出局的当事人填写四名疑似凶手（真凶与汉娜优先），用于当日目击名单。",
+    "suspects": "警告：常规名单应含技能处理后的真凶，基础三人，汉娜在场时四人且包含她。主持人可自由调整人数与角色或留空，此提示不阻止提交。",
     "evidence": "裁定证物内容与公开范围；不公开时只发给指定席位。",
     "codex": "魔典未按时结算时选择跳过或指定特殊转化对象。",
     "madness": "疯狂行为裁定：警告、符合要求，或判定不够疯狂并执行不利裁定。",
@@ -500,11 +500,7 @@ def pending_action(game, item):
         killer = game["cards"][source]["states"].get("display_killer", source) if source else None
         # 七双目击名单：基础三人；汉娜在场（存活且是该席当前牌）时多一人。梅露露不再必进名单。
         size = 4 if present(game, "hanna") else 3
-        label = (
-            ("四" if size == 4 else "三")
-            + "名疑似凶手"
-            + ("（汉娜在场，额外一人）" if size == 4 else "")
-        )
+        label = "疑似凶手（可自由调整或留空）"
         suggested = list(
             dict.fromkeys(
                 role for role in (killer, "hanna" if present(game, "hanna") else None) if role
@@ -521,13 +517,20 @@ def pending_action(game, item):
                 label,
                 "multiselect",
                 role_options(),
-                min=size,
-                max=size,
+                required=False,
                 default=suggested,
             )
         ]
         if not item.get("source_card"):
-            fields.append(field("true_source", "补充裁定实际真凶", "select", role_options()))
+            fields.append(
+                field(
+                    "true_source",
+                    "补充裁定实际真凶（可不选）",
+                    "select",
+                    role_options(),
+                    required=False,
+                )
+            )
     elif kind == "evidence":
         fields = [
             field(

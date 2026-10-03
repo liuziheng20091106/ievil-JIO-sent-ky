@@ -33,26 +33,6 @@ class SystemClock:
         time.sleep(seconds)
 
 
-# 服务端的裁定报错文案用的是角色中文名（例如「名单必须包含汉娜」）；
-# 修正名单时要把文案里点名的角色翻译回角色 id。
-NAMED_ROLES = {
-    "艾玛": "emma",
-    "希罗": "hiro",
-    "汉娜": "hanna",
-    "雪莉": "sherry",
-    "梅露露": "meruru",
-    "诺亚": "noah",
-    "安安": "annan",
-    "米莉亚": "millia",
-    "可可": "coco",
-    "奈乃香": "nanoka",
-    "亚里沙": "arisa",
-    "玛格": "marg",
-    "蕾雅": "leia",
-    "穗乃香": "honoka",
-}
-
-
 @dataclass
 class SeatActor:
     seat_id: str
@@ -152,7 +132,7 @@ class HostBrain:
             try:
                 host.open_join(True)
                 return "room.open_join"
-            except (VersionConflict, ProtocolError):
+            except VersionConflict, ProtocolError:
                 return None
         return None
 
@@ -189,8 +169,7 @@ class HostBrain:
 
         默认值全部取行动描述里的 ``default``，也就是主持人界面上预填的那一项；
         这样做不是「自动通过」，而是复现主持人点确认时最省事的那条路径。
-        个别字段的默认值在服务端并不总是合法（疑似凶手名单必须同时包含真凶与
-        汉娜，且「不列入蕾雅」只在蕾雅是魔女时才成立），这里显式改成满足约束的值。
+        疑似凶手名单只采用预填建议，不额外修正主持人选定的角色或人数。
         """
         action_id = task["action"]
         payload = dict(task["payload"])
@@ -224,27 +203,7 @@ class HostBrain:
                 if len(options) < want:
                     return None
                 payload[item["name"]] = options[:want]
-        size = next(
-            (item.get("min") for item in descriptor["fields"] if item["name"] == "suspects"),
-            None,
-        ) or len(payload.get("suspects") or []) or 3
-        self._fix_suspects(payload, size)
         return self._submit_resolution(host, action_id, payload)
-
-    def _fix_suspects(self, payload, size):
-        """把疑似凶手名单修正为合法人数（汉娜在场 4 人、否则 3 人），并保留必填成员。"""
-        suspects = payload.get("suspects")
-        if not isinstance(suspects, list):
-            return
-        killer = payload.get("true_source")
-        required = [role for role in ("hanna", killer) if role]
-        chosen = list(dict.fromkeys([*required, *suspects]))
-        for candidate in ("leia", "emma", "hiro", "sherry", "meruru", "noah"):
-            if len(chosen) >= size:
-                break
-            if candidate not in chosen:
-                chosen.append(candidate)
-        payload["suspects"] = chosen[:size]
 
     def _submit_resolution(self, host, action_id, payload):
         try:
@@ -256,26 +215,7 @@ class HostBrain:
             return "refresh"
         except ProtocolError as error:
             self.log.append(f"裁定被拒 {action_id}: {error.detail}")
-            return self._repair(host, action_id, payload, error)
-
-    def _repair(self, host, action_id, payload, error):
-        """裁定被拒时按服务端文案做最小修正，再试一次。
-
-        服务的裁定默认值并不总是合法（例如「裁定魔女蕾雅不入名单」只在蕾雅确实
-        是魔女时才能勾选；名单要求同时包含真凶与汉娜）。这里只处理已知的、
-        可判定的冲突，其余仍然报错，避免把真正的规则缺陷掩盖成「自动重试」。
-        """
-        detail = error.detail or ""
-        if action_id != "host.resolve":
             return None
-        if "名单必须包含" in detail and isinstance(payload.get("suspects"), list):
-            named = [role_id for name, role_id in NAMED_ROLES.items() if name in detail]
-            if named:
-                suspects = [*named, *payload["suspects"]]
-                size = 4 if "hanna" in suspects else 3
-                fixed = {**payload, "suspects": list(dict.fromkeys(suspects))[:size]}
-                return self._submit_resolution(host, action_id, fixed)
-        return None
 
 
 class Roster:
@@ -463,11 +403,11 @@ class Simulation:
             except ProtocolError as error:
                 if error.status != 422:
                     raise
-                self.note(f"{actor.seat_id}号：{decision.action} 被拒（{error.detail}），刷新后重试")
+                self.note(
+                    f"{actor.seat_id}号：{decision.action} 被拒（{error.detail}），刷新后重试"
+                )
                 continue
-        raise RuntimeError(
-            f"{actor.seat_id}号连续提交被拒：{last}（停在 {client.view['phase']}）"
-        )
+        raise RuntimeError(f"{actor.seat_id}号连续提交被拒：{last}（停在 {client.view['phase']}）")
 
     def _await_auto_advance(self):
         """系统自己在 5 秒内推进的阶段，等它一下而不是报卡死。

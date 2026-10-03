@@ -836,15 +836,13 @@ def resolve_pending(game, events, data):
             game, events, data["text"], [item["seat_id"]], "主持人裁定信息", item.get("image_id")
         )
     elif kind == "suspects":
-        suspects = data["suspects"]
+        suspects = data.get("suspects") or []
         source = item.get("source_card") or data.get("true_source")
         shown_source = (
             game["cards"][source]["states"].get("display_killer", source) if source else None
         )
-        require(not hanna.witness_extra(game) or "hanna" in suspects, "名单必须包含在场的汉娜")
-        require(not shown_source or shown_source in suspects, "名单必须包含技能处理后的真凶")
         if not item.get("truthful", True):
-            # 死者中毒、目击信息骰失败：主持人照常填含真凶的完整名单，发出去的是假名单。
+            # 目击信息骰失败时换掉入选的显示真凶；主持人已省略真凶的名单保持原样。
             suspects = false_witness(game, suspects, shown_source)
         honoka.queue_witness(game, events, item, suspects)
     elif kind == "evidence":

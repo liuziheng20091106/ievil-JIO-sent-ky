@@ -21,6 +21,7 @@ from backend.app.game.actions import (
     outstanding_seats,
     seat_options,
 )
+from backend.app.game.catalog import ROLES
 from backend.app.game.engine import enter_execution, expire_warnings, open_vote, timeout_seat
 from backend.app.game.resolution import (
     begin_night,
@@ -739,23 +740,29 @@ class ResolutionEdges(unittest.TestCase):
         command(game, HOST, "host.confirm_winner", {"confirm": True})
         self.assertEqual(game_view(game, HOST)["result"]["winner"], "witch")
 
-    def test_host_supplied_killer_must_appear_in_witness_list(self):
-        game = arranged_game("night_results", "night")
-        item = pending(game, "suspects", "目击裁定", seat_id="1", victim="millia", source_card=None)
-        # 汉娜沉在3号席下层、不在场：名单是基础三人，主持人补选的真凶必须在这三人里。
-        data = {
-            "pending_id": item["id"],
-            "true_source": "nanoka",
-            "suspects": ["hanna", "emma", "coco"],
-        }
-        with self.assertRaises(GameError):
-            command(game, HOST, "host.resolve", data)
-        data["suspects"] = ["hanna", "emma", "nanoka"]
-        command(game, HOST, "host.resolve", data)
-        self.assertTrue(game_view(game, player(game, "1"))["information"])
-        # 他人信息里没有这份目击名单；开局告知的魔女化命运属公开规则，不算泄露。
-        others = game_view(game, player(game, "2"))["information"]
-        self.assertFalse([item for item in others if item["title"] != "魔女化命运"])
+    def test_host_witness_list_can_omit_known_or_supplied_killer(self):
+        for source in (None, "nanoka", "noah"):
+            with self.subTest(source=source):
+                game = arranged_game("night_results", "night")
+                game["cards"]["noah"]["states"]["display_killer"] = "nanoka"
+                item = pending(
+                    game, "suspects", "目击裁定", seat_id="1", victim="millia", source_card=source
+                )
+                suspects = ["hanna", "emma", "coco"]
+                data = {"pending_id": item["id"], "suspects": suspects}
+                if source is None:
+                    data["true_source"] = "nanoka"
+                command(game, HOST, "host.resolve", data)
+                text = "三名疑似凶手：" + "、".join(ROLES[role]["name"] for role in suspects)
+                self.assertEqual(game["witness"]["text"], text)
+                information = game_view(game, player(game, "1"))["information"]
+                self.assertEqual(
+                    [entry["text"] for entry in information if entry["title"] == "夜间目击名单"],
+                    [text],
+                )
+                self.assertNotIn(item["id"], [entry["id"] for entry in game["pending"]])
+                others = game_view(game, player(game, "2"))["information"]
+                self.assertFalse([entry for entry in others if entry["title"] == "夜间目击名单"])
 
     def test_poisoned_victims_witness_list_hides_the_killer_half_the_time(self):
         """死者中毒时目击是中毒信息：信息骰失败给出不含真凶的名单，生效才含真凶。"""
@@ -3457,70 +3464,22 @@ class RuleRevisions(unittest.TestCase):
         command(game, HOST, "host.advance")
         self.assertNotIn("interrupted_speaker", game["public"])
 
-    def test_witness_form_does_not_require_an_absent_hanna(self):
-        game = arranged_game("night_review", "night")
-        game["seats"][2]["cards"] = ["meruru", "hanna"]  # 汉娜在下层，尚未登场
-        item = pending(
-            game, "suspects", "填写名单", seat_id="2", victim="meruru", source_card="coco"
-        )
-        # 汉娜不是3号席的当前牌：名单是基础三人，也不必把汉娜塞进去。
-        command(
-            game,
-            HOST,
-            "host.resolve",
-            {"pending_id": item["id"], "suspects": ["coco", "emma", "leia"]},
-        )
-        self.assertIsNotNone(game["witness"])
-        self.assertNotIn("汉娜", game["witness"]["text"])
-
-    def test_witness_form_default_fill_prefers_present_roles(self):
-        game = arranged_game("night_review", "night")
-        # 第4席（玛格+雪莉）整席出局，汉娜沉在第3席下层：三名角色都不在场。
-        for cid in ("marg", "sherry"):
-            game["cards"][cid]["alive"] = False
-        item = pending(
-            game, "suspects", "填写名单", seat_id="2", victim="meruru", source_card="coco"
-        )
-        form = next(
-            a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"]
-        )
-        default = form["fields"][0]["default"]
-        self.assertEqual(len(default), 3)
-        # 真凶必勾；补位只勾当前在场角色（按魔典顺序）：
-        # 出局的玛格、雪莉与未登场的汉娜都不进默认勾选。
-        self.assertEqual(default[0], "coco")
-        for absent in ("marg", "sherry", "hanna"):
-            self.assertNotIn(absent, default)
-
-    def test_witness_form_requires_hanna_when_she_is_present(self):
-        """汉娜成为当前牌时名单扩到四人，且服务端强制把她留在名单里。"""
-        game = arranged_game("night_review", "night")
-        game["seats"][2]["cards"] = ["hanna", "meruru"]
-        item = pending(
-            game, "suspects", "填写名单", seat_id="2", victim="hanna", source_card="coco"
-        )
-        form = next(
-            a for a in actions_for(game, HOST) if a["payload"].get("pending_id") == item["id"]
-        )
-        suspects = next(field for field in form["fields"] if field["name"] == "suspects")
-        self.assertEqual((suspects["min"], suspects["max"]), (4, 4))
-        self.assertIn("hanna", suspects["default"])
-        # 四人口径里漏掉汉娜会被拒。
-        with self.assertRaises(GameError):
-            command(
-                game,
-                HOST,
-                "host.resolve",
-                {"pending_id": item["id"], "suspects": ["coco", "emma", "leia"]},
-            )
-        command(
-            game,
-            HOST,
-            "host.resolve",
-            {"pending_id": item["id"], "suspects": ["hanna", "coco", "emma", "leia"]},
-        )
-        self.assertTrue(game["witness"]["text"].startswith("四名疑似凶手："))
-        self.assertIn("汉娜", game["witness"]["text"])
+    def test_host_can_submit_any_witness_count_without_present_hanna(self):
+        for suspects in ([], ["emma"], ["emma", "leia", "marg", "noah", "sherry"]):
+            with self.subTest(suspects=suspects):
+                game = arranged_game("night_review", "night")
+                game["seats"][2]["cards"] = ["hanna", "meruru"]
+                item = pending(
+                    game, "suspects", "填写名单", seat_id="2", victim="hanna", source_card=None
+                )
+                command(
+                    game, HOST, "host.resolve", {"pending_id": item["id"], "suspects": suspects}
+                )
+                names = game["witness"]["text"].partition("：")[2]
+                self.assertEqual(
+                    names.split("、") if names else [], [ROLES[role]["name"] for role in suspects]
+                )
+                self.assertNotIn(item["id"], [entry["id"] for entry in game["pending"]])
 
     def test_nominating_during_voting_refreshes_the_candidate_list(self):
         game = arranged_game("voting", "day")
