@@ -19,7 +19,6 @@ SPEC.loader.exec_module(SAMPLES)
 fixed = SAMPLES.fixed
 animated = SAMPLES.animated
 transforms = SAMPLES.transforms
-polygon = SAMPLES.polygon
 image_layer = SAMPLES.image_layer
 shape_layer = SAMPLES.shape_layer
 composition = SAMPLES.composition
@@ -106,14 +105,6 @@ def extract_shatter(source, output):
                 webp(image, output / f"shatter-{index:02d}.webp")
 
 
-def mask(layer, points):
-    layer["hasMask"] = True
-    layer["masksProperties"] = [
-        {"inv": False, "mode": "a", "pt": fixed(polygon(points)), "o": fixed(100), "x": fixed(0)}
-    ]
-    return layer
-
-
 def text_layer(name, value, size, y, color, index):
     # Use the same local font/document layout as the existing skill sample.
     return {
@@ -164,7 +155,7 @@ def text_layer(name, value, size, y, color, index):
     }
 
 
-def build(scripts, name, title, skill, color, source_folder, prefix, glass, movie, alternate=None):
+def build(scripts, name, title, skill, color, source_folder, prefix, movie, alternate=None):
     directory = scripts / "images" / name
     directory.mkdir(parents=True, exist_ok=True)
     for index in range(1, 4):
@@ -175,21 +166,17 @@ def build(scripts, name, title, skill, color, source_folder, prefix, glass, movi
                 source_folder / f"{alternate}_{index:03d}.png",
                 directory / f"portrait-ex-{index}.webp",
             )
-    with Image.open(source_folder / glass) as original:
-        band = original.convert("RGBA")
-        band.thumbnail((960, 540), Image.Resampling.LANCZOS)
-    webp(band, directory / "stained-glass.webp")
     extract_shatter(movie, directory)
     for expression in range(1, 4):
-        build_script(scripts, name, title, skill, color, expression, band.size)
+        build_script(scripts, name, title, skill, color, expression)
     (scripts / f"{name}.json").unlink(missing_ok=True)
 
 
-def build_script(scripts, name, title, skill, color, expression, band_size):
+def build_script(scripts, name, title, skill, color, expression):
     directory = scripts / "images" / name
+    (directory / "stained-glass.webp").unlink(missing_ok=True)
     assets = [
         bitmap("skill-portrait", f"portrait-{expression}.webp", SLOT, name),
-        bitmap("stained-glass", "stained-glass.webp", band_size, name),
     ]
 
     layers = []
@@ -230,6 +217,22 @@ def build_script(scripts, name, title, skill, color, expression, band_size):
         )
     )
     # Lottie draws earlier layers on top: shatter stays behind all portrait poses.
+    glass_position = animated(
+        [(0, [2150, 130, 0]), (10, [0, 0, 0]), (91, [0, 0, 0]), (106, [-2180, -90, 0])]
+    )
+    glass_opacity = animated([(0, 0), (8, 100), (91, 100), (106, 0)])
+    layers.append(
+        image_layer(
+            "shatter-intro",
+            len(layers) + 1,
+            "shatter-00",
+            glass_position,
+            (0, 0),
+            glass_opacity,
+            scale=fixed([200, 200, 100]),
+            op=SHATTER_START,
+        )
+    )
     for frame in range(31):
         asset_id = f"shatter-{frame:02d}"
         assets.append(bitmap(asset_id, f"{asset_id}.webp", (960, 540), name))
@@ -238,43 +241,22 @@ def build_script(scripts, name, title, skill, color, expression, band_size):
                 asset_id,
                 len(layers) + 1,
                 asset_id,
+                glass_position,
                 (0, 0),
-                (0, 0),
-                fixed(100),
+                glass_opacity,
                 scale=fixed([200, 200, 100]),
                 ip=SHATTER_START + frame,
-                op=SHATTER_START + frame + 1,
+                op=END if frame == 30 else SHATTER_START + frame + 1,
             )
         )
 
-    band_position = animated(
-        [
-            (0, [2150, 130, 0]),
-            (9, [0, 130, 0]),
-            (59, [-36, 118, 0]),
-            (91, [-36, 118, 0]),
-            (106, [-2180, -90, 0]),
-        ]
-    )
-    band_layer = image_layer(
-        "stained-glass-band",
-        len(layers) + 1,
-        "stained-glass",
-        band_position,
-        (0, 0),
-        animated([(0, 0), (7, 100), (91, 100), (106, 0)]),
-        scale=fixed([200, 200, 100]),
-        op=END,
-    )
-    mask(band_layer, [[0, 100], [960, 5], [960, 335], [0, 415]])
-    layers.append(band_layer)
     layers.append(
         shape_layer(
             "colored-title-band",
             len(layers) + 1,
             [[-100, 462], [1920, 245], [1920, 840], [-100, 1055]],
             [component * 0.2 for component in color[:3]] + [1],
-            transforms(band_position, opacity=animated([(0, 0), (8, 92), (91, 92), (106, 0)])),
+            transforms(glass_position, opacity=animated([(0, 0), (8, 92), (91, 92), (106, 0)])),
             op=END,
         )
     )
@@ -324,7 +306,6 @@ def main():
         [0.83, 0.3, 0.6, 1],
         source / "assets-Ema",
         "RefuteCutIn_Ema",
-        "RefuteCutIn_StainedGlass_001.png",
         source / "assets-Ema" / "\u7834\u788efinal\u53cd\u827e\u739b.mov",
     )
     build(
@@ -335,7 +316,6 @@ def main():
         [0.86, 0.12, 0.22, 1],
         source / "assets-hiro",
         "Hiro_CutIn",
-        "Hiro_CutIn_StainedGlass_001.png",
         source / "\u7834\u788efinal\u53cd.mov",
         "Hiro_C",
     )
