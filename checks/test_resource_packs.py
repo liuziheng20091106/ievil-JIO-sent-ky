@@ -1,5 +1,6 @@
 """Isolated publication, integrity and public download boundaries."""
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -65,7 +67,7 @@ class ResourcePacks(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
 
-            def log_message(self, *_):
+            def log_message(self, format, *args):
                 pass
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -289,6 +291,7 @@ class ResourcePacks(unittest.TestCase):
             self.client.get("/api/resources/animation/files/frame.png").status_code, 404
         )
 
+    @patch.object(resources_api.ResourceDownload, "active_downloads", 3)
     def test_redirect_downloads_preserve_boundaries_and_read_configuration_fresh(self):
         valid = self.publish()
         digest = valid["files"][0]["md5"]
@@ -373,6 +376,7 @@ class ResourcePacks(unittest.TestCase):
         self.assertEqual(response.content, b"frame")
         self.assertNotIn("location", response.headers)
 
+    @patch.object(resources_api.ResourceDownload, "active_downloads", 3)
     def test_remote_missing_falls_back_then_recovers_and_caches_available_urls(self):
         valid = self.publish()
         digest = valid["files"][0]["md5"]
@@ -384,20 +388,20 @@ class ResourcePacks(unittest.TestCase):
         )
         url = "/api/resources/animation/files/frame.png"
         self.record_uploads([f"{base_url}/resources/{digest}"], valid["files"][0])
-        for status in (404, 403, 503):
+        for status in (404, 403, 502, 503):
             with self.subTest(remote_status=status):
                 remote_responses[f"/resources/{digest}"] = (status, b"unavailable")
                 response = self.client.get(url, follow_redirects=False)
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.content, b"frame")
                 self.assertNotIn("location", response.headers)
-        self.assertEqual(requests, [f"/resources/{digest}"] * 3)
+        self.assertEqual(requests, [f"/resources/{digest}"] * 4)
         remote_responses[f"/resources/{digest}"] = (200, b"frame")
         for _ in range(2):
             response = self.client.get(url, follow_redirects=False)
             self.assertEqual(response.status_code, 302)
             self.assertEqual(response.headers["location"], f"{base_url}/resources/{digest}")
-        self.assertEqual(requests, [f"/resources/{digest}"] * 4)
+        self.assertEqual(requests, [f"/resources/{digest}"] * 5)
         configuration.write_text(
             json.dumps({"base_url": f"{base_url}/new-prefix"}), encoding="utf-8"
         )
@@ -405,7 +409,7 @@ class ResourcePacks(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"frame")
         self.assertNotIn("location", response.headers)
-        self.assertEqual(requests, [f"/resources/{digest}"] * 4)
+        self.assertEqual(requests, [f"/resources/{digest}"] * 5)
         self.record_uploads([f"{base_url}/new-prefix/{digest}"], valid["files"][0])
         response = self.client.get(url, follow_redirects=False)
         self.assertEqual(response.status_code, 200)
@@ -416,6 +420,7 @@ class ResourcePacks(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["location"], f"{base_url}/new-prefix/{digest}")
 
+    @patch.object(resources_api.ResourceDownload, "active_downloads", 3)
     def test_unrecorded_upload_never_probes_cdn_even_with_cached_success(self):
         valid = self.publish()
         entry = valid["files"][0]
@@ -455,6 +460,114 @@ class ResourcePacks(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"frame")
         self.assertEqual(requests, [f"/resources/{digest}"])
+
+    def test_three_active_transfers_stay_local_fourth_redirects_and_cancel_releases_slot(self):
+        manifest = self.publish()
+        digest = manifest["files"][0]["md5"]
+        metadata = packs.build_archive(self.root, "animation", self.root / "resource-archives")
+        base_url, requests = self.start_remote({f"/resources/{digest}": (200, b"frame")})
+        (self.root / "resource-downloads.json").write_text(
+            json.dumps({"base_url": f"{base_url}/resources"}), encoding="utf-8"
+        )
+        self.record_uploads([f"{base_url}/resources/{digest}"], manifest["files"][0])
+        file_url = "/api/resources/animation/files/frame.png"
+        zip_url = f"/api/resources/animation/archive/files/{metadata['md5']}.zip"
+
+        async def scenario():
+            app = FastAPI()
+            app.include_router(resources_api.router)
+
+            async def request(path, started=None, release=None):
+                messages = []
+
+                async def receive():
+                    return {"type": "http.request", "body": b"", "more_body": False}
+
+                async def send(message):
+                    messages.append(message)
+                    if message["type"] == "http.response.body" and message.get("body") and release:
+                        assert started is not None
+                        started.set()
+                        await release.wait()
+
+                scope = {
+                    "type": "http",
+                    "asgi": {"version": "3.0", "spec_version": "2.4"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": path,
+                    "raw_path": path.encode(),
+                    "query_string": b"",
+                    "root_path": "",
+                    "headers": [],
+                    "server": ("localhost", 80),
+                    "client": ("localhost", 1),
+                }
+                await app(scope, receive, send)
+                return messages
+
+            starts = [asyncio.Event() for _ in range(3)]
+            releases = [asyncio.Event() for _ in range(3)]
+            tasks = [
+                asyncio.create_task(request(path, starts[index], releases[index]))
+                for index, path in enumerate((file_url, file_url, zip_url))
+            ]
+            try:
+                await asyncio.wait_for(asyncio.gather(*(event.wait() for event in starts)), 5)
+                self.assertEqual(resources_api.ResourceDownload.active_downloads, 3)
+                self.assertEqual(requests, [])
+                fourth = await request(file_url)
+                self.assertEqual(fourth[0]["status"], 302)
+                self.assertEqual(requests, [f"/resources/{digest}"])
+                self.assertEqual(resources_api.ResourceDownload.active_downloads, 3)
+                tasks[0].cancel()
+                await asyncio.gather(tasks[0], return_exceptions=True)
+                self.assertEqual(resources_api.ResourceDownload.active_downloads, 2)
+                next_response = await request(file_url)
+                self.assertEqual(next_response[0]["status"], 200)
+                self.assertEqual(
+                    b"".join(item.get("body", b"") for item in next_response), b"frame"
+                )
+                self.assertEqual(requests, [f"/resources/{digest}"])
+            finally:
+                for event in releases:
+                    event.set()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            self.assertEqual(resources_api.ResourceDownload.active_downloads, 0)
+
+        asyncio.run(scenario())
+
+    def test_archive_publication_integrity_and_snapshot_survives_manifest_update(self):
+        manifest = self.publish()
+        directory = self.root / "resource-archives"
+        metadata = packs.build_archive(self.root, "animation", directory)
+        response = self.client.get("/api/resources/animation/archive")
+        self.assertEqual(response.status_code, 200)
+        descriptor = response.json()
+        self.assertEqual(descriptor["version"], manifest["version"])
+        response = self.client.get(descriptor["url"], follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(hashlib.md5(response.content).hexdigest(), metadata["md5"])
+        with zipfile.ZipFile(directory / f"{metadata['md5']}.zip") as archive:
+            self.assertEqual(set(archive.namelist()), {"manifest.json", "frame.png"})
+            self.assertEqual(json.loads(archive.read("manifest.json")), manifest)
+            self.assertEqual(archive.read("frame.png"), b"frame")
+        (self.root / "animation" / "frame.png").write_bytes(b"fresh")
+        latest = self.publish()
+        self.assertNotEqual(latest["version"], manifest["version"])
+        self.assertEqual(self.client.get(descriptor["url"]).content, response.content)
+        (self.root / "animation" / "frame.png").write_bytes(b"stale")
+        with self.assertRaises(packs.ManifestError):
+            packs.build_archive(self.root, "animation", directory)
+        self.assertEqual(packs.load_archive(directory, "animation"), metadata)
+        self.assertEqual(self.client.get("/api/resources/unknown/archive").status_code, 404)
+        self.assertEqual(
+            self.client.get("/api/resources/animation/archive/files/not-a-hash.zip").status_code,
+            404,
+        )
+        (directory / f"{metadata['md5']}.zip").write_bytes(b"truncated")
+        self.assertEqual(self.client.get(descriptor["url"]).status_code, 503)
 
     def test_corrupt_metadata_fails_closed_and_is_read_fresh(self):
         valid = self.publish()

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Upload published resource contents to R2 under immutable MD5 object keys."""
+"""Build resource ZIPs and upload resource contents under immutable MD5 object keys."""
 
 import argparse
 import importlib.util
 import json
 import mimetypes
+import os
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
@@ -18,6 +21,7 @@ from backend.app import storage  # noqa: E402
 from backend.app.resource_packs import (  # noqa: E402
     PACKS,
     RESOURCES_DIR,
+    build_archive,
     load_manifest,
     load_upload_log,
     media_file,
@@ -27,6 +31,47 @@ spec = importlib.util.spec_from_file_location("package_release", ROOT / "tools/p
 assert spec is not None and spec.loader is not None
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+
+def cache_config(values):
+    token = os.environ.get("CF_API_TOKEN", "").strip() or (values.get("CF_API_TOKEN") or "").strip()
+    zone = os.environ.get("CF_ZONE_ID", "").strip() or (values.get("CF_ZONE_ID") or "").strip()
+    if not token and not zone:
+        return None
+    if not token or not zone:
+        raise release.ReleaseError("CF_API_TOKEN 和 CF_ZONE_ID 必须同时配置")
+    if any(char in token for char in "\r\n"):
+        raise release.ReleaseError("CF_API_TOKEN 配置无效")
+    return token, zone
+
+
+def purge_url(values, config, url):
+    token, zone = config
+    endpoint = (
+        "https://api.cloudflare.com/client/v4/zones/"
+        f"{urllib.parse.quote(zone, safe='')}/purge_cache"
+    )
+    try:
+        status, _, body = release.request_once(
+            endpoint,
+            "POST",
+            data=json.dumps({"files": [url]}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            timeout=release.timeout_of(values),
+            read_body=True,
+        )
+    except urllib.error.HTTPError as error:
+        status = error.code
+        error.close()
+        raise release.ReleaseError(f"Cloudflare URL 清缓存失败：HTTP {status}") from None
+    except OSError:
+        raise release.ReleaseError("Cloudflare URL 清缓存请求失败") from None
+    try:
+        result = json.loads(body)
+    except ValueError:
+        raise release.ReleaseError("Cloudflare URL 清缓存响应无效") from None
+    if status != 200 or not isinstance(result, dict) or result.get("success") is not True:
+        raise release.ReleaseError("Cloudflare 未接受 URL 清缓存请求")
 
 
 def main():
@@ -44,54 +89,61 @@ def main():
         raise ValueError("Resource object prefix is invalid")
     values = release.load_env(args.env)
     release.check_config(values, args.env)
+    cache = cache_config(values)
+    if cache is None:
+        print("未配置未清缓存", flush=True)
     log_path = storage.DATA_DIR / "resource-uploads.json"
-    upload_log = load_upload_log(log_path)
+    load_upload_log(log_path)
     log_lock = Lock()
     files = {}
+    archive_dir = storage.DATA_DIR / "resource-archives"
     for pack in PACKS:
         manifest = load_manifest(args.resources_dir, pack)
         for entry in manifest["files"]:
             file = media_file(args.resources_dir / pack, entry["path"], pack)
             if file.stat().st_size != entry["size"] or release.md5_file(file) != entry["md5"]:
                 raise ValueError(f"Published resource changed: {pack}/{entry['path']}")
-            files.setdefault(entry["md5"], (file, entry["size"]))
+            files.setdefault(entry["md5"], (file, entry["size"], f"{pack}/{entry['path']}"))
+        archive = build_archive(args.resources_dir, pack, archive_dir)
+        files[archive["md5"]] = (
+            archive_dir / f"{archive['md5']}.zip",
+            archive["size"],
+            f"archives/{pack}.zip",
+        )
     print(
         f"Uploading {len(files)} unique resources to {values['S3_PUBLIC_BASE']}/{prefix}",
         flush=True,
     )
 
     def publish(item):
-        digest, (file, size) = item
+        digest, (file, size, path) = item
         key = f"{prefix}/{digest}"
-        url = release.object_url(values, key)
-        sha256 = release.sha256_file(file)
         headers = {
-            "Content-Type": mimetypes.guess_type(file.name)[0] or "application/octet-stream",
+            "Content-Type": (
+                "application/zip"
+                if path.startswith("archives/")
+                else mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+            ),
             "Cache-Control": "public, max-age=31536000, immutable",
         }
+        if path.startswith("archives/"):
+            headers["Content-Disposition"] = f'attachment; filename="{Path(path).name}"'
 
-        def put():
-            # ponytail: single PUT holds one file per worker; use multipart for large video packs.
-            with file.open("rb") as stream:
-                return release._signed_request(
-                    values,
-                    "PUT",
-                    url,
-                    sha256,
-                    headers,
-                    data=stream.read(),
-                    timeout=release.part_timeout_of(values),
-                )
-
-        release.with_retry(put, f"Upload {key}")
-        path = file.relative_to(args.resources_dir).as_posix()
+        release.upload(values, file, key, headers=headers)
         item = {"key": key, "size": size, "md5": digest, "path": path}
         print(f"Verifying {path} -> {key}", flush=True)
-        problems = release.verify_remote(values, [item]) + release.verify_public(values, [item])
+        problems = release.verify_remote(values, [item])
+        if problems:
+            raise ValueError("\n".join(problems))
+        public_url = release.public_url(values, key)
+        if cache is not None:
+            purge_url(values, cache, public_url)
+        problems = release.verify_public(values, [item])
         if problems:
             raise ValueError("\n".join(problems))
         with log_lock:
-            upload_log[release.public_url(values, key)] = {
+            upload_log = load_upload_log(log_path)
+            upload_log[public_url] = {
                 "path": path,
                 "size": size,
                 "md5": digest,

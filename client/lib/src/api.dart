@@ -72,6 +72,12 @@ class GameApi {
         '/api/resources/${Uri.encodeComponent(pack)}/manifest',
       ));
 
+  Future<Map<String, dynamic>> resourceArchive(String pack) async =>
+      jsonObject(await _request(
+        'GET',
+        '/api/resources/${Uri.encodeComponent(pack)}/archive',
+      ));
+
   /// 用户协议（Markdown）：客户端首次连接服务器时展示；服务端未配置时正文为空。
   Future<Agreement> agreement() async =>
       Agreement.fromJson(await _request('GET', '/api/agreement'));

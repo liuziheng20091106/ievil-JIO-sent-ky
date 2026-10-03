@@ -13,6 +13,8 @@ dependencies:
   clock: ^1.1.1
   # 直接使用：登录挑战创建前的工作量证明（见 lib/src/pow.dart 与后端 pow_guard.py）。
   crypto: ^3.0.7
+  archive: ^4.3.0
+  file_picker: 10.3.10
   flutter_secure_storage: ^9.2.4
   lottie: ^3.6.1
   # 直接使用，用于拼接 Windows 上两个插件的存储目录路径（旧数据迁移）。

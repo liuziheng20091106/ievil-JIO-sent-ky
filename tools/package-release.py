@@ -427,13 +427,13 @@ def _signed_request(
     )
 
 
-def _s3_object_put(values: dict, local: Path, key: str) -> None:
+def _s3_object_put(values: dict, local: Path, key: str, *, headers: dict | None = None) -> None:
     """小文件一次性 PUT（Updater.exe 这类）。"""
     url = object_url(values, key)
     size = local.stat().st_size
     payload_hash = sha256_file(local)
     content_type = content_type_of(local)
-    extra = {"Content-Type": content_type}
+    extra = {"Content-Type": content_type, **(headers or {})}
 
     log(f"上传 {key}（{human(size)}）…")
     started = time.monotonic()
@@ -456,7 +456,7 @@ def _s3_object_put(values: dict, local: Path, key: str) -> None:
     log(f"  完成 HTTP {status}，用时 {elapsed:.1f}s（{human(int(speed))}/s）")
 
 
-def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
+def _s3_multipart_put(values: dict, local: Path, key: str, *, headers: dict | None = None) -> None:
     """大文件分片并发上传：8MB/片 × 6 路，单片失败整片重传，不需要断点续传。"""
     url = object_url(values, key)
     size = local.stat().st_size
@@ -473,7 +473,7 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
             "POST",
             url,
             empty,
-            {"Content-Type": content_type},
+            {"Content-Type": content_type, **(headers or {})},
             {"uploads": ""},
             read_body=True,
         )
@@ -587,13 +587,13 @@ def _s3_multipart_put(values: dict, local: Path, key: str) -> None:
         )
 
 
-def upload(values: dict, local: Path, key: str) -> dict:
+def upload(values: dict, local: Path, key: str, *, headers: dict | None = None) -> dict:
     """按大小选上传方式：大文件分片并发，小文件单次 PUT。返回远端元信息。"""
     size = local.stat().st_size
     if size > MULTIPART_THRESHOLD:
-        _s3_multipart_put(values, local, key)
+        _s3_multipart_put(values, local, key, headers=headers)
     else:
-        _s3_object_put(values, local, key)
+        _s3_object_put(values, local, key, headers=headers)
     return {
         "key": key,
         "size": size,

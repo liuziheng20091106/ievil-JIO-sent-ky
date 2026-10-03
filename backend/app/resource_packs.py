@@ -5,6 +5,7 @@ import json
 import math
 import re
 import tempfile
+import zipfile
 from pathlib import Path
 
 PACKS = ("animation", "memes")
@@ -290,6 +291,90 @@ def load_upload_log(path: Path) -> dict:
         for url, entry in value.items()
     ):
         raise ManifestError("Resource upload log is invalid")
+    return value
+
+
+def build_archive(resources_dir: Path, pack: str, archive_dir: Path) -> dict:
+    manifest = load_manifest(resources_dir, pack)
+    directory = pack_directory(resources_dir, pack)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    metadata_temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=archive_dir, suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            manifest_info = zipfile.ZipInfo("manifest.json")
+            manifest_info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(
+                manifest_info,
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            )
+            for entry in manifest["files"]:
+                file = media_file(directory, entry["path"], pack)
+                info = zipfile.ZipInfo(entry["path"])
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o100644 << 16
+                digest = hashlib.md5(usedforsecurity=False)
+                size = 0
+                with file.open("rb") as source, archive.open(info, "w") as target:
+                    while block := source.read(1024 * 1024):
+                        target.write(block)
+                        digest.update(block)
+                        size += len(block)
+                if size != entry["size"] or digest.hexdigest() != entry["md5"]:
+                    raise ManifestError(f"Resource changed while packing: {pack}/{entry['path']}")
+        with temporary.open("rb") as stream:
+            digest = hashlib.file_digest(
+                stream, lambda: hashlib.md5(usedforsecurity=False)
+            ).hexdigest()
+        metadata = {
+            "pack": pack,
+            "version": manifest["version"],
+            "size": temporary.stat().st_size,
+            "md5": digest,
+        }
+        temporary.replace(archive_dir / f"{digest}.zip")
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=archive_dir, suffix=".tmp", delete=False
+        ) as stream:
+            metadata_temporary = Path(stream.name)
+            json.dump(metadata, stream, sort_keys=True)
+            stream.write("\n")
+        metadata_temporary.replace(archive_dir / f"{pack}.json")
+        return metadata
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        if metadata_temporary is not None:
+            metadata_temporary.unlink(missing_ok=True)
+
+
+def load_archive(archive_dir: Path, pack: str) -> dict:
+    if pack not in PACKS:
+        raise FileNotFoundError("Unknown resource pack")
+    metadata_path = archive_dir / f"{pack}.json"
+    if is_link(metadata_path):
+        raise ManifestError("Resource archive metadata must not be a link")
+    try:
+        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (ValueError, RecursionError) as error:
+        raise ManifestError("Invalid resource archive metadata") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"pack", "version", "size", "md5"}
+        or value["pack"] != pack
+        or type(value["size"]) is not int
+        or value["size"] <= 0
+        or any(
+            not isinstance(value[key], str) or not MD5_PATTERN.fullmatch(value[key])
+            for key in ("version", "md5")
+        )
+    ):
+        raise ManifestError("Invalid resource archive metadata")
+    file = archive_dir / f"{value['md5']}.zip"
+    if is_link(file) or file.stat().st_size != value["size"]:
+        raise ManifestError("Resource archive changed; rebuild the archive")
     return value
 
 

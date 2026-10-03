@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 
 import 'api.dart';
 import 'animation_player.dart';
@@ -141,6 +143,8 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
   bool _closed = false;
   String? _active;
   bool _previewing = false;
+  bool _fullArchive = false;
+  bool _importing = false;
 
   @override
   void initState() {
@@ -199,19 +203,29 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
           _progress[pack] = ResourcePackProgress(0, manifest.totalSize, '');
         });
         try {
-          await widget.resources.download(
-            manifest,
-            isCancelled: () => _cancelled || _closed,
-            onProgress: (progress) {
-              if (mounted) setState(() => _progress[pack] = progress);
-            },
-          );
-          if (!mounted) return;
-          setState(() {
-            _checks[pack] = ResourcePackCheck(
-                pack: pack, remote: manifest, local: manifest);
-            _selected.remove(pack);
-          });
+          if (_fullArchive) {
+            final result = await widget.resources.downloadArchive(pack,
+                isCancelled: () => _cancelled || _closed,
+                onProgress: (progress) {
+                  if (mounted) setState(() => _progress[pack] = progress);
+                });
+            if (!mounted) return;
+            _applyInstall(pack, result);
+          } else {
+            await widget.resources.download(
+              manifest,
+              isCancelled: () => _cancelled || _closed,
+              onProgress: (progress) {
+                if (mounted) setState(() => _progress[pack] = progress);
+              },
+            );
+            if (!mounted) return;
+            setState(() {
+              _checks[pack] = ResourcePackCheck(
+                  pack: pack, remote: manifest, local: manifest);
+              _selected.remove(pack);
+            });
+          }
         } catch (error) {
           if (!mounted) return;
           setState(() {
@@ -224,6 +238,63 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
         setState(() {
           _active = null;
           _busy = false;
+        });
+      }
+    }
+  }
+
+  void _applyInstall(String pack, ResourcePackInstallResult result) {
+    setState(() {
+      _checks[pack] = ResourcePackCheck(
+          pack: pack,
+          remote: result.latest,
+          local: result.installed,
+          error: result.syncError);
+      if (result.syncError != null) _failures[pack] = result.syncError!;
+      _selected.remove(pack);
+    });
+  }
+
+  Future<void> _import(String pack) async {
+    if (_busy || _checking) return;
+    setState(() {
+      _busy = true;
+      _importing = true;
+      _cancelled = false;
+      _active = pack;
+      _failures.remove(pack);
+      _progress.remove(pack);
+    });
+    try {
+      final selected = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['zip'],
+          dialogTitle: pack == 'animation' ? '导入动画 ZIP' : '导入表情 ZIP',
+          lockParentWindow: true,
+          withData: false,
+          withReadStream: false);
+      if (selected == null || _cancelled || _closed) return;
+      final path = selected.files.single.path;
+      if (path == null) throw const FormatException('所选 ZIP 无法读取');
+      final result = await widget.resources.importArchive(pack, File(path),
+          isCancelled: () => _cancelled || _closed,
+          onProgress: (progress) {
+            if (mounted) setState(() => _progress[pack] = progress);
+          });
+      if (!mounted) return;
+      _applyInstall(pack, result);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _failures[pack] = _cancelled ? '已取消导入' : '导入失败：$error';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _importing = false;
+          _active = null;
         });
       }
     }
@@ -289,7 +360,12 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
   String _status(String pack) {
     if (_active == pack) {
       if (_cancelled) return '正在取消';
-      return _progress[pack]?.verifying == true ? '正在校验' : '正在下载';
+      final progress = _progress[pack];
+      if (progress?.path == '正在检查最新增量') return '正在检查最新增量';
+      if (progress?.status != null) return progress!.status!;
+      return progress?.verifying == true
+          ? '正在校验'
+          : (_importing ? '正在导入' : '正在下载');
     }
     if (_failures.containsKey(pack)) return _failures[pack]!;
     final check = _checks[pack];
@@ -305,7 +381,8 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
 
   Widget _packRow(String pack) {
     final check = _checks[pack];
-    final downloadable = check?.needsDownload == true;
+    final downloadable =
+        _fullArchive ? check?.remote != null : check?.needsDownload == true;
     final progress = _progress[pack];
     final size = check?.remote?.totalSize ?? check?.local?.totalSize;
     final problem = _failures.containsKey(pack) || check?.error != null;
@@ -354,6 +431,11 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
                     ],
                   ),
                 ),
+              ),
+              IconButton(
+                tooltip: pack == 'animation' ? '导入动画 ZIP' : '导入表情 ZIP',
+                onPressed: _busy || _checking ? null : () => _import(pack),
+                icon: const Icon(Icons.file_open_outlined),
               ),
               if (pack == 'animation')
                 IconButton(
@@ -409,6 +491,29 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('增量下载')),
+                    ButtonSegment(value: true, label: Text('全量 ZIP')),
+                  ],
+                  selected: {_fullArchive},
+                  showSelectedIcon: false,
+                  onSelectionChanged: _busy || _checking
+                      ? null
+                      : (selection) {
+                          setState(() {
+                            _fullArchive = selection.single;
+                            _selected.clear();
+                            for (final check in _checks.values) {
+                              if (_fullArchive
+                                  ? check.remote != null
+                                  : check.needsDownload) {
+                                _selected.add(check.pack);
+                              }
+                            }
+                          });
+                        },
+                ),
                 _packRow('animation'),
                 const Divider(height: 1),
                 _packRow('memes'),
@@ -421,7 +526,7 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
             TextButton(
               onPressed:
                   _cancelled ? null : () => setState(() => _cancelled = true),
-              child: const Text('取消下载'),
+              child: const Text('取消操作'),
             ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),

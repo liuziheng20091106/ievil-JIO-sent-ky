@@ -1,7 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:archive/archive.dart'
+    show
+        ArchiveFile,
+        InputMemoryStream,
+        OutputMemoryStream,
+        ZipDirectory,
+        ZipEncoder;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,12 +36,37 @@ Map<String, dynamic> manifestPayload(
   }).toList();
   return {
     'pack': pack,
-    'version': md5.convert(utf8.encode(jsonEncode(files))).toString(),
+    'version': md5
+        .convert(utf8.encode(jsonEncode([
+          for (final file in files)
+            {'md5': file['md5'], 'path': file['path'], 'size': file['size']},
+        ])))
+        .toString(),
     'total_size': contents.values
         .fold<int>(0, (sum, value) => sum + utf8.encode(value).length),
     'files': files,
   };
 }
+
+Uint8List zipPayload(
+    Map<String, dynamic> manifest, Map<String, String> contents,
+    {List<ArchiveFile> extra = const [], String? password}) {
+  final output = OutputMemoryStream();
+  final encoder = ZipEncoder(password: password)..startEncode(output);
+  encoder.add(
+      ArchiveFile.bytes('manifest.json', utf8.encode(jsonEncode(manifest))));
+  for (final entry in contents.entries) {
+    encoder.add(ArchiveFile.bytes(entry.key, utf8.encode(entry.value)));
+  }
+  for (final entry in extra) {
+    encoder.add(entry);
+  }
+  encoder.endEncode();
+  return output.getBytes();
+}
+
+ZipDirectory zipDirectory(Uint8List bytes) =>
+    ZipDirectory()..read(InputMemoryStream(bytes));
 
 class ResourceApi extends GameApi {
   ResourceApi([String server = 'http://127.0.0.1:19285'])
@@ -44,6 +77,33 @@ class ResourceApi extends GameApi {
   final unpublished = <String>{};
   final failures = <String>{};
   void Function()? afterDownload;
+  final archiveMetadata = <String, Map<String, dynamic>>{};
+  final archiveBodies = <String, Uint8List>{};
+  final archiveRequests = <String>[];
+  final manifestRequests = <String>[];
+
+  void publishArchive(String pack, Map<String, String> files) {
+    final manifest = manifestPayload(pack, files);
+    final bytes = zipPayload(manifest, files);
+    final hash = md5.convert(bytes).toString();
+    archiveBodies[pack] = bytes;
+    archiveMetadata[pack] = {
+      'pack': pack,
+      'version': manifest['version'],
+      'size': bytes.length,
+      'md5': hash,
+      'url': '/api/resources/$pack/archive/files/$hash.zip'
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> resourceArchive(String pack) async {
+    archiveRequests.add(pack);
+    if (!archiveMetadata.containsKey(pack)) {
+      throw const ApiException('ZIP 未发布', statusCode: 404);
+    }
+    return archiveMetadata[pack]!;
+  }
 
   void publish(String pack, Map<String, String> files) {
     manifests[pack] = manifestPayload(pack, files);
@@ -57,6 +117,7 @@ class ResourceApi extends GameApi {
 
   @override
   Future<Map<String, dynamic>> resourceManifest(String pack) async {
+    manifestRequests.add(pack);
     if (failures.contains(pack)) {
       throw const ApiException('不可达', statusCode: 503);
     }
@@ -74,6 +135,14 @@ class ResourceApi extends GameApi {
     bool Function()? isCancelled,
   }) async {
     final parts = Uri.parse(url).pathSegments;
+    if (parts[3] == 'archive') {
+      downloads.add('${parts[2]}/ZIP');
+      final bytes = archiveBodies[parts[2]]!;
+      await target.writeAsBytes(bytes);
+      onProgress?.call(bytes.length, bytes.length);
+      afterDownload?.call();
+      return bytes.length;
+    }
     final key = '${parts[2]}/${parts.skip(4).join('/')}';
     downloads.add(key);
     if (isCancelled?.call() ?? false) throw const ResourceDownloadCancelled();
@@ -127,6 +196,308 @@ void main() {
   tearDown(() async {
     api.close();
     await support.delete(recursive: true);
+  });
+
+  Future<File> localZip(Uint8List bytes) async =>
+      File(p.join(support.path, 'import.zip')).writeAsBytes(bytes);
+
+  test('旧 ZIP 安装后重新获取最新清单，跨包共享缓存只下载差异', () async {
+    api.publish('memes', {'face.png': 'shared'});
+    await cache.download(api.manifest('memes'));
+    final shared = File((await cache.filePath('memes', 'face.png'))!);
+    final modified = DateTime.utc(2001);
+    await shared.setLastModified(modified);
+    const oldFiles = {'a.png': 'shared', 'b.png': 'before'};
+    final old = manifestPayload('animation', oldFiles);
+    final source = await localZip(zipPayload(old, oldFiles));
+    api.publish(
+        'animation', {'a.png': 'shared', 'b.png': 'after', 'c.png': 'shared'});
+    api.downloads.clear();
+    api.manifestRequests.clear();
+    final result = await cache.importArchive('animation', source);
+    expect(result.synchronized, isTrue);
+    expect(result.installed.version, api.manifest('animation').version);
+    expect(api.downloads, ['animation/b.png']);
+    expect(api.manifestRequests.first, 'animation');
+    expect((await shared.lastModified()).toUtc(), modified);
+    expect(await cache.filePath('animation', 'a.png'), shared.path);
+    expect(await cache.filePath('animation', 'c.png'), shared.path);
+    expect(
+        await File((await cache.filePath('animation', 'b.png'))!)
+            .readAsString(),
+        'after');
+  });
+
+  test('全量下载校验 ZIP 元数据，并在安装后补齐最新差异', () async {
+    const oldFiles = {'a.png': 'old'};
+    api.publishArchive('animation', oldFiles);
+    api.publish('animation', {'a.png': 'new'});
+    final phases = <ResourcePackProgress>[];
+    final result =
+        await cache.downloadArchive('animation', onProgress: phases.add);
+    expect(result.synchronized, isTrue);
+    expect(api.downloads, ['animation/ZIP', 'animation/a.png']);
+    expect(phases.any((progress) => progress.verifying), isTrue);
+    expect(phases.any((progress) => progress.path == '正在检查最新增量'), isTrue);
+    expect(
+        await File((await cache.filePath('animation', 'a.png'))!)
+            .readAsString(),
+        'new');
+  });
+
+  test('全量 ZIP 的 404、错误大小、MD5 或版本不回退到增量，也不替换旧映射', () async {
+    final old = api.manifest('animation');
+    await cache.download(old);
+    api.downloads.clear();
+    await expectLater(
+        cache.downloadArchive('animation'),
+        throwsA(isA<ApiException>()
+            .having((error) => error.statusCode, 'status', 404)));
+    expect(api.downloads, isEmpty);
+    for (final field in ['size', 'md5', 'version']) {
+      api.publishArchive('animation', {'next.png': 'new'});
+      final metadata = api.archiveMetadata['animation']!;
+      if (field == 'size') {
+        metadata[field] = (metadata[field] as int) + 1;
+      } else {
+        metadata[field] = '0' * 32;
+        if (field == 'md5') {
+          metadata['url'] =
+              '/api/resources/animation/archive/files/${metadata[field]}.zip';
+        }
+      }
+      await expectLater(
+          cache.downloadArchive('animation'), throwsFormatException);
+      expect((await cache.localManifest('animation'))!.version, old.version);
+    }
+    expect(api.downloads.every((path) => path == 'animation/ZIP'), isTrue);
+  });
+
+  test('离线导入保留验证成功的 ZIP，失败增量不宣称最新也不删另一包', () async {
+    await cache.download(api.manifest('memes'));
+    final meme = await cache.filePath('memes', 'hello.png');
+    const files = {'offline.png': 'safe'};
+    final old = manifestPayload('animation', files);
+    final source = await localZip(zipPayload(old, files));
+    api.failures.addAll(resourcePackNames);
+    final result = await cache.importArchive('animation', source);
+    expect(result.synchronized, isFalse);
+    expect(result.latest, isNull);
+    expect(result.syncError, contains('ZIP 已安装'));
+    expect(result.syncError, contains('未确认最新'));
+    expect((await cache.localManifest('animation'))!.version, old['version']);
+    expect(
+        await File((await cache.filePath('animation', 'offline.png'))!)
+            .readAsString(),
+        'safe');
+    expect(await File(meme!).readAsString(), 'meme');
+    api.failures.clear();
+    api.publish('animation', {'offline.png': 'next'});
+    api.contents['animation/offline.png'] = 'oops';
+    final failed = await cache.importArchive('animation', source);
+    expect(failed.synchronized, isFalse);
+    expect(failed.latest!.version, api.manifest('animation').version);
+    expect(failed.installed.version, old['version']);
+    expect(
+        await File((await cache.filePath('animation', 'offline.png'))!)
+            .readAsString(),
+        'safe');
+  });
+
+  test('ZIP 穿越、未列出文件、重复、链接、目录与坏内容均保持原映射及缓存', () async {
+    final old = api.manifest('animation');
+    await cache.download(old);
+    final oldPath = (await cache.filePath('animation', '角色/EX/1.png'))!;
+    const files = {'a.png': 'next', 'b.png': 'good'};
+    final next = manifestPayload('animation', files);
+    final symlink = ArchiveFile.bytes('a.png', utf8.encode('next'))
+      ..mode = 0xa1ff;
+    final cases = <Uint8List>[
+      zipPayload(next, files,
+          extra: [ArchiveFile.string('../outside.png', 'bad')]),
+      zipPayload(next, files,
+          extra: [ArchiveFile.string('outside.png', 'bad')]),
+      zipPayload(next, files, extra: [ArchiveFile.string('a.png', 'next')]),
+      zipPayload(next, files, extra: [ArchiveFile.string('A.png', 'next')]),
+      zipPayload(next, {'b.png': 'good'}, extra: [symlink]),
+      zipPayload(next, files, extra: [ArchiveFile.directory('folder/')]),
+      zipPayload(next, {'a.png': 'next', 'b.png': 'oops'}),
+      zipPayload(next, {'a.png': 'next', 'b.png': 'longer'}),
+      zipPayload(manifestPayload('memes', files), files),
+      zipPayload({...next, 'version': '0' * 32}, files),
+      zipPayload(next, files, password: 'secret'),
+      zipPayload(
+          manifestPayload('animation', {'scripts/../../outside.json': '{}'}),
+          {'scripts/../../outside.json': '{}'}),
+    ];
+    for (final bytes in cases) {
+      await expectLater(cache.importArchive('animation', await localZip(bytes)),
+          throwsFormatException);
+      expect((await cache.localManifest('animation'))!.version, old.version);
+      expect(await File(oldPath).readAsString(), 'good');
+      expect(await cache.filePath('animation', 'a.png'), isNull);
+      expect(
+          await File(p.join(cache.directory.path,
+                  md5.convert(utf8.encode('next')).toString()))
+              .exists(),
+          isFalse);
+      expect(await Directory(p.join(cache.directory.path, 'folder')).exists(),
+          isFalse);
+      expect(await File(p.join(support.path, 'outside.png')).exists(), isFalse);
+    }
+  });
+
+  test('ZIP 假小解压炸弹、巨大声明、目录越界与本地中央名称不一致均拒绝', () async {
+    await cache.download(api.manifest('animation'));
+    final version = (await cache.localManifest('animation'))!.version;
+    const files = {'a.png': 'safe'};
+    final payload = manifestPayload('animation', files);
+    final bomb = zipPayload(payload, {'a.png': 'x' * (1024 * 1024)});
+    final bombZip = zipDirectory(bomb);
+    final bombHeader = bombZip.fileHeaders.last;
+    final bombData = ByteData.sublistView(bomb);
+    bombData.setUint32(bombHeader.localHeaderOffset + 22, 4, Endian.little);
+    var central = bombZip.centralDirectoryOffset;
+    for (final header in bombZip.fileHeaders) {
+      if (header.filename == 'a.png') {
+        bombData.setUint32(central + 24, 4, Endian.little);
+      }
+      central += 46 +
+          utf8.encode(header.filename).length +
+          (header.extraField?.length ?? 0) +
+          utf8.encode(header.fileComment).length;
+    }
+    final giant = zipPayload(payload, files);
+    final giantZip = zipDirectory(giant);
+    ByteData.sublistView(giant).setUint32(giantZip.centralDirectoryOffset + 24,
+        256 * 1024 * 1024 + 1, Endian.little);
+    final outside = zipPayload(payload, files);
+    ByteData.sublistView(outside)
+        .setUint32(outside.length - 6, outside.length, Endian.little);
+    final renamed = zipPayload(payload, files);
+    final localHeader = zipDirectory(renamed).fileHeaders.last;
+    renamed[localHeader.localHeaderOffset + 30] = 'b'.codeUnitAt(0);
+    for (final bytes in [bomb, giant, outside, renamed]) {
+      await expectLater(cache.importArchive('animation', await localZip(bytes)),
+          throwsFormatException);
+      expect((await cache.localManifest('animation'))!.version, version);
+    }
+  });
+
+  test('ZIP 导入校验可取消；ZIP 安装后取消增量仍保留可用安装', () async {
+    await cache.download(api.manifest('animation'));
+    final old = (await cache.localManifest('animation'))!.version;
+    const files = {'a.png': 'new', 'b.png': 'safe'};
+    final payload = manifestPayload('animation', files);
+    final source = await localZip(zipPayload(payload, files));
+    var cancelled = false;
+    await expectLater(
+        cache.importArchive('animation', source,
+            isCancelled: () => cancelled,
+            onProgress: (progress) {
+              if (progress.path == 'a.png') cancelled = true;
+            }),
+        throwsA(isA<ResourceDownloadCancelled>()));
+    expect((await cache.localManifest('animation'))!.version, old);
+    cancelled = false;
+    final result = await cache.importArchive('animation', source,
+        isCancelled: () => cancelled,
+        onProgress: (progress) {
+          if (progress.path == '正在检查最新增量') cancelled = true;
+        });
+    expect(result.synchronized, isFalse);
+    expect(result.syncError, contains('已取消'));
+    expect(
+        (await cache.localManifest('animation'))!.version, payload['version']);
+    expect(
+        await File((await cache.filePath('animation', 'a.png'))!)
+            .readAsString(),
+        'new');
+  });
+
+  test('增量、全量与导入共享互斥，失败后锁可再次使用', () async {
+    const files = {'a.png': 'new'};
+    final source =
+        await localZip(zipPayload(manifestPayload('animation', files), files));
+    api.publishArchive('animation', files);
+    Future<void>? overlap;
+    final imported =
+        cache.importArchive('animation', source, onProgress: (progress) {
+      overlap ??= () async {
+        await expectLater(cache.download(api.manifest('memes')),
+            throwsA(isA<ApiException>()));
+        await expectLater(
+            cache.downloadArchive('memes'), throwsA(isA<ApiException>()));
+      }();
+    });
+    await imported;
+    await overlap;
+    await cache.downloadArchive('animation');
+    expect((await cache.localManifest('animation'))!.version,
+        api.manifest('animation').version);
+  });
+
+  test('全量下载与 ZIP MD5 校验均可取消，取消后不切换映射且释放互斥', () async {
+    await cache.download(api.manifest('animation'));
+    final old = (await cache.localManifest('animation'))!.version;
+    api.publishArchive('animation', {'next.png': 'new'});
+    var cancelled = false;
+    api.afterDownload = () => cancelled = true;
+    await expectLater(
+        cache.downloadArchive('animation', isCancelled: () => cancelled),
+        throwsA(isA<ResourceDownloadCancelled>()));
+    expect((await cache.localManifest('animation'))!.version, old);
+    api.afterDownload = null;
+    cancelled = false;
+    await expectLater(
+        cache.downloadArchive('animation',
+            isCancelled: () => cancelled,
+            onProgress: (progress) {
+              if (progress.path == 'ZIP MD5') cancelled = true;
+            }),
+        throwsA(isA<ResourceDownloadCancelled>()));
+    expect((await cache.localManifest('animation'))!.version, old);
+    await cache.download(api.manifest('memes'));
+  });
+
+  test('本地 ZIP 输入链接与 MD5 缓存链接不得被解压读取或覆盖', () async {
+    const files = {'a.png': 'safe'};
+    final source =
+        await localZip(zipPayload(manifestPayload('animation', files), files));
+    final link = Link(p.join(support.path, 'linked.zip'));
+    await link.create(source.path);
+    await expectLater(cache.importArchive('animation', File(link.path)),
+        throwsFormatException);
+    await cache.directory.create(recursive: true);
+    final outside = File(p.join(support.path, 'outside'));
+    await outside.writeAsString('untouched');
+    final hash = md5.convert(utf8.encode('safe')).toString();
+    await Link(p.join(cache.directory.path, hash)).create(outside.path);
+    await expectLater(
+        cache.importArchive('animation', source), throwsFormatException);
+    expect(await outside.readAsString(), 'untouched');
+    expect(await cache.localManifest('animation'), isNull);
+  });
+
+  testWidgets('全量模式明确报告 ZIP 404，不偷偷执行增量下载', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        theme: buildAppTheme(),
+        home: ResourcePackDialog(resources: cache, initialChecks: [
+          ResourcePackCheck(
+              pack: 'animation', remote: api.manifest('animation')),
+          const ResourcePackCheck(pack: 'memes', unpublished: true),
+        ])));
+    await tester.tap(find.text('全量 ZIP'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('下载所选'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pumpAndSettle();
+    expect(api.archiveRequests, ['animation']);
+    expect(api.downloads, isEmpty);
+    expect(find.textContaining('全量 ZIP 未发布'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   test('坏 MD5 不能替换完整版本，重试下载后才切换', () async {
