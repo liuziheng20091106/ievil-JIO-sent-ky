@@ -935,6 +935,7 @@ def skill_broadcast_payload(game, declaration):
     )
     return {
         "type": "skill",
+        "declaration_id": declaration["id"],
         "ability": ability,
         "ability_name": ABILITY_NAMES.get(ability, DAY_ABILITIES[ability][1]),
         "role_id": role_id,

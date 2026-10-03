@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:seven_double_client/src/action_sheet.dart';
 import 'package:seven_double_client/src/design.dart';
 import 'package:seven_double_client/src/game_dialog.dart';
 import 'package:seven_double_client/src/models.dart';
@@ -10,7 +11,11 @@ import 'package:seven_double_client/src/store.dart';
 /// 技能播报：结构化载荷渲染成「[头像] N号 昵称 · 使用技能 X [→ N号]」，
 /// 点开可看技能详细；服务端没给载荷时退回原来的灰条文本。
 
-Map<String, dynamic> viewJson({List<dynamic> dialogs = const []}) => {
+Map<String, dynamic> viewJson({
+  List<dynamic> dialogs = const [],
+  List<dynamic> actions = const [],
+}) =>
+    {
       'ui_version': 1,
       'id': 'game-skill',
       'version': 7,
@@ -21,7 +26,7 @@ Map<String, dynamic> viewJson({List<dynamic> dialogs = const []}) => {
       'phase_label': '自由发言',
       'seats': <dynamic>[],
       'self': <String, dynamic>{},
-      'actions': <dynamic>[],
+      'actions': actions,
       'channels': [
         {
           'id': 'public',
@@ -84,6 +89,7 @@ GameMessage plainNotice() => GameMessage.fromJson({
 Future<GameStore> storeWith(
   List<GameMessage> messages, {
   List<dynamic> dialogs = const [],
+  List<dynamic> actions = const [],
 }) async {
   SharedPreferences.setMockInitialValues({});
   final preferences = await SharedPreferences.getInstance();
@@ -96,7 +102,7 @@ Future<GameStore> storeWith(
       'name': '阿雪',
       'seat_id': '1',
     }),
-    view: GameView.fromJson(viewJson(dialogs: dialogs)),
+    view: GameView.fromJson(viewJson(dialogs: dialogs, actions: actions)),
     gameId: 'game-skill',
     messages: messages,
     roles: [
@@ -169,5 +175,82 @@ void main() {
     await pumpShell(tester, store);
     expect(find.textContaining('第2夜是平安夜。'), findsOneWidget);
     expect(find.text('点击查看技能详细'), findsNothing);
+  });
+  testWidgets('公告快捷质疑绑定本条声明，不选第一个质疑行动', (tester) async {
+    final message = skillMessage(withTarget: true);
+    message['payload'] = {
+      ...message['payload'] as Map<String, dynamic>,
+      'declaration_id': 'wanted',
+      'challengeable': true,
+    };
+    final actions = [
+      for (final id in ['other', 'wanted'])
+        {
+          'ui_version': 1,
+          'id': 'day.challenge',
+          'short_label': '质疑',
+          'label': '质疑$id',
+          'description': '质疑$id声明',
+          'payload': {'declaration_id': id},
+          'danger': true,
+        },
+    ];
+    final store = await storeWith(
+      [GameMessage.fromJson(message)],
+      actions: actions,
+    );
+    await pumpShell(tester, store);
+    await tester.tap(find.text('爱上/移情'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('质疑此技能'));
+    await tester.pumpAndSettle();
+    expect(find.text('技能详情'), findsNothing);
+    expect(find.text('质疑wanted声明'), findsOneWidget);
+    expect(find.text('质疑other声明'), findsNothing);
+    expect(
+      tester
+          .widget<ActionFormSheet>(find.byType(ActionFormSheet))
+          .action
+          .payload['declaration_id'],
+      'wanted',
+    );
+  });
+
+  testWidgets('公告质疑入口随当前声明权限更新，不借用其他声明', (tester) async {
+    final message = skillMessage(withTarget: false);
+    message['payload'] = {
+      ...message['payload'] as Map<String, dynamic>,
+      'declaration_id': 'wanted',
+      'challengeable': true,
+    };
+    final action = {
+      'ui_version': 1,
+      'id': 'day.challenge',
+      'short_label': '质疑',
+      'label': '质疑声明',
+      'payload': {'declaration_id': 'other'},
+    };
+    final store = await storeWith(
+      [GameMessage.fromJson(message)],
+      actions: [action],
+    );
+    await pumpShell(tester, store);
+    await tester.tap(find.text('爱上/移情'));
+    await tester.pumpAndSettle();
+    expect(find.text('质疑此技能'), findsNothing);
+    store.applyLiveEvent({
+      'type': 'state',
+      'state': viewJson(actions: [
+        {
+          ...action,
+          'payload': {'declaration_id': 'wanted'}
+        },
+      ]),
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('质疑此技能'), findsOneWidget);
+    store.applyLiveEvent({'type': 'state', 'state': viewJson()});
+    await tester.pumpAndSettle();
+    expect(find.text('质疑此技能'), findsNothing);
   });
 }

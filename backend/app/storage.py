@@ -378,6 +378,13 @@ def message_view(row, actor):
         result["text"] = ""
         result["sender_name"] = display_player_name(result["sender_name"])
         return result
+    if (
+        row["kind"] == "information"
+        and host_capable(actor)
+        and "audience" in row.keys()  # noqa: SIM118 - sqlite3.Row 的成员判断比较值
+        and row["audience"] is not None
+    ):
+        result["audience"] = json.loads(row["audience"])
     if row["image_id"]:
         result["image_id"] = row["image_id"]
     # 昵称展示统一走展示名：消息留档里存的是完整昵称，只有下发时按 16 半角宽度截断。
@@ -463,6 +470,7 @@ def project_message_payload(raw, actor, kind=None):
         for key in (
             "type",
             "mode",
+            "declaration_id",
             "ability",
             "ability_name",
             "role_id",

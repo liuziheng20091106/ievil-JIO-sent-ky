@@ -168,3 +168,25 @@ class PayloadProjection(unittest.TestCase):
         view = storage.message_view(row, self.other)
         self.assertNotIn("target", view["payload"])
         self.assertNotIn("payload", storage.message_view({**row, "payload": None}, self.other))
+
+    def test_private_info_recipients_are_only_sent_to_entered_hosts(self):
+        row = {
+            "id": 12,
+            "game_id": "skill-game",
+            "kind": "information",
+            "sender_id": "host",
+            "sender_name": "主持人",
+            "avatar_role_id": "host",
+            "channel_id": "information",
+            "text": "私密情报",
+            "created_at": "2026-09-26T02:00:00+00:00",
+            "image_id": None,
+            "audience": storage.dumps(["p2", "p5"]),
+        }
+        self.assertEqual(storage.message_view(row, HOST)["audience"], ["p2", "p5"])
+        for actor in (self.other, {**HOST, "host_entered": False}):
+            with self.subTest(actor=actor):
+                self.assertNotIn("audience", storage.message_view(row, actor))
+        self.assertNotIn(
+            "audience", storage.message_view({**row, "recalled_at": "2026-09-26"}, HOST)
+        )

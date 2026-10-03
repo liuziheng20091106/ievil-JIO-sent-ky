@@ -112,7 +112,6 @@ DESCRIPTIONS = {
     "player.profile": "设置本局的公开称呼，其他玩家和主持人都能看到。",
     "night.clear": "清除本席位尚未确认的夜间选择；已确认的行动要改需主持人裁定。已提交寻宝的席位不能清除。",
     "night.confirm": "确认本席夜间选择；未确认的选择不计入结算，未选视为放弃。",
-    "day.challenge": "质疑他人的白天技能声明；质疑失败本局个人判负。",
     "hiro.exit": "魔女化希罗主动出局：夜间提交时并入本夜预结算，白天则立即结算；若魔女回溯额度还没用，会先触发回溯并撤销这次出局。",
     "speech.done": "结束本次发言推进顺序；还没轮到你时是「本轮不发言」，轮到时自动略过。",
     "speech.speak": "提前写下发言内容，轮到你时由系统以本人身份公开，并自动略过你的顺序。",
@@ -1225,6 +1224,10 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                         f"质疑{declaration['seat_id']}号的{DAY_ABILITIES[declaration['ability']][1]}",
                         payload={"declaration_id": declaration["id"]},
                         danger=True,
+                        description=(
+                            f"质疑{declaration['seat_id']}号的「{DAY_ABILITIES[declaration['ability']][1]}」声明；"
+                            "质疑失败本局个人判负。"
+                        ),
                     )
                 )
     speaker = game["public"].get("speaker")

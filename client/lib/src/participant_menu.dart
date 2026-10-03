@@ -983,13 +983,20 @@ Future<void> showSkillDetail(
   BuildContext context,
   GameStore store,
   Map<String, dynamic> payload,
-) =>
-    showPredictiveSheet<void>(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      builder: (context) => _SkillDetailSheet(store: store, payload: payload),
-    );
+) async {
+  final action = await showPredictiveSheet<ActionDescriptor>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    builder: (context) => AnimatedBuilder(
+      animation: store,
+      builder: (context, _) =>
+          _SkillDetailSheet(store: store, payload: payload),
+    ),
+  );
+  if (action == null || !context.mounted) return;
+  await showActionForm(context, store, action);
+}
 
 class _SkillDetailSheet extends StatelessWidget {
   const _SkillDetailSheet({required this.store, required this.payload});
@@ -1014,6 +1021,14 @@ class _SkillDetailSheet extends StatelessWidget {
     // 详情页换成「被动技能」标签，并把这一次的结算结果单独列出来。
     final passive = payload['mode']?.toString() == 'passive';
     final effect = payload['effect']?.toString() ?? '';
+    final declarationId = payload['declaration_id'];
+    final challenge = declarationId == null
+        ? null
+        : store.view?.actions
+            .where((action) =>
+                action.id == 'day.challenge' &&
+                action.payload['declaration_id'] == declarationId)
+            .firstOrNull;
     return SafeArea(
       top: false,
       child: SingleChildScrollView(
@@ -1109,6 +1124,19 @@ class _SkillDetailSheet extends StatelessWidget {
                 color: context.palette.textSecondary,
               ),
             ),
+            if (challenge != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              OutlinedButton.icon(
+                onPressed: store.writeBusy
+                    ? null
+                    : () => Navigator.pop(context, challenge),
+                icon: const Icon(Icons.help_outline),
+                label: const Text('质疑此技能'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: context.palette.danger,
+                ),
+              ),
+            ],
             if (role != null) ...[
               const SizedBox(height: AppSpacing.md),
               _SkillBlock(title: '好人方技能', body: role.normal),
