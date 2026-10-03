@@ -17,24 +17,24 @@ String achievementRarityLabel(int rarity) => switch (rarity) {
       _ => '稀有度 $rarity',
     };
 
-/// 稀有度的一档配色：底色就是徽章背景，白字在十种底色上都保持可读。
+/// 稀有度的一档配色：浅色徽章底使用深色文字，保持可读。
 class AchievementRarity {
-  const AchievementRarity(this.background);
+  const AchievementRarity(this.background, {this.foreground = Colors.white});
 
   final Color background;
-  Color get foreground => Colors.white;
+  final Color foreground;
 
   static const _colors = <int, AchievementRarity>{
-    1: AchievementRarity(Color(0xFF8A9099)), // 灰
-    2: AchievementRarity(Color(0xFF3F9C4F)), // 绿
+    1: AchievementRarity(Color(0xFF8A9099), foreground: Colors.black), // 灰
+    2: AchievementRarity(Color(0xFF9B4DE0)), // 紫
     3: AchievementRarity(Color(0xFF2F6FED)), // 蓝
-    4: AchievementRarity(Color(0xFF17A09B)), // 青
-    5: AchievementRarity(Color(0xFF5B4BE0)), // 靛
-    6: AchievementRarity(Color(0xFF9B4DE0)), // 紫
-    7: AchievementRarity(Color(0xFFD6389A)), // 玫红
-    8: AchievementRarity(Color(0xFFE0701E)), // 橙
-    9: AchievementRarity(Color(0xFFD0322E)), // 红
-    10: AchievementRarity(Color(0xFFA87A0A)), // 金
+    4: AchievementRarity(Color(0xFF17A09B), foreground: Colors.black), // 青
+    5: AchievementRarity(Color(0xFFA6D989), foreground: Colors.black), // 浅绿
+    6: AchievementRarity(Color(0xFFC5A34A), foreground: Colors.black), // 土黄
+    7: AchievementRarity(Color(0xFFE0701E), foreground: Colors.black), // 橘
+    8: AchievementRarity(Color(0xFFD0322E)), // 红
+    9: AchievementRarity(Color(0xFFC0C0C0), foreground: Colors.black), // 银
+    10: AchievementRarity(Color(0xFFD4AF37), foreground: Colors.black), // 金
   };
 
   /// 越界（服务端异常数据或客户端版本落后）时收敛到 1-10，不抛异常。

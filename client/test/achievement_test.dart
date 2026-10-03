@@ -112,6 +112,18 @@ void main() {
       );
     });
 
+    test('每档徽章文字与底色的对比度至少为 4.5', () {
+      for (var value = 1; value <= achievementRarityMax; value++) {
+        final style = AchievementRarity.of(value);
+        final background = style.background.computeLuminance();
+        final foreground = style.foreground.computeLuminance();
+        final lighter = background > foreground ? background : foreground;
+        final darker = background < foreground ? background : foreground;
+        expect((lighter + .05) / (darker + .05), greaterThanOrEqualTo(4.5),
+            reason: '第 $value 档徽章文字必须可读');
+      }
+    });
+
     test('获得时间与参赛时间按本机时区显示，解析失败给空串', () {
       expect(achievementStamp('2026-09-24T12:34:56'), '2026-09-24');
       expect(achievementStamp('2026-09-24T12:34:56', withTime: true),
