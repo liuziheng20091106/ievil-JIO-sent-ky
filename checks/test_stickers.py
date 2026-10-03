@@ -1,5 +1,6 @@
 """MD5-only stickers through isolated HTTP, durable history and WebSocket delivery."""
 
+import asyncio
 import hashlib
 import json
 import os
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import resource_packs, storage
+from backend.app import realtime, resource_packs, storage
 from backend.app.game import DEFAULT_CODEX
 from backend.app.main import app
 
@@ -173,13 +174,19 @@ class Stickers(unittest.TestCase):
             self.assertIsNone(row["payload"])
             self.assertIsNone(row["image_id"])
 
-    def test_private_live_and_history_do_not_leak_to_other_players_or_spectators(self):
+    def test_spectators_read_private_and_public_stickers_without_player_leaks(self):
         first, a = self.join("32001")
         second, b = self.join("32002")
         third, _ = self.join("32003")
         spectator, _ = self.join("32004", "spectator")
         state = self.command("channel.create", {"participant_ids": [a["id"], b["id"]]})
         private = next(c["id"] for c in state["channels"] if c["id"].startswith("private:"))
+
+        async def disconnected():
+            async with asyncio.timeout(2):
+                while any(peer.game_id == self.game_id for peer in realtime.connections):
+                    await asyncio.sleep(0)
+
         with (
             self.client.websocket_connect(
                 "/api/live?game_id=" + self.game_id, headers=second
@@ -194,18 +201,44 @@ class Stickers(unittest.TestCase):
             for socket in (recipient, outsider, watcher):
                 self.assertEqual(socket.receive_json()["type"], "sync")
             sent = self.send(first, private)
-            self.assert_sticker(self.socket_message(recipient))
+            delivered = self.socket_message(recipient)
+            self.assertEqual(delivered["id"], sent["id"])
+            self.assert_sticker(delivered)
+            delivered = self.socket_message(watcher)
+            self.assertEqual(delivered["id"], sent["id"])
+            self.assert_sticker(delivered)
             self.assert_sticker(self.history(second)[sent["id"]])
             self.assertNotIn(sent["id"], self.history(third))
-            self.assertNotIn(sent["id"], self.history(spectator))
+            self.assert_sticker(self.history(spectator)[sent["id"]])
             self.assert_sticker(self.history(self.host)[sent["id"]])
             public = self.send(self.host)
             self.assertEqual(self.socket_message(outsider)["id"], public["id"])
-            spectator_message = self.send(spectator, private)
-            self.assertEqual(spectator_message["channel_id"], "spectator")
-            self.assertEqual(self.socket_message(watcher)["id"], spectator_message["id"])
-            self.assertNotIn(public["id"], self.history(spectator))
-            self.assertNotIn(spectator_message["id"], self.history(third))
+            delivered = self.socket_message(watcher)
+            self.assertEqual(delivered["id"], public["id"])
+            self.assert_sticker(delivered)
+            self.assert_sticker(self.history(spectator)[public["id"]])
+            for channel in ("public", private, "spectator", "system"):
+                with self.subTest(channel=channel):
+                    denied = self.client.post(
+                        self.root + "/messages",
+                        headers=spectator,
+                        json={"channel_id": channel, "sticker_md5": self.md5},
+                    )
+                    self.assertEqual(denied.status_code, 403, denied.text)
+            self.assertEqual(set(self.history(self.host)), set(self.history(spectator)))
+            for socket in (recipient, outsider, watcher):
+                socket.close()
+            watcher.portal.call(disconnected)
+        with self.client.websocket_connect(
+            "/api/live?game_id=" + self.game_id, headers=spectator
+        ) as watcher:
+            sync = watcher.receive_json()
+            self.assertEqual(sync["type"], "sync")
+            replay = {message["id"]: message for message in sync["messages"]}
+            for message in (sent, public):
+                self.assert_sticker(replay[message["id"]])
+            watcher.close()
+            watcher.portal.call(disconnected)
         with storage.connect() as db:
             row = db.execute("SELECT * FROM messages WHERE id=?", (sent["id"],)).fetchone()
             self.assertEqual(json.loads(row["payload"]), {"type": "sticker", "md5": self.md5})

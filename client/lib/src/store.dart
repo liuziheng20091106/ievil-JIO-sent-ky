@@ -396,7 +396,8 @@ class GameStore extends ChangeNotifier {
     store.defaultCodex = defaultCodex;
     store.lobbyGame = lobbyGame;
     store._animationGameId = gameId;
-    store._seenAnimationMessages.addAll(store.messages.map((message) => message.id));
+    store._seenAnimationMessages
+        .addAll(store.messages.map((message) => message.id));
     store.restoring = false;
     return store;
   }
@@ -1465,14 +1466,12 @@ class GameStore extends ChangeNotifier {
       _equippedRequested = participants;
       loadGameAchievements();
     }
-    // 频道结束或消失都要回到公屏：结束的频道不再出现在频道列表里。
-    if (next.channels.every(
-        (item) => item.id != selectedChannelId || item.status == 'ended')) {
+    // 已结束私信仅观战可继续选择读取；频道消失时仍回到公屏。
+    if (next.channels.every((item) =>
+        item.id != selectedChannelId ||
+        (item.status == 'ended' &&
+            (actor?.isSpectator != true || next.self['seat_id'] != null)))) {
       selectedChannelId = 'public';
-    }
-    // 观战者进入对局后默认落在观战频道：服务端只下发观战频道与系统频道。
-    if (actor?.isSpectator == true && selectedChannelId == 'public') {
-      selectedChannelId = 'spectator';
     }
     // 傀儡控制关系解除（面板消失）、对局结束，或选中的傀儡频道失效：前两者退回
     // 自己的身份，后者留在该身份上退回它的公屏——留着旧的 as_seat 会让下一次
@@ -1732,13 +1731,9 @@ class GameStore extends ChangeNotifier {
   }
 
   bool _matchesScope(GameMessage message, String scope) {
-    // 观战者独享观战频道：聊天消息只认观战频道，公屏/私信筛选统一映射过去。
-    final spectatorChat = actor?.isSpectator == true && message.kind == 'chat';
-    if (spectatorChat && message.channelId != 'spectator') return false;
     return switch (scope) {
       'public' => (message.kind == 'chat' || message.kind == 'speech_turn') &&
-          message.channelId ==
-              (actor?.isSpectator == true ? 'spectator' : 'public'),
+          message.channelId == 'public',
       'system' => message.channelId == 'system' || message.kind != 'chat',
       'host' => message.channelId != 'public' &&
           message.channelId != 'system' &&
@@ -1918,7 +1913,9 @@ class GameStore extends ChangeNotifier {
     if (!_stickerHash.hasMatch(md5)) {
       throw const ApiException('表情 MD5 不合法');
     }
-    if (api == null || gameId == null || writeBusy ||
+    if (api == null ||
+        gameId == null ||
+        writeBusy ||
         selectedChannel?.canSend != true) {
       throw const ApiException('当前无法发送表情');
     }
@@ -1926,11 +1923,12 @@ class GameStore extends ChangeNotifier {
   }
 
   Future<void> sendMessage(String text,
-      {String? image, List<ChatReference> references = const []}) =>
+          {String? image, List<ChatReference> references = const []}) =>
       _sendMessage(text, image: image, references: references);
 
   Future<void> _sendMessage(String text,
-      {String? image, String? stickerMd5,
+      {String? image,
+      String? stickerMd5,
       List<ChatReference> references = const []}) async {
     final id = gameId;
     if (api == null ||
@@ -1938,6 +1936,9 @@ class GameStore extends ChangeNotifier {
         writeBusy ||
         (text.trim().isEmpty && image == null && stickerMd5 == null)) {
       return;
+    }
+    if (selectedChannel?.canSend != true) {
+      throw const ApiException('当前频道不可发言');
     }
     final channelId = activeChannelId;
     final asSeat = puppetSeatId;
@@ -1953,7 +1954,9 @@ class GameStore extends ChangeNotifier {
     ];
     try {
       final message = await api!.sendMessage(id, channelId, trimmed,
-          asSeat: asSeat, image: image, stickerMd5: stickerMd5,
+          asSeat: asSeat,
+          image: image,
+          stickerMd5: stickerMd5,
           references: adjusted);
       _mergeMessages([message]);
     } on ApiException catch (failure) {
@@ -1972,6 +1975,9 @@ class GameStore extends ChangeNotifier {
 
   Future<void> retractMessage(GameMessage message) async {
     final id = gameId;
+    if (actor?.isSpectator == true && view?.self['seat_id'] == null) {
+      throw const ApiException('观战者不能撤回消息');
+    }
     if (api == null || id == null || writeBusy) return;
     writeBusy = true;
     error = null;

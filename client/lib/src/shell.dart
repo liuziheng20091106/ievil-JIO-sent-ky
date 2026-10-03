@@ -102,13 +102,13 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     if (api == null || _resourceDialogOpen) return;
     _resourceDialogOpen = true;
     try {
-      await showResourcePackDialog(context, api: api, resources: widget.resources);
+      await showResourcePackDialog(context,
+          api: api, resources: widget.resources);
     } finally {
       _resourceDialogOpen = false;
       if (mounted) setState(() => _resourceRefresh++);
     }
   }
-
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) => lifecycle = state;
@@ -297,7 +297,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                   actions: [
                     IconButton(
                       tooltip: '资源包',
-                      onPressed: store.api == null ? null : () => _openResources(),
+                      onPressed:
+                          store.api == null ? null : () => _openResources(),
                       icon: const Icon(Icons.download_outlined),
                     ),
                     if (ended)
@@ -827,10 +828,11 @@ class _ChatActionPageState extends State<ChatActionPage> {
         unawaited(_loadResources());
       }
     }
-    if (oldWidget.resourceRefresh != widget.resourceRefresh && _resources != null) {
+    if (oldWidget.resourceRefresh != widget.resourceRefresh &&
+        _resources != null) {
       final cache = _resources!;
-      _resources = ResourcePacks(api: cache.api,
-          supportDirectory: cache.supportDirectory);
+      _resources = ResourcePacks(
+          api: cache.api, supportDirectory: cache.supportDirectory);
     }
   }
 
@@ -1088,16 +1090,6 @@ class _ChatActionPageState extends State<ChatActionPage> {
     ];
   }
 
-  /// 观战者独享观战频道：不显示私信与主持人筛选。
-  Map<String, (String, IconData)> get scopes {
-    if (widget.store.actor?.isSpectator != true) return _scopes;
-    return {
-      'all': _scopes['all']!,
-      'public': ('观战', Icons.campaign_outlined),
-      'system': _scopes['system']!,
-    };
-  }
-
   static const _scopes = {
     'all': ('全部', Icons.all_inbox_outlined),
     'public': ('公屏', Icons.campaign_outlined),
@@ -1200,9 +1192,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
   }
 
   Future<void> pickMention() async {
-    if (_pickingMention ||
-        !composerFocus.hasFocus ||
-        widget.store.actor?.isSpectator == true) {
+    if (_pickingMention || !composerFocus.hasFocus) {
       return;
     }
     final channel = widget.store.selectedChannel;
@@ -1272,7 +1262,6 @@ class _ChatActionPageState extends State<ChatActionPage> {
 
   Future<void> pickEvidence() async {
     if (_pickingEvidence ||
-        widget.store.actor?.isSpectator == true ||
         widget.store.selectedChannel?.canSend != true ||
         widget.store.selectedChannel?.id == 'spectator') {
       return;
@@ -1378,7 +1367,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
                   AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
               scrollDirection: Axis.horizontal,
               children: [
-                for (final entry in scopes.entries)
+                for (final entry in _scopes.entries)
                   Padding(
                     padding: EdgeInsets.only(right: AppSpacing.sm),
                     child: FilterChip(
@@ -1920,7 +1909,7 @@ class _Composer extends StatelessWidget {
                 ),
               ),
             ],
-            if (emojiOpen)
+            if (emojiOpen && channelSendable)
               EmojiPanelScope(
                 onClose: onCloseEmoji,
                 child: EmojiPicker(
@@ -2468,10 +2457,12 @@ class _ChannelSheet extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(
                     AppSpacing.md, 0, AppSpacing.md, AppSpacing.lg),
                 children: [
-                  // 已结束的私信不再占用频道列表；历史消息仍在消息流里可见。
+                  // 观战保留已结束私信供读取；玩家仍只列未结束频道。
                   // 傀儡频道排在自己的频道之后，标签已带 `*`，选中即以该席位发言。
-                  for (final target in store.sendTargets
-                      .where((item) => item.channel.status != 'ended'))
+                  for (final target in store.sendTargets.where((item) =>
+                      item.channel.status != 'ended' ||
+                      (store.actor?.isSpectator == true &&
+                          store.view?.self['seat_id'] == null)))
                     ListTile(
                       leading: Icon(
                         target.asSeat != null
@@ -2491,7 +2482,9 @@ class _ChannelSheet extends StatelessWidget {
                               target.asSeat == store.activeAsSeat
                           ? Icon(Icons.check, color: context.palette.accent)
                           : null,
-                      enabled: target.channel.canSend,
+                      enabled: target.channel.canSend ||
+                          (store.actor?.isSpectator == true &&
+                              store.view?.self['seat_id'] == null),
                       onTap: () => Navigator.pop(context, target),
                     ),
                 ],
@@ -2716,7 +2709,10 @@ Future<void> _showMessageMenu(BuildContext context, GameMessage message,
             title: const Text('复制'),
             onTap: () => Navigator.of(sheet).pop('copy'),
           ),
-        if (mine && store != null)
+        if (mine &&
+            store != null &&
+            (store.actor?.isSpectator != true ||
+                store.view?.self['seat_id'] != null))
           ListTile(
             leading: const Icon(Icons.undo_outlined),
             title: const Text('撤回'),
@@ -2843,13 +2839,14 @@ class _StickerImage extends StatefulWidget {
 
 class _StickerImageState extends State<_StickerImage> {
   late Future<File?> file = _load();
-  Future<File?> _load() => widget.resources?.cachedMeme(widget.md5) ??
-      Future<File?>.value();
+  Future<File?> _load() =>
+      widget.resources?.cachedMeme(widget.md5) ?? Future<File?>.value();
 
   @override
   void didUpdateWidget(_StickerImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.md5 != widget.md5 || oldWidget.resources != widget.resources) {
+    if (oldWidget.md5 != widget.md5 ||
+        oldWidget.resources != widget.resources) {
       file = _load();
     }
   }
@@ -2859,18 +2856,20 @@ class _StickerImageState extends State<_StickerImage> {
     final edge = MediaQuery.sizeOf(context).width < 600 ? 128.0 : 160.0;
     final decodeEdge = (edge * MediaQuery.devicePixelRatioOf(context)).round();
     Widget placeholder() => Semantics(
-      label: '表情资源未下载或不可用',
-      child: const Center(child: Icon(Icons.image_not_supported_outlined)),
-    );
+          label: '表情资源未下载或不可用',
+          child: const Center(child: Icon(Icons.image_not_supported_outlined)),
+        );
     return SizedBox(
-      width: edge, height: edge,
+      width: edge,
+      height: edge,
       child: FutureBuilder<File?>(
         future: file,
         builder: (context, snapshot) => snapshot.data == null
             ? placeholder()
             : Image(
                 image: ResizeImage(FileImage(snapshot.data!),
-                    width: decodeEdge, height: decodeEdge,
+                    width: decodeEdge,
+                    height: decodeEdge,
                     policy: ResizeImagePolicy.fit),
                 fit: BoxFit.contain,
                 semanticLabel: '聊天表情',
@@ -3120,7 +3119,7 @@ class MessageBubble extends StatelessWidget {
                           onLongPress: () =>
                               _showMessageMenu(context, message, mine, store),
                           child: _StickerImage(
-                            md5: message.stickerMd5!, resources: resources),
+                              md5: message.stickerMd5!, resources: resources),
                         ),
                       if (!message.recalled && message.image != null)
                         GestureDetector(
@@ -3420,59 +3419,57 @@ class _PrivateInfoBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final scope = _privateInfoScope(message, store);
     return Padding(
-        padding:
-            EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
-        child: Container(
-          width: double.infinity,
-          padding: EdgeInsets.fromLTRB(12, 10, 6, 10),
-          decoration: BoxDecoration(
-            color: context.palette.hostSoft,
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            border: Border.all(color: context.palette.host, width: 1.6),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.mark_email_unread_outlined,
-                  size: 20, color: context.palette.host),
-              SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      scope == null
-                          ? '新的私密信息'
-                          : '新的私密信息 · $scope',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: .4,
-                          color: context.palette.host),
-                    ),
-                    SizedBox(height: 3),
-                    Text(
-                      message.text,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 13.5,
-                          height: 1.4,
-                          color: context.palette.text),
-                    ),
-                  ],
-                ),
-              ),
-              TextButton(onPressed: onOpen, child: const Text('查看')),
-              IconButton(
-                tooltip: '关闭提醒',
-                onPressed: onDismiss,
-                icon: const Icon(Icons.close, size: 16),
-              ),
-            ],
-          ),
+      padding:
+          EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.fromLTRB(12, 10, 6, 10),
+        decoration: BoxDecoration(
+          color: context.palette.hostSoft,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: context.palette.host, width: 1.6),
         ),
-      );
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.mark_email_unread_outlined,
+                size: 20, color: context.palette.host),
+            SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    scope == null ? '新的私密信息' : '新的私密信息 · $scope',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: .4,
+                        color: context.palette.host),
+                  ),
+                  SizedBox(height: 3),
+                  Text(
+                    message.text,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.4,
+                        color: context.palette.text),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(onPressed: onOpen, child: const Text('查看')),
+            IconButton(
+              tooltip: '关闭提醒',
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 16),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

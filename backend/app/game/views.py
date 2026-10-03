@@ -638,9 +638,6 @@ def game_view(game, actor):
             game["status"] != "ended",
             "" if game["status"] != "ended" else "对局已结束",
         )
-    elif spectator and game["status"] != "ended":
-        # 观战者的发言范围是独享的观战频道；这里只表示「能发言」，频道校验在后端。
-        can_chat, reason = True, ""
     elif own:
         if view["self"].get("puppet_spectator"):
             can_chat, reason = False, PUPPET_SPECTATOR_REASON

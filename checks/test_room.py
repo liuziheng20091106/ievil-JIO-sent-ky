@@ -1,11 +1,13 @@
 """Stable auth, open participation, spectator, and private-channel boundaries."""
 
+import asyncio
 import ast
 import inspect
 import os
 import sqlite3
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -347,23 +349,25 @@ class BackendFlow(unittest.TestCase):
         self.assertEqual(notice["kind"], "information")
         self.assertEqual(notice["channel_id"], "information")
         self.assertEqual(notice["audience"], [actor["id"]])
-        for headers, allowed in (
-            (self.host, True),
-            (player, True),
-            (stranger, False),
-            (spectator, False),
-            (unconfirmed_host, False),
+        for headers, messages_allowed, information_allowed in (
+            (self.host, True, True),
+            (player, True, True),
+            (stranger, False, False),
+            (spectator, True, False),
+            (unconfirmed_host, False, False),
         ):
-            with self.subTest(headers=headers, allowed=allowed):
+            with self.subTest(headers=headers):
                 messages = self.client.get(
                     self.root + "/messages", headers=headers, params={"after": after}
                 ).json()["messages"]
-                self.assertEqual(any(item["id"] == notice["id"] for item in messages), allowed)
+                self.assertEqual(
+                    any(item["id"] == notice["id"] for item in messages), messages_allowed
+                )
                 information = self.client.get(self.root + "/state", headers=headers).json()[
                     "information"
                 ]
                 self.assertEqual(
-                    any(item["text"] == notice["text"] for item in information), allowed
+                    any(item["text"] == notice["text"] for item in information), information_allowed
                 )
 
     def test_unconfirmed_host_sees_no_cards_and_no_private_history(self):
@@ -470,7 +474,7 @@ class BackendFlow(unittest.TestCase):
         self.open_join()
         first, first_actor, _ = self.join("12001")
         second, second_actor, _ = self.join("12002")
-        stranger, _, _ = self.join("12003", "spectator")
+        stranger, _, _ = self.join("12003")
         created = self.command(
             first,
             "channel.create",
@@ -585,105 +589,241 @@ class BackendFlow(unittest.TestCase):
             [message["id"] for message in system], [message["id"] for message in baseline]
         )
 
-    def test_spectator_channel_is_private_to_spectators_and_host(self):
-        """观战频道由观战者独享：观战互见、主持人可见可发言，玩家不可见不可入。"""
+    def test_spectators_read_every_channel_without_write_access(self):
         self.open_join()
-        player, player_actor, _ = self.join("12601")
-        first, first_actor, _ = self.join("12602", "spectator")
-        second, _, _ = self.join("12603", "spectator")
+        first, first_actor, _ = self.join("12601")
+        second, second_actor, _ = self.join("12602")
+        outsider, outsider_actor, _ = self.join("12603")
+        spectator, spectator_actor, _ = self.join("12604", "spectator")
 
-        # 观战者发言一律落到观战频道，不管前端传了什么 channel_id。
-        sent = self.client.post(
-            self.root + "/messages",
-            headers=first,
-            json={"channel_id": "public", "text": "观战闲聊"},
-        )
-        sent.raise_for_status()
-        self.assertEqual(sent.json()["channel_id"], "spectator")
-
-        # 另一个观战者能看到；主持人能看到且能在观战频道发言。
-        first_page = self.client.get(self.root + "/messages?scope=all", headers=second).json()[
-            "messages"
-        ]
-        self.assertTrue(any(message["id"] == sent.json()["id"] for message in first_page))
-        host_sent = self.client.post(
-            self.root + "/messages",
-            headers=self.host,
-            json={"channel_id": "spectator", "text": "主持人也在"},
-        )
-        host_sent.raise_for_status()
-        self.assertEqual(host_sent.json()["channel_id"], "spectator")
-
-        # 玩家读不到观战频道的任何一条（all/public 两个口径都要过滤）。
-        player_all = self.client.get(self.root + "/messages?scope=all", headers=player).json()[
-            "messages"
-        ]
-        self.assertFalse(any(message["channel_id"] == "spectator" for message in player_all))
-        player_public = self.client.get(
-            self.root + "/messages?scope=public", headers=player
-        ).json()["messages"]
-        self.assertTrue(all(message["channel_id"] == "public" for message in player_public))
-
-        # 观战者读不到玩家公屏，也读不到私信历史。
-        spectator_all = self.client.get(self.root + "/messages?scope=all", headers=first).json()[
-            "messages"
-        ]
-        self.assertTrue(
-            all(
-                message["channel_id"] == "spectator" or message["kind"] != "chat"
-                for message in spectator_all
+        def send(headers, channel_id, text):
+            response = self.client.post(
+                self.root + "/messages",
+                headers=headers,
+                json={"channel_id": channel_id, "text": text},
             )
+            response.raise_for_status()
+            return response.json()
+
+        def history(headers, **params):
+            response = self.client.get(self.root + "/messages", headers=headers, params=params)
+            response.raise_for_status()
+            return response.json()["messages"]
+
+        public = send(first, "public", "公共发言")
+        created = self.command(
+            first, "channel.create", {"participant_ids": [second_actor["id"]]}
+        ).json()
+        private = next(channel for channel in created["channels"] if channel["status"] == "pending")
+        self.command(second, "channel.accept", {"channel_id": private["id"]})
+        private_message = send(first, private["id"], "玩家之间的私信")
+        self.command(first, "channel.end", {"channel_id": private["id"]})
+        created = self.command(
+            self.host, "channel.create", {"participant_ids": [second_actor["id"]]}
+        ).json()
+        host_channel = next(
+            channel
+            for channel in created["channels"]
+            if {member["id"] for member in channel["members"]} == {"host", second_actor["id"]}
         )
-
-        # 观战者频道投影：只有观战频道与系统频道，没有建私信入口。
-        view = self.client.get(self.root + "/state", headers=first).json()
-        self.assertEqual([channel["id"] for channel in view["channels"]], ["spectator", "system"])
-        self.assertFalse(any(action["id"] == "channel.create" for action in view["actions"]))
-        self.assertEqual(view["channels"][0]["label"], "观战频道")
-        self.assertTrue(view["channels"][0]["can_send"])
-
-        # 观战者不能发起私信，也不能接受被邀请；玩家端邀请名单不再出现观战者。
-        # 观战者投影里没有建私信入口；就算直接构造命令也会被拒绝（行动未列出或身份拒绝）。
-        blocked = self.command(first, "channel.create", {"participant_ids": ["host"]}, status=422)
-        self.assertIn("不可用", blocked.text)
-        desc = next(
-            (
-                action
-                for action in self.client.get(self.root + "/state", headers=player).json()[
-                    "actions"
-                ]
-                if action["id"] == "channel.create"
-            ),
-            None,
-        )
-        if desc is not None:
-            labels = {option["label"] for option in desc["fields"][0]["options"]}
-            self.assertFalse(any("观战" in label for label in labels))
-        # 玩家直接尝试邀请观战者：名单校验拒绝（观战者已不在有效成员里）。
-        self.command(player, "channel.create", {"participant_ids": [first_actor["id"]]}, status=422)
-
-        # 实时推送共用 visible_message：玩家身份对观战频道聊天不可见，观战者可见。
-        self.assertFalse(
-            storage.visible_message(
-                {"channel_id": "spectator", "kind": "chat", "audience": None},
-                {"kind": "player", "access_ids": [player_actor["id"]], "id": player_actor["id"]},
+        host_message = send(self.host, host_channel["id"], "主持人私信")
+        created = self.command(
+            first, "channel.create", {"participant_ids": [outsider_actor["id"]]}
+        ).json()
+        pending = next(channel for channel in created["channels"] if channel["status"] == "pending")
+        spectator_message = send(self.host, "spectator", "观战频道消息")
+        with storage.transaction() as db:
+            personal = storage.add_message(
+                db,
+                self.game_id,
+                kind="information",
+                channel_id="information",
+                text="只发给一号玩家的系统情报",
+                audience=[first_actor["id"]],
             )
-        )
-        self.assertTrue(
-            storage.visible_message(
-                {"channel_id": "spectator", "kind": "chat", "audience": None},
-                {"kind": "spectator", "access_ids": [first_actor["id"]], "id": first_actor["id"]},
+            host_only = storage.add_message(
+                db, self.game_id, text="仅主持人的系统裁定", audience=[]
             )
-        )
-        self.assertTrue(
-            storage.visible_message(
-                {"channel_id": "spectator", "kind": "chat", "audience": None},
-                {"kind": "host", "access_ids": ["host"], "id": "host", "host_entered": True},
+            legacy = storage.add_message(
+                db,
+                self.game_id,
+                kind="chat",
+                sender_id=spectator_actor["id"],
+                sender_name=spectator_actor["name"],
+                channel_id="spectator",
+                text="旧版观战发言也不能撤回",
             )
-        )
 
-        # 主持人投影里观战频道可见且可发言。
         host_view = self.client.get(self.root + "/state", headers=self.host).json()
+        watched = self.client.get(self.root + "/state", headers=spectator).json()
+        self.assertEqual(
+            [channel["id"] for channel in watched["channels"]],
+            [channel["id"] for channel in host_view["channels"]],
+        )
+        statuses = {channel["id"]: channel["status"] for channel in watched["channels"]}
+        self.assertEqual(statuses[private["id"]], "ended")
+        self.assertEqual(statuses[host_channel["id"]], "active")
+        self.assertEqual(statuses[pending["id"]], "pending")
+        self.assertTrue(all(not channel["can_send"] for channel in watched["channels"]))
+        self.assertTrue(all(channel["actions"] == [] for channel in watched["channels"]))
+        self.assertEqual(watched["actions"], [])
+        self.assertFalse(watched["can_chat"])
+        self.assertNotIn("host", watched)
+
+        all_messages = history(self.host)
+        all_ids = [message["id"] for message in all_messages]
+        self.assertEqual([message["id"] for message in history(spectator)], all_ids)
+        for message in (
+            public,
+            private_message,
+            host_message,
+            spectator_message,
+            personal,
+            host_only,
+        ):
+            self.assertIn(message["id"], all_ids)
+        watched_personal = next(
+            message for message in history(spectator) if message["id"] == personal["id"]
+        )
+        self.assertEqual(watched_personal["audience"], [first_actor["id"]])
+
+        scopes = {
+            "all": all_ids,
+            "public": [public["id"]],
+            "private": [private_message["id"], host_message["id"]],
+            "host": [host_message["id"]],
+            "system": [message["id"] for message in all_messages if message["kind"] != "chat"],
+        }
+        channel_ids = {
+            "public": [
+                message["id"] for message in all_messages if message["channel_id"] == "public"
+            ],
+            private["id"]: [private_message["id"]],
+            host_channel["id"]: [host_message["id"]],
+            pending["id"]: [],
+            "spectator": [spectator_message["id"], legacy["id"]],
+            "system": [personal["id"]],
+            "information": [personal["id"]],
+        }
+        queries = [{"scope": scope} for scope in scopes]
+        queries.extend({"channel_id": channel["id"]} for channel in watched["channels"])
+        queries.append({"channel_id": "information"})
+        for params in queries:
+            with self.subTest(params=params):
+                expected = history(self.host, **params)
+                expected_ids = [message["id"] for message in expected]
+                if "scope" in params:
+                    self.assertEqual(expected_ids, scopes[params["scope"]])
+                else:
+                    self.assertEqual(expected_ids, channel_ids[params["channel_id"]])
+                self.assertEqual(
+                    [message["id"] for message in history(spectator, **params)], expected_ids
+                )
+                for cursor in ("before", "after"):
+                    boundary = host_message["id"]
+                    filtered = [
+                        message_id
+                        for message_id in expected_ids
+                        if (message_id < boundary if cursor == "before" else message_id > boundary)
+                    ]
+                    page = history(spectator, **params, **{cursor: boundary})
+                    self.assertEqual([message["id"] for message in page], filtered)
+
+        private_ids = {
+            private_message["id"],
+            host_message["id"],
+            spectator_message["id"],
+            personal["id"],
+            host_only["id"],
+            legacy["id"],
+        }
+        self.assertTrue(private_ids.isdisjoint(message["id"] for message in history(outsider)))
+        self.assertIn(
+            public["id"], [message["id"] for message in history(outsider, scope="public")]
+        )
+        for channel_id in (private["id"], host_channel["id"], "spectator", "system"):
+            messages = history(outsider, channel_id=channel_id)
+            self.assertTrue(private_ids.isdisjoint(message["id"] for message in messages))
+        self.command(
+            first, "channel.create", {"participant_ids": [spectator_actor["id"]]}, status=422
+        )
+
+        image = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        for channel in watched["channels"]:
+            for content in ({"text": "不能发言"}, {"image": image}):
+                with self.subTest(channel_id=channel["id"], content=content):
+                    denied = self.client.post(
+                        self.root + "/messages",
+                        headers=spectator,
+                        json={"channel_id": channel["id"], **content},
+                    )
+                    self.assertEqual(denied.status_code, 403, denied.text)
+        for action, payload in (
+            ("channel.create", {"participant_ids": ["host"]}),
+            ("channel.accept", {"channel_id": pending["id"]}),
+            ("channel.reject", {"channel_id": pending["id"]}),
+            ("channel.end", {"channel_id": host_channel["id"]}),
+        ):
+            self.command(spectator, action, payload, status=403)
+        for message in (public, legacy):
+            denied = self.client.post(
+                self.root + f"/messages/{message['id']}/retract", headers=spectator, json={}
+            )
+            self.assertEqual(denied.status_code, 403, denied.text)
+        unchanged = self.client.get(self.root + "/state", headers=spectator).json()
+        self.assertEqual(unchanged["version"], watched["version"])
+        self.assertEqual(unchanged["channels"], watched["channels"])
+        self.assertEqual(history(spectator), history(self.host))
+        self.assertEqual([message["id"] for message in history(spectator)], all_ids)
+        self.assertFalse(any(message["recalled"] for message in history(spectator)))
+
+        # pong 是同一接收循环的同步点，确保拒绝的输入帧处理完再发消息标记。
+        with (
+            self.client.websocket_connect("/api/live", headers=self.host) as host_socket,
+            self.client.websocket_connect("/api/live", headers=spectator) as watcher,
+        ):
+            self.assertEqual(host_socket.receive_json()["type"], "sync")
+            self.assertEqual(watcher.receive_json()["type"], "sync")
+            peer = next(
+                peer
+                for peer in realtime.connections
+                if peer.participant_id == spectator_actor["id"]
+            )
+            last_pong = peer.last_pong
+            for channel in watched["channels"]:
+                for active in (True, False):
+                    watcher.send_json(
+                        {"type": "typing", "channel_id": channel["id"], "active": active}
+                    )
+            watcher.send_json({"type": "pong"})
+            for _ in range(100):
+                if peer.last_pong != last_pong:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("观战 WebSocket 未处理完输入状态请求")
+            marker = send(self.host, "public", "输入状态校验同步点")
+            for _ in range(60):
+                frame = host_socket.receive_json()
+                if frame["type"] == "typing":
+                    self.assertNotEqual(frame["participant_id"], spectator_actor["id"])
+                if frame["type"] == "message" and frame["message"]["id"] == marker["id"]:
+                    break
+            else:
+                self.fail("主持人未收到消息同步点")
+            host_socket.close()
+            watcher.close()
+
+            async def disconnected():
+                async with asyncio.timeout(2):
+                    while any(peer.game_id == self.game_id for peer in realtime.connections):
+                        await asyncio.sleep(0)
+
+            watcher.portal.call(disconnected)
+
         spectator_channel = next(
             channel for channel in host_view["channels"] if channel["id"] == "spectator"
         )

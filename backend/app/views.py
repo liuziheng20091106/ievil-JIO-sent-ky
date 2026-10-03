@@ -371,37 +371,7 @@ def channels_for(db, game, actor, domain_view):
     by_id = {row["id"]: row for row in participants}
     # 对局内的「主持人」一律带上本局主持人的昵称，玩家才分得清是谁在主持。
     host_name = host_label(game)
-    if actor.get("kind") == "spectator":
-        # 观战者独享观战频道：只下发观战频道与系统频道，没有公屏与私信。
-        reason = storage.channel_send_reason(db, game, actor, SPECTATOR_CHANNEL)
-        return [
-            {
-                "id": SPECTATOR_CHANNEL,
-                "label": "观战频道",
-                "status": "active",
-                "creator_id": "host",
-                "members": [],
-                "invited_ids": [],
-                "accepted_ids": [],
-                "invitation": "none",
-                "can_send": not ended and not reason,
-                "reason": reason or ("本局已经结束" if ended else ""),
-                "actions": [],
-            },
-            {
-                "id": "system",
-                "label": "系统与私密信息",
-                "status": "active",
-                "creator_id": "host",
-                "members": [],
-                "invited_ids": [],
-                "accepted_ids": [],
-                "invitation": "none",
-                "can_send": False,
-                "reason": "系统信息只用于告知，不能在此发言",
-                "actions": [],
-            },
-        ]
+    spectator = actor.get("kind") == "spectator"
     public_reason = storage.channel_send_reason(db, game, actor, "public") or domain_view.get(
         "chat_reason", ""
     )
@@ -426,23 +396,30 @@ def channels_for(db, game, actor, domain_view):
     ]
     for row in db.execute("SELECT * FROM channels WHERE game_id=? ORDER BY rowid", (game["id"],)):
         members = json.loads(row["participant_ids"])
-        if not host_capable(actor) and not set(actor["access_ids"]).intersection(members):
+        if (
+            not host_capable(actor)
+            and not spectator
+            and not set(actor["access_ids"]).intersection(members)
+        ):
             continue
         invited = json.loads(row["invited_ids"])
         accepted = json.loads(row["accepted_ids"])
         current = host_capable(actor) or actor["id"] in members
         invitation = (
-            "accepted"
+            "none"
+            if spectator
+            else "accepted"
             if actor["id"] in accepted
             else "pending"
             if actor["id"] in invited
             else "none"
         )
         reason = storage.channel_send_reason(db, game, actor, row["id"])
-        if row["status"] != "active":
-            reason = "等待全部成员同意" if row["status"] == "pending" else "私信已经结束"
-        elif not current:
-            reason = "仅可查看获准继承的历史"
+        if not spectator:
+            if row["status"] != "active":
+                reason = "等待全部成员同意" if row["status"] == "pending" else "私信已经结束"
+            elif not current:
+                reason = "仅可查看获准继承的历史"
         summaries = []
         for member_id in members:
             if member_id == "host":
@@ -458,7 +435,9 @@ def channels_for(db, game, actor, domain_view):
             else member["name"]
             for member in summaries
         )
-        actions = channel_actions(row, actor, invitation, current) if not ended else []
+        actions = (
+            channel_actions(row, actor, invitation, current) if not ended and not spectator else []
+        )
         result.append(
             {
                 "id": row["id"],
@@ -475,8 +454,8 @@ def channels_for(db, game, actor, domain_view):
                 "actions": actions,
             }
         )
-    if host_capable(actor):
-        # 观战频道对主持人开放：可见、可发言（玩家永远看不到它）。
+    if host_capable(actor) or spectator:
+        # 观战者只读；主持人可发言，玩家不可见。
         spectator_reason = storage.channel_send_reason(db, game, actor, SPECTATOR_CHANNEL)
         result.append(
             {
@@ -515,7 +494,7 @@ def channel_create_descriptor(db, game, actor, participants):
     if game["status"] == "ended" or storage.active_private_channel(db, game, actor["id"]):
         return None
     if actor.get("kind") == "spectator":
-        # 观战者独享观战频道，不能发起任何私信。
+        # 观战者只读全部频道，不能发起私信。
         return None
     host = host_capable(actor)
     night = night_half(game)
@@ -527,7 +506,7 @@ def channel_create_descriptor(db, game, actor, participants):
         options.append(("host", host_label(game)))
     if host or not exclusive:
         for row in participants:
-            # 观战者已收拢进观战频道：私信邀请名单不再出现他们。
+            # 观战者只读，不参与私信邀请。
             if not row["active"] or row["blocked"] or row["id"] == actor["id"]:
                 continue
             if row["kind"] == "spectator":
@@ -716,7 +695,7 @@ def view(db, game, actor, online):
     ]
     active_private = storage.active_private_channel(db, game, actor["id"])
     if actor.get("kind") == "spectator":
-        # 观战者没有私信：不下发任何 channel.* 行动。
+        # 观战者只读全部频道，不下发任何 channel.* 行动。
         result["actions"] = []
     elif active_private and not host_capable(actor):
         result["actions"] = collected_channel_actions

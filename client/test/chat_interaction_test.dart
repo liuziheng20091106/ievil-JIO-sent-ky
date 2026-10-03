@@ -8,8 +8,196 @@ import 'package:seven_double_client/src/shell.dart';
 import 'package:seven_double_client/src/role_visuals.dart';
 import 'package:seven_double_client/src/store.dart';
 
+import 'typing_status_test.dart' show RecordingLive;
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets('观战默认公屏，历史与实时按完整频道筛选且只能读取', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final channelIds = [
+      'public',
+      'private:ended',
+      'private:host',
+      'spectator',
+      'system',
+      'private:pending',
+    ];
+    final view = GameView.fromJson({
+      'ui_version': 1,
+      'id': 'game-1',
+      'version': 1,
+      'status': 'playing',
+      'day': 1,
+      'half': 'day',
+      'phase': 'speech',
+      'seats': [],
+      'self': {},
+      'public': {},
+      'can_chat': false,
+      'actions': [],
+      'channels': [
+        for (final id in channelIds)
+          {
+            'id': id,
+            'label': id == 'public' ? '公开讨论' : id,
+            'status': id == 'private:ended'
+                ? 'ended'
+                : id == 'private:pending'
+                    ? 'pending'
+                    : 'active',
+            'can_send': false,
+            'reason': '观战只读',
+            'actions': [],
+            'members': [
+              {'id': 'p1'},
+              {'id': id == 'private:host' ? 'host' : 'p2'},
+            ],
+          },
+      ],
+    });
+    final store = GameStore.forPreview(
+      preferences: await SharedPreferences.getInstance(),
+      endpoint: ServerEndpoint.parse('http://127.0.0.1:8000'),
+      actor: Actor.fromJson({'id': 's1', 'kind': 'spectator', 'name': '观战'}),
+      view: view,
+      gameId: 'game-1',
+    );
+    addTearDown(store.dispose);
+    final api = store.api!;
+    addTearDown(api.close);
+    store.api = null;
+    final live = RecordingLive();
+    store.live = live;
+    GameMessage message(int id, String channel) => GameMessage.fromJson({
+          'id': id,
+          'game_id': 'game-1',
+          'kind': channel == 'system' ? 'information' : 'chat',
+          'channel_id': channel,
+          'sender_id': channel == 'public' ? 's1' : 'p1',
+          'text': '消息$id',
+          'audience': ['p1'],
+        });
+    final history = [
+      for (var i = 0; i < channelIds.length; i++) message(i + 1, channelIds[i]),
+    ];
+    final incoming = [
+      for (var i = 0; i < channelIds.length; i++)
+        message(i + 11, channelIds[i]),
+    ];
+    for (final entry in {
+      'all': [1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16],
+      'public': [1, 11],
+      'private': [2, 6, 12, 16],
+      'host': [3, 13],
+      'system': [5, 15],
+    }.entries) {
+      store.messageScope = entry.key;
+      store.messages = [];
+      store.applyLiveEvent({
+        'type': 'sync',
+        'state': view.raw,
+        'messages': history.map((item) => item.raw).toList(),
+      });
+      expect(store.selectedChannelId, 'public');
+      store.mergeMessagesForTest(history);
+      for (final item in incoming) {
+        store.applyLiveEvent({'type': 'message', 'message': item.raw});
+      }
+      expect(store.messages.map((item) => item.id), entry.value,
+          reason: entry.key);
+    }
+    expect(store.view!.allActions, isEmpty);
+    store.api = api;
+    await expectLater(store.sendMessage('禁止发送'), throwsA(isA<ApiException>()));
+    await expectLater(
+        store.sendMessage('', image: 'data:image/png;base64,AA=='),
+        throwsA(isA<ApiException>()));
+    await expectLater(store.sendSticker('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+        throwsA(isA<ApiException>()));
+    await expectLater(
+        store.retractMessage(history.first), throwsA(isA<ApiException>()));
+    store.reportTyping(hasText: true);
+    store.reportTyping(hasText: false);
+    expect(live.frames, isEmpty);
+    store.api = null;
+    store.messageScope = 'all';
+    store.messages = [history.first];
+    await tester.binding.setSurfaceSize(const Size(420, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+        MaterialApp(theme: buildAppTheme(), home: GameShell(store: store)));
+    await tester.pumpAndSettle();
+    expect(find.text('消息1'), findsOneWidget);
+    expect(
+        tester
+            .widgetList<FilterChip>(find.byType(FilterChip))
+            .map((chip) => (chip.label as Text).data),
+        ['全部', '公屏', '私信', '系统', '主持人']);
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+    expect(
+        tester
+            .widgetList<IconButton>(find.byType(IconButton))
+            .singleWhere((button) => button.tooltip == '发送图片')
+            .onPressed,
+        isNull);
+    expect(
+        tester
+            .widget<InkWell>(find.ancestor(
+                of: find.byIcon(Icons.emoji_emotions_outlined),
+                matching: find.byType(InkWell)))
+            .onTap,
+        isNull);
+    expect(
+        tester
+            .widget<FilledButton>(find.ancestor(
+                of: find.byIcon(Icons.arrow_upward_rounded),
+                matching: find.byType(FilledButton)))
+            .onPressed,
+        isNull);
+    await tester.tap(find.byTooltip('选择发送频道'));
+    await tester.pumpAndSettle();
+    expect(tester.widgetList<ListTile>(find.byType(ListTile)), hasLength(6));
+    expect(
+        tester
+            .widgetList<ListTile>(find.byType(ListTile))
+            .every((tile) => tile.enabled),
+        isTrue);
+    expect(find.text('private:pending'), findsOneWidget);
+    await tester.tap(find.text('private:ended'));
+    await tester.pumpAndSettle();
+    expect(store.selectedChannelId, 'private:ended');
+    store.applyLiveEvent({'type': 'state', 'state': view.raw});
+    await tester.pumpAndSettle();
+    expect(store.selectedChannelId, 'private:ended');
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+    await tester.longPress(find.text('消息1'));
+    await tester.pumpAndSettle();
+    expect(find.text('复制'), findsOneWidget);
+    expect(find.text('撤回'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    store.applyLiveEvent({
+      'type': 'state',
+      'state': {
+        ...view.raw,
+        'self': {'seat_id': '1'},
+        'channels': [
+          for (final channel in view.channels)
+            {...channel.raw, 'can_send': channel.id == 'public'},
+        ],
+      },
+    });
+    await tester.pumpAndSettle();
+    expect(store.selectedChannelId, 'public');
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isTrue);
+    await tester.longPress(find.text('消息1'));
+    await tester.pumpAndSettle();
+    expect(find.text('撤回'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('同批新增行动合并展示，关闭后不逐个重弹', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final base = {

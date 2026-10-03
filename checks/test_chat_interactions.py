@@ -180,7 +180,7 @@ class ChatInteractions(unittest.TestCase):
         self.assertEqual(public["mention_ids"], [b["id"]])
         self.assertEqual(self.history(second, public["id"])["mention_ids"], [b["id"]])
         self.assertEqual(self.history(third, public["id"])["mention_ids"], [b["id"]])
-        self.assertIsNone(self.history(spectator, public["id"]))
+        self.assertEqual(self.history(spectator, public["id"])["mention_ids"], [b["id"]])
         forged = self.client.post(
             self.root + "/messages",
             headers=first,
