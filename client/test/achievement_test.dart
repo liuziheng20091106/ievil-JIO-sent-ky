@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:seven_double_client/src/achievement_pages.dart';
@@ -110,18 +111,6 @@ void main() {
         AchievementRarity.of(achievementRarityMax + 5).background,
         AchievementRarity.of(achievementRarityMax).background,
       );
-    });
-
-    test('每档徽章文字与底色的对比度至少为 4.5', () {
-      for (var value = 1; value <= achievementRarityMax; value++) {
-        final style = AchievementRarity.of(value);
-        final background = style.background.computeLuminance();
-        final foreground = style.foreground.computeLuminance();
-        final lighter = background > foreground ? background : foreground;
-        final darker = background < foreground ? background : foreground;
-        expect((lighter + .05) / (darker + .05), greaterThanOrEqualTo(4.5),
-            reason: '第 $value 档徽章文字必须可读');
-      }
     });
 
     test('获得时间与参赛时间按本机时区显示，解析失败给空串', () {
@@ -284,14 +273,14 @@ void main() {
         ));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
-      await tester.pumpAndSettle();
+      await tester.pump();
 
       Future<void> choose(int index) async {
         await tester.runAsync(() async {
           await tester.tap(find.byType(CheckboxListTile).at(index));
           await Future<void>.delayed(const Duration(milliseconds: 100));
         });
-        await tester.pumpAndSettle();
+        await tester.pump();
       }
 
       for (var index = 0; index < 5; index++) {
@@ -332,7 +321,7 @@ void main() {
         ));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
-      await tester.pumpAndSettle();
+      await tester.pump();
       expect(find.text('特殊'), findsNWidgets(5));
       expect(find.text('专属'), findsNWidgets(2));
       for (var rarity = 5; rarity <= 10; rarity++) {
@@ -345,27 +334,97 @@ void main() {
   });
 
   group('成就徽章', () {
-    testWidgets('徽章用稀有度底色显示成就名', (tester) async {
-      await tester.pumpWidget(MaterialApp(
-        theme: buildAppTheme(),
-        home: const Scaffold(
-          body: Center(child: AchievementBadge(name: '神秘黑幕女', rarity: 7)),
-        ),
-      ));
-      expect(find.text('神秘黑幕女'), findsOneWidget);
-      final container = tester
-          .widgetList<Container>(
-            find.ancestor(
-              of: find.text('神秘黑幕女'),
-              matching: find.byType(Container),
+    testWidgets('明亮底色保持白字轮廓，青银金反光可关闭和恢复', (tester) async {
+      final keys = [for (var value = 1; value <= 10; value++) GlobalKey()];
+      const animatedRarities = {4, 9, 10};
+      Future<void> mount({bool reduceMotion = false}) =>
+          tester.pumpWidget(MaterialApp(
+            theme: buildAppTheme(),
+            home: MediaQuery(
+              data: MediaQueryData(disableAnimations: reduceMotion),
+              child: Scaffold(
+                body: Column(
+                  children: [
+                    for (var index = 0; index < keys.length; index++)
+                      RepaintBoundary(
+                        key: keys[index],
+                        child: AchievementBadge(
+                          name: 'M',
+                          rarity: index + 1,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-          )
-          .first;
-      expect(
-        (container.decoration as BoxDecoration).color,
-        AchievementRarity.of(7).background,
-        reason: '徽章底色必须来自稀有度色板',
-      );
+          ));
+      Future<List<int>> pixels(GlobalKey key) async {
+        final boundary =
+            key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+        final image = await boundary.toImage();
+        final data = await image.toByteData();
+        image.dispose();
+        return data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      }
+
+      Future<List<List<int>>> snapshot() async => [
+            for (final key in keys) (await tester.runAsync(() => pixels(key)))!,
+          ];
+
+      await mount();
+      final before = await snapshot();
+      for (var index = 0; index < keys.length; index++) {
+        final boundary = keys[index].currentContext!.findRenderObject()!
+            as RenderRepaintBoundary;
+        final width = boundary.size.width.ceil();
+        final height = boundary.size.height.ceil();
+        var whiteInk = false;
+        var outlineLuminance = 1.0;
+        // 包含文字周围的轮廓，但避开青银金徽章的亮色边框。
+        for (var y = 3; y < height - 3; y++) {
+          for (var x = 8; x < width - 8; x++) {
+            final offset = (y * width + x) * 4;
+            final red = before[index][offset];
+            final green = before[index][offset + 1];
+            final blue = before[index][offset + 2];
+            whiteInk |= red >= 245 && green >= 245 && blue >= 245;
+            final luminance =
+                Color.fromARGB(255, red, green, blue).computeLuminance();
+            if (luminance < outlineLuminance) outlineLuminance = luminance;
+          }
+        }
+        expect(whiteInk, isTrue, reason: '第 ${index + 1} 档名称必须是白字');
+        expect(1.05 / (outlineLuminance + .05), greaterThanOrEqualTo(4.5),
+            reason: '第 ${index + 1} 档明亮底色上的白字必须有可读轮廓');
+      }
+      await tester.pump(const Duration(milliseconds: 800));
+      final moving = await snapshot();
+      for (var index = 0; index < keys.length; index++) {
+        expect(
+          moving[index],
+          animatedRarities.contains(index + 1)
+              ? isNot(orderedEquals(before[index]))
+              : orderedEquals(before[index]),
+          reason: '只有青、银、金三档有反光',
+        );
+      }
+
+      await mount(reduceMotion: true);
+      final still = await snapshot();
+      await tester.pump(const Duration(milliseconds: 800));
+      final disabled = await snapshot();
+      for (var index = 0; index < keys.length; index++) {
+        expect(disabled[index], orderedEquals(still[index]));
+      }
+      expect(tester.binding.hasScheduledFrame, isFalse);
+
+      await mount();
+      await tester.pump(const Duration(milliseconds: 800));
+      final resumed = await snapshot();
+      for (final rarity in animatedRarities) {
+        expect(resumed[rarity - 1], isNot(orderedEquals(still[rarity - 1])));
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
     });
 
     testWidgets('对局内昵称右边显示佩戴的成就', (tester) async {

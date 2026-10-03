@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 import 'design.dart';
@@ -9,6 +11,13 @@ import 'store.dart';
 /// 成就本身由主持人授权、服务端保存（独立成就库）；客户端只负责按稀有度上色：
 /// 1-10 共十种底色，数字越大越稀有、颜色越醒目。
 
+const _achievementTextOutline = [
+  Shadow(color: Color(0xB3000000), offset: Offset(1, 0)),
+  Shadow(color: Color(0xB3000000), offset: Offset(-1, 0)),
+  Shadow(color: Color(0xB3000000), offset: Offset(0, 1)),
+  Shadow(color: Color(0xB3000000), offset: Offset(0, -1)),
+];
+
 const achievementRarityMax = 10;
 
 String achievementRarityLabel(int rarity) => switch (rarity) {
@@ -17,24 +26,25 @@ String achievementRarityLabel(int rarity) => switch (rarity) {
       _ => '稀有度 $rarity',
     };
 
-/// 稀有度的一档配色：浅色徽章底使用深色文字，保持可读。
+/// 稀有度的一档配色：明亮底色，白字用深色轮廓保持可读。
 class AchievementRarity {
-  const AchievementRarity(this.background, {this.foreground = Colors.white});
+  const AchievementRarity(this.background, {this.hasShine = false});
 
   final Color background;
-  final Color foreground;
+  final Color foreground = Colors.white;
+  final bool hasShine;
 
   static const _colors = <int, AchievementRarity>{
-    1: AchievementRarity(Color(0xFF8A9099), foreground: Colors.black), // 灰
-    2: AchievementRarity(Color(0xFF9B4DE0)), // 紫
-    3: AchievementRarity(Color(0xFF2F6FED)), // 蓝
-    4: AchievementRarity(Color(0xFF17A09B), foreground: Colors.black), // 青
-    5: AchievementRarity(Color(0xFFA6D989), foreground: Colors.black), // 浅绿
-    6: AchievementRarity(Color(0xFFC5A34A), foreground: Colors.black), // 土黄
-    7: AchievementRarity(Color(0xFFE0701E), foreground: Colors.black), // 橘
-    8: AchievementRarity(Color(0xFFD0322E)), // 红
-    9: AchievementRarity(Color(0xFFC0C0C0), foreground: Colors.black), // 银
-    10: AchievementRarity(Color(0xFFD4AF37), foreground: Colors.black), // 金
+    1: AchievementRarity(Color(0xFF9AA3AF)), // 灰
+    2: AchievementRarity(Color(0xFFAE6AE8)), // 紫
+    3: AchievementRarity(Color(0xFF4B88F5)), // 蓝
+    4: AchievementRarity(Color(0xFF20C7BA), hasShine: true), // 青
+    5: AchievementRarity(Color(0xFFA6D989)), // 浅绿
+    6: AchievementRarity(Color(0xFFD9B75A)), // 土黄
+    7: AchievementRarity(Color(0xFFFF963F)), // 橘
+    8: AchievementRarity(Color(0xFFF35B57)), // 红
+    9: AchievementRarity(Color(0xFFC8D0DA), hasShine: true), // 银
+    10: AchievementRarity(Color(0xFFFFD04F), hasShine: true), // 金
   };
 
   /// 越界（服务端异常数据或客户端版本落后）时收敛到 1-10，不抛异常。
@@ -64,30 +74,161 @@ class AchievementBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = AchievementRarity.of(rarity);
-    return Container(
+    final radius = BorderRadius.circular(AppRadius.chip);
+    final content = Padding(
       padding: EdgeInsets.symmetric(
         horizontal: dense ? 6 : 10,
         vertical: dense ? 2 : 4,
       ),
-      decoration: BoxDecoration(
-        color: style.background,
-        borderRadius: BorderRadius.circular(AppRadius.chip),
-      ),
+      // 青、银、金的底色与扫光由外层绘制，文字始终在反光上方。
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: dense ? 132 : 220),
         child: Text(
           name,
+          maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: dense ? 10.5 : 12,
             height: 1.3,
             fontWeight: FontWeight.w600,
             color: style.foreground,
+            shadows: _achievementTextOutline,
           ),
         ),
       ),
     );
+    if (style.hasShine) {
+      return _MetallicSurface(
+        color: style.background,
+        radius: radius,
+        child: content,
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(color: style.background, borderRadius: radius),
+      child: content,
+    );
   }
+}
+
+class _MetallicSurface extends StatefulWidget {
+  const _MetallicSurface({
+    required this.color,
+    required this.radius,
+    required this.child,
+  });
+
+  final Color color;
+  final BorderRadius radius;
+  final Widget child;
+
+  @override
+  State<_MetallicSurface> createState() => _MetallicSurfaceState();
+}
+
+class _MetallicSurfaceState extends State<_MetallicSurface>
+    with SingleTickerProviderStateMixin {
+  late final _shine = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _shine.stop();
+      _shine.value = .18;
+    } else if (!_shine.isAnimating) {
+      _shine.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _shine.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: ClipRRect(
+          borderRadius: widget.radius,
+          child: CustomPaint(
+            painter: _MetallicPainter(_shine, widget.color, widget.radius),
+            child: widget.child,
+          ),
+        ),
+      );
+}
+
+class _MetallicPainter extends CustomPainter {
+  _MetallicPainter(this.shine, this.color, this.radius) : super(repaint: shine);
+
+  final Animation<double> shine;
+  final Color color;
+  final BorderRadius radius;
+  final _backgroundPaint = Paint();
+  final _borderPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1;
+  final _reflectionPaint = Paint();
+  final _reflectionBorderPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1;
+  Size? _size;
+  late Rect _rect;
+  late RRect _outline;
+
+  static const _reflectionStops = [0.0, .5, 1.0];
+
+  static const _reflectionColors = [
+    Colors.transparent,
+    Color(0x32FFFFFF),
+    Colors.transparent,
+  ];
+  static const _rimColors = [
+    Colors.transparent,
+    Color(0xCCFFFFFF),
+    Colors.transparent,
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (_size != size) {
+      _size = size;
+      _rect = Offset.zero & size;
+      _outline = radius.toRRect(_rect).deflate(.5);
+      _backgroundPaint.shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color.lerp(color, Colors.black, .12)!, color, color],
+        stops: const [0, .45, 1],
+      ).createShader(_rect);
+      _borderPaint.color = Color.lerp(color, Colors.white, .6)!;
+    }
+    canvas.drawRect(_rect, _backgroundPaint);
+    canvas.drawRRect(_outline, _borderPaint);
+    // 扫光经过后留一段停顿；只重绘徽章，不逐帧重建聊天列表。
+    if (shine.value >= .42) return;
+    final progress = Curves.easeInOut.transform(shine.value / .42);
+    final band = size.width * .28 + size.height;
+    final x = -band + (size.width + band * 2) * progress;
+    final start = Offset(x - band / 2, size.height);
+    final end = Offset(x + band / 2, 0);
+    _reflectionPaint.shader =
+        ui.Gradient.linear(start, end, _reflectionColors, _reflectionStops);
+    canvas.drawRect(_rect, _reflectionPaint);
+    _reflectionBorderPaint.shader =
+        ui.Gradient.linear(start, end, _rimColors, _reflectionStops);
+    canvas.drawRRect(_outline, _reflectionBorderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MetallicPainter oldDelegate) =>
+      oldDelegate.shine != shine ||
+      oldDelegate.color != color ||
+      oldDelegate.radius != radius;
 }
 
 /// 稀有度选择器：十种颜色一目了然，主持人新建/编辑成就时挑档位。
@@ -130,29 +271,37 @@ class _RarityChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = AchievementRarity.of(value);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.field),
-      child: Container(
-        width: 40,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: style.background,
-          borderRadius: BorderRadius.circular(AppRadius.field),
-          border: selected
-              ? Border.all(color: context.palette.text, width: 2)
-              : null,
-        ),
-        child: Text(
-          '$value',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            color: style.foreground,
-          ),
+    final radius = BorderRadius.circular(AppRadius.field);
+    final content = Container(
+      width: 40,
+      height: 36,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: style.hasShine ? null : style.background,
+        borderRadius: radius,
+        border:
+            selected ? Border.all(color: context.palette.text, width: 2) : null,
+      ),
+      child: Text(
+        '$value',
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: style.foreground,
+          shadows: _achievementTextOutline,
         ),
       ),
+    );
+    return InkWell(
+      onTap: onTap,
+      borderRadius: radius,
+      child: style.hasShine
+          ? _MetallicSurface(
+              color: style.background,
+              radius: radius,
+              child: content,
+            )
+          : content,
     );
   }
 }
