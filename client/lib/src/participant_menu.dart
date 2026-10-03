@@ -182,8 +182,7 @@ class _RoleIntroSheet extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        headerLabel ??
-                            (opening ? '开局 · 上层牌' : '新角色登场'),
+                        headerLabel ?? (opening ? '开局 · 上层牌' : '新角色登场'),
                         style: TextStyle(
                           fontSize: 12,
                           color: context.palette.accent,
@@ -231,7 +230,8 @@ class _RoleIntroSheet extends StatelessWidget {
                   (opening
                       ? '开局起你使用上层牌；上层牌出局后，你才开始使用下层牌。私密信息只在本机显示。'
                       : '此刻起你使用这张牌的技能；私密信息只在本机显示。'),
-              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+              style:
+                  TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],
         ),
@@ -287,16 +287,16 @@ class _RoleDetailSheet extends StatelessWidget {
                         ref.seatId != null
                             ? '${ref.seatId} 号 · ${ref.name}'
                             : ref.name,
-                        style:  TextStyle(
+                        style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
                           color: context.palette.text,
                         ),
                       ),
-                       SizedBox(height: 2),
+                      SizedBox(height: 2),
                       Text(
                         role == null ? '公开角色未显示' : '公开身份：${role.name}',
-                        style:  TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           color: context.palette.textTertiary,
                         ),
@@ -306,28 +306,31 @@ class _RoleDetailSheet extends StatelessWidget {
                 ),
               ],
             ),
-             SizedBox(height: AppSpacing.md),
+            SizedBox(height: AppSpacing.md),
             Wrap(
               spacing: AppSpacing.sm,
               runSpacing: AppSpacing.sm,
               children: [
                 Tag(
                   ref.dead ? '已出局' : '存活',
-                  color: ref.dead ? context.palette.textSecondary : context.palette.success,
-                  background:
-                      ref.dead ? context.palette.surfaceMuted : context.palette.successSoft,
+                  color: ref.dead
+                      ? context.palette.textSecondary
+                      : context.palette.success,
+                  background: ref.dead
+                      ? context.palette.surfaceMuted
+                      : context.palette.successSoft,
                 ),
                 if (ref.online)
-                   Tag('在线',
+                  Tag('在线',
                       icon: Icons.wifi_tethering, color: context.palette.info),
                 if (ref.muted)
-                   Tag(
+                  Tag(
                     '已禁言',
                     color: context.palette.warning,
                     background: context.palette.warningSoft,
                   ),
                 if (ref.isHost)
-                   Tag(
+                  Tag(
                     '主持人',
                     color: context.palette.host,
                     background: context.palette.hostSoft,
@@ -346,19 +349,20 @@ class _RoleDetailSheet extends StatelessWidget {
                 ),
               ],
             ] else if (visual != null) ...[
-               SizedBox(height: AppSpacing.lg),
+              SizedBox(height: AppSpacing.lg),
               Text(
                 '该角色的技能说明尚未从服务器读取到（${visual.name}）。',
-                style:  TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   color: context.palette.textTertiary,
                 ),
               ),
             ],
-             SizedBox(height: AppSpacing.md),
-             Text(
+            SizedBox(height: AppSpacing.md),
+            Text(
               '技能说明是公开规则；此人的下层牌、剩余次数等私密信息不会在这里显示。',
-              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+              style:
+                  TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],
         ),
@@ -381,9 +385,11 @@ class _SkillBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: double.infinity,
-        padding:  EdgeInsets.all(AppSpacing.md),
+        padding: EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
-          color: danger ? context.palette.dangerSoft : context.palette.surfaceMuted,
+          color: danger
+              ? context.palette.dangerSoft
+              : context.palette.surfaceMuted,
           borderRadius: BorderRadius.circular(AppRadius.field),
         ),
         child: Column(
@@ -396,23 +402,26 @@ class _SkillBlock extends StatelessWidget {
                       ? Icons.local_fire_department_outlined
                       : Icons.auto_awesome_outlined,
                   size: 15,
-                  color: danger ? context.palette.danger : context.palette.accent,
+                  color:
+                      danger ? context.palette.danger : context.palette.accent,
                 ),
-                 SizedBox(width: AppSpacing.xs),
+                SizedBox(width: AppSpacing.xs),
                 Text(
                   title,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: danger ? context.palette.danger : context.palette.accent,
+                    color: danger
+                        ? context.palette.danger
+                        : context.palette.accent,
                   ),
                 ),
               ],
             ),
-             SizedBox(height: AppSpacing.xs),
+            SizedBox(height: AppSpacing.xs),
             Text(
               body,
-              style:  TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 height: 1.6,
                 color: context.palette.text,
@@ -469,7 +478,7 @@ Future<void> showAvatarMenu(
     ],
   ];
 
-  // 该参与者的账号 id：用于读取公开的成就摘要（总成就数 + 最稀有的 5 个）。
+  // 该参与者的账号 id：用于读取公开的成就摘要（总成就数 + 展示的 5 个）。
   final accountId = store.accountFor(ref.participantId);
 
   await showPredictiveSheet<void>(
@@ -507,7 +516,7 @@ Future<void> showAvatarMenu(
                           ref.seatId != null
                               ? '${ref.seatId} 号 · ${ref.name}'
                               : ref.name,
-                          style:  TextStyle(
+                          style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.w600,
                             color: context.palette.text,
@@ -519,7 +528,7 @@ Future<void> showAvatarMenu(
                               : ref.isHost
                                   ? '主持人'
                                   : '选择要执行的操作',
-                          style:  TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             color: context.palette.textTertiary,
                           ),
@@ -534,14 +543,17 @@ Future<void> showAvatarMenu(
               ListTile(
                 leading: Icon(
                   entry.icon,
-                  color:
-                      entry.danger ? context.palette.danger : context.palette.textSecondary,
+                  color: entry.danger
+                      ? context.palette.danger
+                      : context.palette.textSecondary,
                 ),
                 title: Text(
                   entry.label,
                   style: TextStyle(
                     fontSize: 15,
-                    color: entry.danger ? context.palette.danger : context.palette.text,
+                    color: entry.danger
+                        ? context.palette.danger
+                        : context.palette.text,
                   ),
                 ),
                 onTap: () {
@@ -549,7 +561,7 @@ Future<void> showAvatarMenu(
                   entry.onTap();
                 },
               ),
-            // 成就摘要在菜单下方：总量与最稀有的几个都直接摊开，不用再点一次。
+            // 成就摘要在菜单下方：总量与展示的成就直接摊开，不用再点一次。
             // 主持人不是参与身份，但主持账号与它的玩家身份共用成就，所以一并显示。
             if (accountId != null) ...[
               Divider(height: AppSpacing.xl, color: context.palette.border),
@@ -560,7 +572,8 @@ Future<void> showAvatarMenu(
                   AppSpacing.xl,
                   AppSpacing.lg,
                 ),
-                child: AchievementSummaryBlock(store: store, accountId: accountId),
+                child:
+                    AchievementSummaryBlock(store: store, accountId: accountId),
               ),
             ],
             const SizedBox(height: AppSpacing.lg),
@@ -1152,7 +1165,8 @@ class _SkillDetailSheet extends StatelessWidget {
                       '剩余次数、下层牌与私密目标不会在这里显示。'
                   : '技能说明是公开规则；声明本身不代表身份——伪装声明的播报与真声明完全一致。'
                       '剩余次数、下层牌与私密目标不会在这里显示。',
-              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+              style:
+                  TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ],
         ),

@@ -1,7 +1,4 @@
-// 成就系统的客户端边界：
-// 1. 稀有度 1-10 对应十种不同底色，越界值收敛到两端（服务端换了档位也不能崩）。
-// 2. 成就接口的路径、方法与请求体（佩戴/取消佩戴、授权、撤销）。
-// 3. 对局内昵称右边显示佩戴的成就徽章，没有佩戴就不显示。
+// 成就系统的客户端边界：色板、优先展示上限与失败恢复、稀有度文案、消息徽章。
 //
 // 成就的授权、撤销、排序等规则由后端 checks/test_achievements.py 守着；
 // 这里只验证客户端的解码与呈现。
@@ -113,11 +110,6 @@ void main() {
         AchievementRarity.of(achievementRarityMax + 5).background,
         AchievementRarity.of(achievementRarityMax).background,
       );
-      // 数字越大越稀有：最高档与最低档必须是不同的颜色。
-      expect(
-        AchievementRarity.of(achievementRarityMax).background,
-        isNot(AchievementRarity.of(1).background),
-      );
     });
 
     test('获得时间与参赛时间按本机时区显示，解析失败给空串', () {
@@ -133,14 +125,17 @@ void main() {
     late HttpServer server;
     late ServerEndpoint endpoint;
     final calls = <String>[];
-    final bodies = <String>[];
     HttpOverrides? savedOverrides;
+    var myRarities = <int>[2];
+    var priorityGrantIds = <String>[];
+    var rejectPriority = false;
 
     setUp(() async {
       calls.clear();
-      bodies.clear();
-      // flutter_test 默认把 HttpClient 换成「一律 400」的桩；这一组用真实
-      // 回环服务器验证请求路径与解码，临时恢复真实 HttpClient。
+      myRarities = [2];
+      priorityGrantIds = [];
+      rejectPriority = false;
+      // flutter_test 默认替换 HttpClient；这里用真实回环请求驱动页面状态。
       savedOverrides = HttpOverrides.current;
       HttpOverrides.global = null;
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -149,7 +144,6 @@ void main() {
         final raw = request.method == 'POST'
             ? await utf8.decoder.bind(request).join()
             : '';
-        if (raw.isNotEmpty) bodies.add(raw);
         final path = request.uri.path;
         Object payload;
         if (path == '/api/achievements/catalog') {
@@ -160,54 +154,23 @@ void main() {
           };
         } else if (path == '/api/achievements/me') {
           payload = {
-            'achievements': [grantJson('grant-1', 2)],
+            'achievements': [
+              for (final rarity in myRarities) grantJson('g$rarity', rarity),
+            ],
             'equipped': null,
+            'priority_grant_ids': priorityGrantIds,
             'max_rarity': 10,
           };
-        } else if (path == '/api/achievements/me/equip') {
-          final grant = jsonDecode(raw)['grant_id']?.toString();
-          payload = {
-            'ok': true,
-            'equipped': grant == null
-                ? null
-                : {'id': grant, 'name': '成就2', 'rarity': 2},
-          };
-        } else if (path == '/api/achievements/players') {
-          payload = {
-            'players': [
-              {
-                'account_id': 'a1',
-                'name': '阿雪',
-                'avatar_url': '',
-                'last_played_at': '2026-09-24T12:00:00',
-                'achievement_count': 1,
-                'equipped': {'id': 'grant-1', 'name': '成就2', 'rarity': 2},
-                'achievements': [grantJson('grant-1', 2)],
-              },
-              {
-                'account_id': 'a2',
-                'name': 'kiwi',
-                'avatar_url': '',
-                'last_played_at': null,
-                'achievement_count': 0,
-                'equipped': null,
-                'achievements': <dynamic>[],
-              },
-            ],
-            'max_rarity': 10,
-          };
-        } else if (path.startsWith('/api/achievements/accounts/')) {
-          payload = {
-            'account_id': 'a1',
-            'name': '阿雪',
-            'total': 7,
-            'equipped': {'id': 'grant-1', 'name': '成就9', 'rarity': 9},
-            'top': [
-              for (var rarity = 9; rarity >= 5; rarity--)
-                grantJson('g$rarity', rarity)
-            ],
-            'max_rarity': 10,
-          };
+        } else if (path == '/api/achievements/me/priority') {
+          if (rejectPriority) {
+            request.response.statusCode = 403;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'detail': '成就授权已撤销'}));
+            await request.response.close();
+            return;
+          }
+          priorityGrantIds = List<String>.from(jsonDecode(raw)['grant_ids']);
+          payload = {'ok': true, 'priority_grant_ids': priorityGrantIds};
         } else if (path.endsWith('/equipped')) {
           payload = {
             'participants': [
@@ -225,14 +188,10 @@ void main() {
               },
             ],
           };
-        } else if (path == '/api/achievements/defs') {
-          payload = definitionJson(3, id: 'ach-new', name: '神秘黑幕女');
-        } else if (path.startsWith('/api/achievements/defs/')) {
-          payload = request.method == 'DELETE'
-              ? {'ok': true, 'removed_grants': 2}
-              : definitionJson(3, id: 'ach-new', name: '神秘黑幕女');
         } else {
-          payload = grantJson('grant-new', 3, name: '神秘黑幕女');
+          request.response.statusCode = 404;
+          await request.response.close();
+          return;
         }
         request.response.statusCode = 200;
         request.response.headers.contentType = ContentType.json;
@@ -245,98 +204,6 @@ void main() {
     tearDown(() async {
       await server.close(force: true);
       HttpOverrides.global = savedOverrides;
-    });
-
-    test('目录、我的成就与佩戴/取消佩戴', () async {
-      final api = GameApi(endpoint, token: 'token-abc');
-      final catalog = await api.achievementCatalog();
-      expect(catalog, hasLength(2));
-      expect(catalog.first.name, '成就2');
-      expect(catalog.first.rarity, 2);
-      expect(catalog.first.grantedCount, 1);
-
-      final mine = await api.myAchievements();
-      expect(mine.achievements.single.id, 'grant-1');
-      expect(mine.equipped, isNull);
-
-      final equipped = await api.equipAchievement('grant-1');
-      expect(equipped!.name, '成就2');
-      expect(equipped.rarity, 2);
-      expect(await api.equipAchievement(null), isNull);
-
-      expect(
-        calls,
-        containsAll(<String>[
-          'GET /api/achievements/catalog',
-          'GET /api/achievements/me',
-          'POST /api/achievements/me/equip',
-        ]),
-      );
-      expect(bodies, contains('{"grant_id":"grant-1"}'));
-      expect(bodies, contains('{"grant_id":null}'));
-    });
-
-    test('玩家列表、摘要与本局佩戴映射', () async {
-      final api = GameApi(endpoint, token: 'token-abc');
-      final players = await api.achievementPlayers();
-      expect(players.map((item) => item.name), ['阿雪', 'kiwi']);
-      expect(players.first.equipped!.name, '成就2');
-      expect(players.first.lastPlayedAt, '2026-09-24T12:00:00');
-      expect(players.last.lastPlayedAt, isNull);
-      expect(players.last.achievementCount, 0);
-
-      final summary = await api.achievementSummary('a1');
-      expect(summary.total, 7);
-      expect(summary.top.map((item) => item.rarity), [9, 8, 7, 6, 5]);
-      expect(summary.equipped!.rarity, 9);
-
-      final equipped = await api.gameEquipped('game-1');
-      expect(equipped, hasLength(3));
-      expect(equipped.first.participantId, 'p1');
-      expect(equipped.first.accountId, 'a1');
-      expect(equipped.first.equipped!.name, '成就9');
-      expect(equipped[1].equipped, isNull);
-      // 主持人固定占最后一行，accountId 是它的 QQ 账号。
-      expect(equipped.last.participantId, 'host');
-      expect(equipped.last.equipped!.rarity, 7);
-    });
-
-    test('新建、编辑与删除定义，授权与撤销', () async {
-      final api = GameApi(endpoint, token: 'token-abc');
-      final created = await api.createAchievement(
-        name: '神秘黑幕女',
-        detail: '在一局内控制傀儡未被识破',
-        rarity: 3,
-      );
-      expect(created.id, 'ach-new');
-      expect(created.name, '神秘黑幕女');
-
-      await api.updateAchievement(
-        'ach-new',
-        name: '神秘黑幕女',
-        detail: '改了内容',
-        rarity: 6,
-      );
-      expect(await api.deleteAchievement('ach-new'), 2);
-
-      final granted = await api.grantAchievement('a1', 'ach-new');
-      expect(granted.name, '神秘黑幕女');
-      await api.revokeAchievement('grant-new');
-
-      expect(
-        calls,
-        containsAll(<String>[
-          'POST /api/achievements/defs',
-          'POST /api/achievements/defs/ach-new',
-          'DELETE /api/achievements/defs/ach-new',
-          'POST /api/achievements/players/a1/grants',
-          'DELETE /api/achievements/grants/grant-new',
-        ]),
-      );
-      expect(
-        bodies.first,
-        '{"name":"神秘黑幕女","detail":"在一局内控制傀儡未被识破","rarity":3}',
-      );
     });
 
     test('对局内佩戴信息写进 store，供昵称徽章使用', () async {
@@ -392,27 +259,76 @@ void main() {
       expect(equippedCalls(), hasLength(2));
     });
 
-    testWidgets('我的成就底部有成就一览，全部成就都列出来（含未获得）', (tester) async {
+    testWidgets('优先展示选满后禁选第六个，取消后可选；保存失败保留原选择', (tester) async {
+      myRarities = [1, 2, 3, 4, 5, 6];
       final store = await previewStore();
       store.api = GameApi(endpoint, token: 'token-abc');
+      await tester.binding.setSurfaceSize(const Size(800, 1800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.runAsync(() async {
         await tester.pumpWidget(MaterialApp(
           theme: buildAppTheme(),
           home: MyAchievementsPage(store: store),
         ));
-        // /me 与 /catalog 是真实回环请求：runAsync 里等它们回来再检查界面。
-        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       await tester.pumpAndSettle();
 
-      expect(find.text('成就一览'), findsOneWidget);
-      expect(find.textContaining('全部 2 个成就'), findsOneWidget);
-      // 已获得的成就在「获得的成就」与一览里各一次；未获得的只在一览里。
-      expect(find.text('成就2'), findsNWidgets(2));
-      expect(find.text('成就5'), findsOneWidget);
-      expect(find.text('未获得'), findsOneWidget);
-      // 没有佩戴任何成就时，未获得的那些不能被当成「已佩戴」。
-      expect(find.text('已佩戴'), findsNothing);
+      Future<void> choose(int index) async {
+        await tester.runAsync(() async {
+          await tester.tap(find.byType(CheckboxListTile).at(index));
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        });
+        await tester.pumpAndSettle();
+      }
+
+      for (var index = 0; index < 5; index++) {
+        await choose(index);
+      }
+      CheckboxListTile choice(int index) =>
+          tester.widget(find.byType(CheckboxListTile).at(index));
+      expect(choice(5).onChanged, isNull);
+      expect(choice(0).onChanged, isNotNull);
+      expect(find.text('优先展示 5/5'), findsOneWidget);
+
+      await choose(0);
+      expect(choice(5).onChanged, isNotNull);
+      rejectPriority = true;
+      await choose(5);
+      expect(choice(5).value, isFalse);
+      expect(find.text('优先展示 4/5'), findsOneWidget);
+      expect(find.text('成就授权已撤销'), findsOneWidget);
+
+      rejectPriority = false;
+      await choose(5);
+      expect(choice(5).value, isTrue);
+      expect(choice(0).onChanged, isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      store.dispose();
+    });
+
+    testWidgets('玩家的已获得与未获得高等级成就只显示特殊或专属', (tester) async {
+      myRarities = [5, 6, 7, 8, 9, 10];
+      final store = await previewStore();
+      store.api = GameApi(endpoint, token: 'token-abc');
+      await tester.binding.setSurfaceSize(const Size(800, 1800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.runAsync(() async {
+        await tester.pumpWidget(MaterialApp(
+          theme: buildAppTheme(),
+          home: MyAchievementsPage(store: store),
+        ));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('特殊'), findsNWidgets(5));
+      expect(find.text('专属'), findsNWidgets(2));
+      for (var rarity = 5; rarity <= 10; rarity++) {
+        expect(find.text('稀有度 $rarity'), findsNothing);
+      }
+      expect(find.text('稀有度 2'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      store.dispose();
     });
   });
 

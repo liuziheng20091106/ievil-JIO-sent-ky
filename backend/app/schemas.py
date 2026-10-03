@@ -165,3 +165,15 @@ class AchievementEquip(Input):
     """佩戴某个成就；grant_id 为空表示取消佩戴。"""
 
     grant_id: str | None = Field(default=None, max_length=64)
+
+
+class AchievementPriority(Input):
+    """按顺序优先展示最多五个成就；空列表取消，禁止重复授权。"""
+
+    grant_ids: list[str] = Field(max_length=5)
+
+    @model_validator(mode="after")
+    def require_unique_grants(self):
+        if len(set(self.grant_ids)) != len(self.grant_ids):
+            raise ValueError("优先展示的成就不能重复")
+        return self

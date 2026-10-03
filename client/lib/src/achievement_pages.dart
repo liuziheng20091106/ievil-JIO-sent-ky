@@ -27,6 +27,7 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
   List<AchievementGrant> grants = const [];
   List<AchievementDef> catalog = const [];
   EquippedAchievement? equipped;
+  List<String> priorityGrantIds = const [];
   String? error;
   bool loading = true;
   String? busyGrantId;
@@ -55,6 +56,7 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
       setState(() {
         grants = result.achievements;
         equipped = result.equipped;
+        priorityGrantIds = result.priorityGrantIds;
         catalog = definitions;
         error = null;
         loading = false;
@@ -98,6 +100,35 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
     }
   }
 
+  Future<void> prioritize(String grantId) async {
+    final api = widget.store.api;
+    if (api == null || busyGrantId != null) return;
+    final selected = [...priorityGrantIds];
+    if (!selected.remove(grantId)) {
+      if (selected.length >= 5) return;
+      selected.add(grantId);
+    }
+    setState(() => busyGrantId = grantId);
+    try {
+      final value = await api.prioritizeAchievements(selected);
+      if (!mounted) return;
+      setState(() {
+        priorityGrantIds = value;
+        busyGrantId = null;
+      });
+    } on ApiException catch (failure) {
+      if (!mounted) return;
+      setState(() => busyGrantId = null);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    } on FormatException catch (failure) {
+      if (!mounted) return;
+      setState(() => busyGrantId = null);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failure.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final mine = equipped;
@@ -109,13 +140,15 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
         actions: [
           IconButton(
             tooltip: '刷新',
-            onPressed: loading ? null : load,
+            onPressed: loading || busyGrantId != null ? null : load,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: load,
+        onRefresh: () async {
+          if (!loading && busyGrantId == null) await load();
+        },
         child: loading
             ? const Center(child: CircularProgressIndicator())
             : ListView(
@@ -164,7 +197,7 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
                                   rarity: mine.rarity,
                                 ),
                                 Text(
-                                  '稀有度 ${mine.rarity}',
+                                  achievementRarityLabel(mine.rarity),
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: context.palette.textTertiary,
@@ -182,9 +215,9 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
                       ),
                     ),
                   ),
-                  const SectionTitle(
+                  SectionTitle(
                     '获得的成就',
-                    subtitle: '成就由主持人授权；这里按稀有度从高到低排列。',
+                    subtitle: '优先展示 ${priorityGrantIds.length}/5',
                   ),
                   if (error != null)
                     Padding(
@@ -211,6 +244,12 @@ class _MyAchievementsPageState extends State<MyAchievementsPage> {
                       equipped: grant.id == equipped?.id,
                       busy: busyGrantId != null,
                       onEquip: () => equip(grant.id),
+                      prioritized: priorityGrantIds.contains(grant.id),
+                      onPrioritize: busyGrantId != null ||
+                              (!priorityGrantIds.contains(grant.id) &&
+                                  priorityGrantIds.length >= 5)
+                          ? null
+                          : () => prioritize(grant.id),
                     ),
                   SectionTitle(
                     '成就一览',
@@ -271,12 +310,16 @@ class _AchievementCard extends StatelessWidget {
     required this.equipped,
     required this.busy,
     required this.onEquip,
+    required this.prioritized,
+    required this.onPrioritize,
   });
 
   final AchievementGrant grant;
   final bool equipped;
   final bool busy;
   final VoidCallback onEquip;
+  final bool prioritized;
+  final VoidCallback? onPrioritize;
 
   @override
   Widget build(BuildContext context) {
@@ -308,7 +351,7 @@ class _AchievementCard extends StatelessWidget {
                       ),
                       const SizedBox(width: AppSpacing.sm),
                       Text(
-                        '稀有度 ${grant.rarity}',
+                        achievementRarityLabel(grant.rarity),
                         style: TextStyle(
                             fontSize: 11, color: context.palette.textTertiary),
                       ),
@@ -339,6 +382,14 @@ class _AchievementCard extends StatelessWidget {
               '获得于 ${achievementStamp(grant.grantedAt, withTime: true)}',
               style:
                   TextStyle(fontSize: 11, color: context.palette.textTertiary),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('优先展示'),
+              value: prioritized,
+              onChanged: onPrioritize == null ? null : (_) => onPrioritize!(),
             ),
           ],
         ),
@@ -413,9 +464,9 @@ class _AchievementCatalogRow extends StatelessWidget {
                       ),
                       const SizedBox(width: AppSpacing.sm),
                       Text(
-                        '稀有度 ${definition.rarity}',
-                        style:
-                            TextStyle(fontSize: 11, color: palette.textTertiary),
+                        achievementRarityLabel(definition.rarity),
+                        style: TextStyle(
+                            fontSize: 11, color: palette.textTertiary),
                       ),
                     ],
                   ),

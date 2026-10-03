@@ -1,10 +1,10 @@
-"""Independent achievement definitions, grants, and equipped display.
+"""Independent achievement definitions, grants, and player-owned display.
 
 成就与七双对局规则无关，所以自成一个库（``data/achievements.sqlite3``）：主持人自定义
-成就（名称 / 内容 / 稀有度 1-10），再把它授权给某个账号；玩家在自己获得的成就里挑一个
-佩戴，对局内其他人才看得到。
+成就（名称 / 内容 / 稀有度 1-10），再把它授权给某个账号；玩家可独立选择一个成就
+佩戴，以及最多五个优先展示的成就，摘要不足五个时按真实稀有度补齐。
 
-独立的意义：建立新对局会清空对局库（``storage.purge``），但这里的定义、授权与佩戴记录
+独立的意义：建立新对局会清空对局库（``storage.purge``），但定义、授权、佩戴与优先展示
 不会被牵动；账号库（``auth.sqlite3``）只用来给列表补充最新昵称与头像，缺了也能靠本库
 里的昵称快照照常显示。
 """
@@ -60,6 +60,7 @@ def initialize():
             account_id TEXT NOT NULL,
             achievement_id TEXT NOT NULL REFERENCES achievements(id),
             granted_at TEXT NOT NULL,
+            priority_position INTEGER,
             UNIQUE(account_id, achievement_id)
         );
         CREATE INDEX IF NOT EXISTS grant_account ON grants(account_id);
@@ -69,6 +70,10 @@ def initialize():
             equipped_grant_id TEXT, last_played_at TEXT, updated_at TEXT NOT NULL
         );
         """)
+        if "priority_position" not in {
+            row["name"] for row in db.execute("PRAGMA table_info(grants)")
+        }:
+            db.execute("ALTER TABLE grants ADD COLUMN priority_position INTEGER")
         db.commit()
 
 
@@ -157,9 +162,7 @@ def delete_definition(achievement_id):
             (now_text(), achievement_id),
         )
         db.execute("DELETE FROM grants WHERE achievement_id=?", (achievement_id,))
-        deleted = db.execute(
-            "DELETE FROM achievements WHERE id=?", (achievement_id,)
-        ).rowcount
+        deleted = db.execute("DELETE FROM achievements WHERE id=?", (achievement_id,)).rowcount
     return {"deleted": bool(deleted), "removed_grants": removed}
 
 
@@ -179,9 +182,7 @@ def grant(account_id, achievement_id, nickname=""):
     stamp = now_text()
     grant_id = "grant-" + secrets.token_urlsafe(12)
     with transaction() as db:
-        if not db.execute(
-            "SELECT 1 FROM achievements WHERE id=?", (achievement_id,)
-        ).fetchone():
+        if not db.execute("SELECT 1 FROM achievements WHERE id=?", (achievement_id,)).fetchone():
             return None
         if db.execute(
             "SELECT 1 FROM grants WHERE account_id=? AND achievement_id=?",
@@ -237,8 +238,51 @@ def grants_for(account_id):
 
 
 def top_grants(account_id, limit=5):
-    """最稀有的前几个成就（头像摘要只给这一部分）。"""
-    return grants_for(account_id)[:limit]
+    """优先选择在前，再按真实稀有度与获得时间补齐头像摘要。"""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT g.id,g.account_id,g.achievement_id,g.granted_at,a.name,a.detail,a.rarity
+               FROM grants g JOIN achievements a ON a.id=g.achievement_id
+               WHERE g.account_id=?
+               ORDER BY g.priority_position IS NULL, g.priority_position,
+                        a.rarity DESC, g.granted_at DESC LIMIT ?""",
+            (account_id, limit),
+        ).fetchall()
+        return [grant_view(row) for row in rows]
+
+
+def priority_grant_ids(account_id):
+    """账号当前有效的优先展示授权，按玩家选择顺序返回。"""
+    with connect() as db:
+        return [
+            row["id"]
+            for row in db.execute(
+                """SELECT g.id FROM grants g JOIN achievements a ON a.id=g.achievement_id
+                   WHERE g.account_id=? AND g.priority_position IS NOT NULL
+                   ORDER BY g.priority_position""",
+                (account_id,),
+            )
+        ]
+
+
+def set_priority_grants(account_id, grant_ids):
+    """原子替换优先展示；先验证全部授权归属，失败时保留原选择。"""
+    with transaction() as db:
+        if grant_ids:
+            placeholders = ",".join("?" for _ in grant_ids)
+            owned = db.execute(
+                f"""SELECT COUNT(*) FROM grants g JOIN achievements a ON a.id=g.achievement_id
+                    WHERE g.account_id=? AND g.id IN ({placeholders})""",
+                (account_id, *grant_ids),
+            ).fetchone()[0]
+            if owned != len(grant_ids):
+                return False
+        db.execute("UPDATE grants SET priority_position=NULL WHERE account_id=?", (account_id,))
+        db.executemany(
+            "UPDATE grants SET priority_position=? WHERE id=? AND account_id=?",
+            ((position, grant_id, account_id) for position, grant_id in enumerate(grant_ids)),
+        )
+        return True
 
 
 def equipped(account_id):

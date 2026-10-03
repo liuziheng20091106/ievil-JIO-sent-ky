@@ -381,7 +381,8 @@ class PuppetPanel {
 class GameAnimationRequest {
   GameAnimationRequest(this.id, this.gameId, Object? value) {
     final raw = jsonObject(value, 'animation');
-    if (raw.length != 3 || !raw.keys.toSet().containsAll(['script', 'images', 'texts'])) {
+    if (raw.length != 3 ||
+        !raw.keys.toSet().containsAll(['script', 'images', 'texts'])) {
       throw const FormatException('animation 必须包含 script、images、texts');
     }
     script = jsonString(raw['script'], 'animation.script');
@@ -391,8 +392,8 @@ class GameAnimationRequest {
 
   static Map<String, String> _strings(Object? value, String name) {
     final raw = jsonObject(value, name);
-    return Map.unmodifiable(raw.map((key, value) =>
-        MapEntry(key, jsonString(value, '$name.$key'))));
+    return Map.unmodifiable(raw
+        .map((key, value) => MapEntry(key, jsonString(value, '$name.$key'))));
   }
 
   final int id;
@@ -668,7 +669,7 @@ class AchievementPlayer {
   late final List<AchievementGrant> achievements;
 }
 
-/// 头像摘要：总成就数 + 最稀有的 5 个（名 + 详细）。
+/// 头像摘要：总成就数 + 优先展示、按稀有度补齐的 5 个（名 + 详细）。
 class AchievementSummary {
   AchievementSummary.fromJson(Object? value)
       : raw = jsonObject(value, 'achievement_summary') {

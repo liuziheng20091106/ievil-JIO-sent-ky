@@ -483,9 +483,13 @@ class GameApi {
     );
   }
 
-  /// 自己获得的成就与佩戴中的那一个。
-  Future<({List<AchievementGrant> achievements, EquippedAchievement? equipped})>
-      myAchievements() async {
+  /// 自己获得的成就、佩戴与优先展示选择。
+  Future<
+      ({
+        List<AchievementGrant> achievements,
+        EquippedAchievement? equipped,
+        List<String> priorityGrantIds,
+      })> myAchievements() async {
     final body = jsonObject(await _request('GET', '/api/achievements/me'));
     return (
       achievements: jsonArray(body['achievements'], 'achievements')
@@ -494,6 +498,10 @@ class GameApi {
       equipped: body['equipped'] == null
           ? null
           : EquippedAchievement.fromJson(body['equipped']),
+      priorityGrantIds:
+          jsonArray(body['priority_grant_ids'], 'priority_grant_ids')
+              .map((value) => jsonString(value, 'priority_grant_id'))
+              .toList(growable: false),
     );
   }
 
@@ -509,7 +517,18 @@ class GameApi {
         : EquippedAchievement.fromJson(body['equipped']);
   }
 
-  /// 任何账号的公开摘要：总成就数 + 最稀有的 5 个。
+  Future<List<String>> prioritizeAchievements(List<String> grantIds) async {
+    final body = jsonObject(await _request(
+      'POST',
+      '/api/achievements/me/priority',
+      body: {'grant_ids': grantIds},
+    ));
+    return jsonArray(body['priority_grant_ids'], 'priority_grant_ids')
+        .map((value) => jsonString(value, 'priority_grant_id'))
+        .toList(growable: false);
+  }
+
+  /// 任何账号的公开摘要：总成就数 + 优先展示、按稀有度补齐的 5 个。
   Future<AchievementSummary> achievementSummary(String accountId) async =>
       AchievementSummary.fromJson(await _request(
         'GET',

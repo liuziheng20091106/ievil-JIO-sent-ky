@@ -11,6 +11,12 @@ import 'store.dart';
 
 const achievementRarityMax = 10;
 
+String achievementRarityLabel(int rarity) => switch (rarity) {
+      >= 9 => '专属',
+      >= 5 => '特殊',
+      _ => '稀有度 $rarity',
+    };
+
 /// 稀有度的一档配色：底色就是徽章背景，白字在十种底色上都保持可读。
 class AchievementRarity {
   const AchievementRarity(this.background);
@@ -21,8 +27,8 @@ class AchievementRarity {
   static const _colors = <int, AchievementRarity>{
     1: AchievementRarity(Color(0xFF8A9099)), // 灰
     2: AchievementRarity(Color(0xFF3F9C4F)), // 绿
-    3: AchievementRarity(Color(0xFF17A09B)), // 青
-    4: AchievementRarity(Color(0xFF2F6FED)), // 蓝
+    3: AchievementRarity(Color(0xFF2F6FED)), // 蓝
+    4: AchievementRarity(Color(0xFF17A09B)), // 青
     5: AchievementRarity(Color(0xFF5B4BE0)), // 靛
     6: AchievementRarity(Color(0xFF9B4DE0)), // 紫
     7: AchievementRarity(Color(0xFFD6389A)), // 玫红
@@ -151,7 +157,7 @@ class _RarityChoice extends StatelessWidget {
   }
 }
 
-/// 头像菜单里的成就摘要：总成就数 + 最稀有的 5 个（名称 + 详细内容）。
+/// 头像菜单里的成就摘要：总成就数 + 优先展示的 5 个（名称 + 详细内容）。
 class AchievementSummaryBlock extends StatefulWidget {
   const AchievementSummaryBlock({
     super.key,
@@ -278,7 +284,7 @@ class _AchievementSummaryBlockState extends State<AchievementSummaryBlock> {
             child: Divider(height: 1, color: context.palette.border),
           ),
           Text(
-            '最稀有的 ${value.top.length} 个',
+            '展示成就 ${value.top.length} 个',
             style: TextStyle(fontSize: 11, color: context.palette.textTertiary),
           ),
           for (final grant in value.top)

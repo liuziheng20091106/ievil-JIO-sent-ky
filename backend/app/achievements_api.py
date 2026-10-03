@@ -25,9 +25,7 @@ def check_rarity(actor, rarity):
     level = int(actor.get("host_level", 0))
     limit = auth_storage.HOST_ACHIEVEMENT_LIMITS.get(level, 0)
     if int(rarity) > limit:
-        raise HTTPException(
-            403, f"你当前是 {level} 级主持，最多只能分发稀有度 {limit} 的成就"
-        )
+        raise HTTPException(403, f"你当前是 {level} 级主持，最多只能分发稀有度 {limit} 的成就")
     return actor
 
 
@@ -103,8 +101,7 @@ async def players(request: Request):
         listed.append(
             {
                 "account_id": row["account_id"],
-                "name": (account["nickname"] if account else row["nickname"])
-                or row["account_id"],
+                "name": (account["nickname"] if account else row["nickname"]) or row["account_id"],
                 "avatar_url": account["avatar_url"] if account else "",
                 "last_played_at": row["last_played_at"],
                 "achievement_count": row["achievement_count"],
@@ -151,6 +148,7 @@ async def my_achievements(request: Request):
     return {
         "achievements": achievement_storage.grants_for(account["id"]),
         "equipped": achievement_storage.equipped(account["id"]),
+        "priority_grant_ids": achievement_storage.priority_grant_ids(account["id"]),
         "max_rarity": achievement_storage.MAX_RARITY,
     }
 
@@ -163,9 +161,17 @@ async def equip(body: schemas.AchievementEquip, request: Request):
     return {"ok": True, "equipped": achievement_storage.equipped(account["id"])}
 
 
+@router.post("/me/priority")
+async def priority(body: schemas.AchievementPriority, request: Request):
+    account = auth.require_account(request)
+    if not achievement_storage.set_priority_grants(account["id"], body.grant_ids):
+        raise HTTPException(403, "只能优先展示自己已经获得的成就")
+    return {"ok": True, "priority_grant_ids": body.grant_ids}
+
+
 @router.get("/accounts/{account_id}")
 async def account_summary(account_id: str, request: Request):
-    """头像摘要：总成就数 + 最稀有的 5 个（名 + 详细）。"""
+    """头像摘要：总数 + 最多五个成就，玩家优先选择在前，按真实稀有度补齐。"""
     require_reader(request)
     grants = achievement_storage.grants_for(account_id)
     return {
@@ -173,7 +179,7 @@ async def account_summary(account_id: str, request: Request):
         "name": display_player_name(account_name(account_id)),
         "total": len(grants),
         "equipped": achievement_storage.equipped(account_id),
-        "top": grants[:5],
+        "top": achievement_storage.top_grants(account_id),
         "max_rarity": achievement_storage.MAX_RARITY,
     }
 

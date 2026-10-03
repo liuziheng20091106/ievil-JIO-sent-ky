@@ -67,14 +67,12 @@ class AchievementFlow(unittest.TestCase):
             },
         )
         bound.raise_for_status()
-        completed = self.client.get(
-            "/api/native/auth/host/challenges/" + challenge["id"]
-        )
+        completed = self.client.get("/api/native/auth/host/challenges/" + challenge["id"])
         completed.raise_for_status()
         self.assertEqual(completed.json().get("status"), "completed")
-        return {
-            "Authorization": "Bearer " + completed.json()["session_token"]
-        }, completed.json()["session"]["actor"]
+        return {"Authorization": "Bearer " + completed.json()["session_token"]}, completed.json()[
+            "session"
+        ]["actor"]
 
     def account(self, qq_id):
         challenge = self.client.post("/api/native/auth/challenges").json()
@@ -126,6 +124,7 @@ class AchievementFlow(unittest.TestCase):
             headers=headers or self.host,
             json={"name": name, "detail": detail, "rarity": rarity},
         )
+
     def open_join(self):
         self.command(self.host, "room.open_join", {"open": True})
 
@@ -202,18 +201,16 @@ class AchievementFlow(unittest.TestCase):
         self.assertIsNone(mine["equipped"])
 
         # 删除定义会连同授权一起删掉，并给出被移除的授权条数。
-        removed = self.client.delete(
-            f"/api/achievements/defs/{first['id']}", headers=self.host
-        )
+        removed = self.client.delete(f"/api/achievements/defs/{first['id']}", headers=self.host)
         self.assertEqual(removed.json()["removed_grants"], 1)
         self.assertEqual(
-            self.client.get("/api/achievements/me", headers=player_headers).json()[
-                "achievements"
-            ],
+            self.client.get("/api/achievements/me", headers=player_headers).json()["achievements"],
             [],
         )
         self.assertEqual(
-            self.client.delete(f"/api/achievements/defs/{first['id']}", headers=self.host).status_code,
+            self.client.delete(
+                f"/api/achievements/defs/{first['id']}", headers=self.host
+            ).status_code,
             404,
         )
         self.assertEqual(
@@ -289,6 +286,135 @@ class AchievementFlow(unittest.TestCase):
         # 目录里的定义带上已授予人数，方便主持人删除前判断影响。
         catalog = self.client.get("/api/achievements/catalog", headers=self.host).json()
         self.assertTrue(all(item["granted_count"] == 1 for item in catalog["achievements"]))
+
+    def test_priority_validation_preserves_previous_selection(self):
+        headers, actor = self.account("10013")
+        _, other = self.account("10014")
+        definitions = [self.define(f"priority-{i}", "priority", i + 1).json() for i in range(6)]
+        grants = [
+            achievement_storage.grant(actor["account_id"], item["id"]) for item in definitions
+        ]
+        foreign = achievement_storage.grant(other["account_id"], definitions[0]["id"])
+        selected = [item["id"] for item in grants[:5]]
+        endpoint = "/api/achievements/me/priority"
+        saved = self.client.post(endpoint, headers=headers, json={"grant_ids": selected})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json(), {"ok": True, "priority_grant_ids": selected})
+        invalid = [
+            ({}, 422),
+            ({"grant_ids": None}, 422),
+            ({"grant_ids": [item["id"] for item in grants]}, 422),
+            ({"grant_ids": [selected[0], selected[0]]}, 422),
+            ({"grant_ids": [selected[0], foreign["id"]]}, 403),
+            ({"grant_ids": [selected[0], "grant-missing"]}, 403),
+        ]
+        for body, status in invalid:
+            with self.subTest(body=body):
+                response = self.client.post(endpoint, headers=headers, json=body)
+                self.assertEqual(response.status_code, status, response.text)
+                mine = self.client.get("/api/achievements/me", headers=headers).json()
+                self.assertEqual(mine["priority_grant_ids"], selected)
+        denied = self.client.post(endpoint, json={"grant_ids": selected})
+        self.assertEqual(denied.status_code, 401, denied.text)
+
+    def test_priority_order_fill_cancel_and_removed_grants(self):
+        headers, actor = self.account("10015")
+        definitions = [
+            self.define(f"display-{i}", "display", rarity).json()
+            for i, rarity in enumerate([1, 2, 3, 4, 5, 6, 6])
+        ]
+        grants = []
+        for i, item in enumerate(definitions):
+            with patch.object(
+                achievement_storage, "now_text", return_value=f"2026-01-01T00:00:{i:02d}+00:00"
+            ):
+                grants.append(achievement_storage.grant(actor["account_id"], item["id"]))
+        ids = [item["id"] for item in grants]
+        endpoint = "/api/achievements/me/priority"
+        summary_url = f"/api/achievements/accounts/{actor['account_id']}"
+        self.client.post(
+            "/api/achievements/me/equip", headers=headers, json={"grant_id": ids[4]}
+        ).raise_for_status()
+        self.client.post(
+            endpoint, headers=headers, json={"grant_ids": [ids[0], ids[5], ids[1]]}
+        ).raise_for_status()
+        summary = self.client.get(summary_url, headers=headers).json()
+        self.assertEqual(summary["total"], 7)
+        self.assertEqual(
+            [item["id"] for item in summary["top"]], [ids[0], ids[5], ids[1], ids[6], ids[4]]
+        )
+        self.assertEqual(summary["equipped"]["id"], ids[4])
+        self.client.post(
+            "/api/achievements/me/equip", headers=headers, json={"grant_id": None}
+        ).raise_for_status()
+        self.assertEqual(
+            self.client.get("/api/achievements/me", headers=headers).json()["priority_grant_ids"],
+            [ids[0], ids[5], ids[1]],
+        )
+        cancelled = self.client.post(endpoint, headers=headers, json={"grant_ids": []})
+        self.assertEqual(cancelled.json(), {"ok": True, "priority_grant_ids": []})
+        summary = self.client.get(summary_url, headers=headers).json()
+        self.assertEqual(
+            [item["id"] for item in summary["top"]], [ids[6], ids[5], ids[4], ids[3], ids[2]]
+        )
+        self.client.post(
+            endpoint, headers=headers, json={"grant_ids": [ids[0], ids[5], ids[1]]}
+        ).raise_for_status()
+        self.client.delete(
+            f"/api/achievements/grants/{ids[0]}", headers=self.host
+        ).raise_for_status()
+        mine = self.client.get("/api/achievements/me", headers=headers).json()
+        self.assertEqual(mine["priority_grant_ids"], [ids[5], ids[1]])
+        summary = self.client.get(summary_url, headers=headers).json()
+        self.assertEqual(
+            [item["id"] for item in summary["top"]], [ids[5], ids[1], ids[6], ids[4], ids[3]]
+        )
+        self.client.delete(
+            f"/api/achievements/defs/{definitions[5]['id']}", headers=self.host
+        ).raise_for_status()
+        mine = self.client.get("/api/achievements/me", headers=headers).json()
+        self.assertEqual(mine["priority_grant_ids"], [ids[1]])
+        summary = self.client.get(summary_url, headers=headers).json()
+        self.assertEqual(summary["total"], 5)
+        self.assertEqual(
+            [item["id"] for item in summary["top"]], [ids[1], ids[6], ids[4], ids[3], ids[2]]
+        )
+
+    def test_priority_migrates_existing_database_and_persists(self):
+        headers, actor = self.account("10016")
+        definition = self.define("legacy", "legacy", 2).json()
+        granted = achievement_storage.grant(actor["account_id"], definition["id"])
+        achievement_storage.equip(actor["account_id"], granted["id"])
+        # 模拟没有优先位置字段的已部署库，保留既有授权、定义与佩戴。
+        with achievement_storage.transaction() as db:
+            db.executescript("""
+                CREATE TABLE legacy_grants (
+                    id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+                    achievement_id TEXT NOT NULL REFERENCES achievements(id),
+                    granted_at TEXT NOT NULL, UNIQUE(account_id, achievement_id)
+                );
+                INSERT INTO legacy_grants SELECT id,account_id,achievement_id,granted_at FROM grants;
+                DROP TABLE grants;
+                ALTER TABLE legacy_grants RENAME TO grants;
+            """)
+        achievement_storage.initialize()
+        mine = self.client.get("/api/achievements/me", headers=headers).json()
+        self.assertEqual(mine["priority_grant_ids"], [])
+        self.assertEqual([item["id"] for item in mine["achievements"]], [granted["id"]])
+        self.assertEqual(mine["equipped"]["id"], granted["id"])
+        self.client.post(
+            "/api/achievements/me/priority", headers=headers, json={"grant_ids": [granted["id"]]}
+        ).raise_for_status()
+        self.client.post("/api/reset", headers=self.host).raise_for_status()
+        achievement_storage.initialize()
+        achievement_storage.initialize()
+        mine = self.client.get("/api/achievements/me", headers=headers).json()
+        self.assertEqual(mine["priority_grant_ids"], [granted["id"]])
+        self.assertEqual(mine["equipped"]["id"], granted["id"])
+        summary = self.client.get(
+            f"/api/achievements/accounts/{actor['account_id']}", headers=headers
+        ).json()
+        self.assertEqual([item["id"] for item in summary["top"]], [granted["id"]])
 
     def test_player_list_orders_by_recent_participation(self):
         self.open_join()
@@ -392,9 +518,7 @@ class AchievementFlow(unittest.TestCase):
         self.assertEqual([item["name"] for item in mine["achievements"]], ["神秘黑幕女"])
         self.assertEqual(mine["equipped"]["name"], "神秘黑幕女")
         # 建立新对局会清空对局库，但成就库里仍然是同一条记录。
-        self.assertEqual(
-            achievement_storage.definition(definition["id"])["name"], "神秘黑幕女"
-        )
+        self.assertEqual(achievement_storage.definition(definition["id"])["name"], "神秘黑幕女")
 
 
 if __name__ == "__main__":
