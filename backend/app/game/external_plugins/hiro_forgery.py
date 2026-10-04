@@ -9,7 +9,7 @@ NAME = "希罗·伪证"
 DESCRIPTION = (
     "希罗每天可发布一次自定义全场系统消息，可选择加入公开证物；技能提示只对本人和主持人可见。"
 )
-CATEGORY = "external_default_off"
+CATEGORY = "external_default_on"
 DEPENDS = ("hiro",)
 HANDLERS = {}
 

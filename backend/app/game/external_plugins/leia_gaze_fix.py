@@ -6,7 +6,7 @@ ID = "leia_gaze_fix"
 VERSION = 1
 NAME = "蕾雅·视线固定"
 DESCRIPTION = "普通或魔女蕾雅每天白天可使用一次视线固定，仅播放全场动画，无实际规则效果。"
-CATEGORY = "external_default_off"
+CATEGORY = "external_default_on"
 DEPENDS = ("leia",)
 HANDLERS = {}
 
