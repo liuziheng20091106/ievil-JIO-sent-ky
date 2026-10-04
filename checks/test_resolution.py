@@ -854,6 +854,84 @@ class ResolutionEdges(unittest.TestCase):
                 others = game_view(game, player(game, "2"))["information"]
                 self.assertFalse([entry for entry in others if entry["title"] == "夜间目击名单"])
 
+    def test_free_host_witness_list_still_waits_for_witch_honokas_private_choice(self):
+        for suspects in (["honoka"], ["honoka", "emma", "coco", "marg", "leia"]):
+            with self.subTest(suspects=suspects):
+                game = arranged_game("night_results", "night")
+                game["cards"]["honoka"]["witch"] = True
+                item = pending(
+                    game, "suspects", "目击裁定", seat_id="1", victim="millia", source_card="noah"
+                )
+                command(
+                    game, HOST, "host.resolve", {"pending_id": item["id"], "suspects": suspects}
+                )
+                witness = next(
+                    action
+                    for action in game_view(game, player(game, "7"))["actions"]
+                    if action["id"] == "honoka.witness"
+                )
+                self.assertTrue(witness["blocking"])
+                self.assertIn("7", outstanding_seats(game))
+                self.assertNotIn(item["id"], [entry["id"] for entry in game["pending"]])
+                self.assertFalse(
+                    [
+                        entry
+                        for entry in game_view(game, player(game, "1"))["information"]
+                        if entry["title"] == "夜间目击名单"
+                    ]
+                )
+                payload = {**witness["payload"], "role": "sherry"}
+                for sid in ("1", "2", "3", "4", "5", "6"):
+                    self.assertNotIn(
+                        "honoka.witness",
+                        [action["id"] for action in actions_for(game, player(game, sid))],
+                    )
+                    with self.assertRaises(GameError):
+                        command(game, player(game, sid), "honoka.witness", payload)
+                command(game, player(game, "7"), "honoka.witness", payload)
+                text = (
+                    ("一" if len(suspects) == 1 else "五")
+                    + "名疑似凶手："
+                    + "、".join(
+                        ROLES["sherry" if role == "honoka" else role]["name"] for role in suspects
+                    )
+                )
+                self.assertEqual(game["witness"]["text"], text)
+                self.assertFalse(
+                    any(entry["kind"] == "honoka_witness" for entry in game["pending"])
+                )
+                self.assertNotIn("7", outstanding_seats(game))
+                for sid in ("1", "2", "3", "4", "5", "6", "7"):
+                    information = game_view(game, player(game, sid))["information"]
+                    self.assertEqual(
+                        [
+                            entry["text"]
+                            for entry in information
+                            if entry["title"] == "夜间目击名单"
+                        ],
+                        [text] if sid == "1" else [],
+                    )
+
+    def test_free_host_witness_list_does_not_wait_for_normal_honoka(self):
+        game = arranged_game("night_results", "night")
+        item = pending(
+            game, "suspects", "目击裁定", seat_id="1", victim="millia", source_card="noah"
+        )
+        command(game, HOST, "host.resolve", {"pending_id": item["id"], "suspects": ["honoka"]})
+        self.assertFalse(any(entry["kind"] == "honoka_witness" for entry in game["pending"]))
+        self.assertNotIn("7", outstanding_seats(game))
+        self.assertNotIn(
+            "honoka.witness", [action["id"] for action in actions_for(game, player(game, "7"))]
+        )
+        self.assertEqual(
+            [
+                entry["text"]
+                for entry in game_view(game, player(game, "1"))["information"]
+                if entry["title"] == "夜间目击名单"
+            ],
+            ["一名疑似凶手：穗乃香"],
+        )
+
     def test_poisoned_victims_witness_list_hides_the_killer_half_the_time(self):
         """死者中毒时目击是中毒信息：信息骰失败给出不含真凶的名单，生效才含真凶。"""
         for roll, killer_shown in ((0, True), (1, False)):

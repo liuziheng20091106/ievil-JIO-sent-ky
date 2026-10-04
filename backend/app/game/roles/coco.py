@@ -19,7 +19,7 @@ def coco_seat(game):
 def witch_information(game, events):
     from ..catalog import ROLES
     from ..resolution import information
-    from ..state import present, role_card
+    from ..state import present, role_card, witch_faction
 
     if present(game, ID) and role_card(game, ID)["witch"]:
         codex = game["codex"]
@@ -30,6 +30,24 @@ def witch_information(game, events):
             "魔女可可线索",
             "魔典顺序：" + "、".join(ROLES[r]["name"] for r in codex),
             "魔典顺序：" + "、".join(ROLES[r]["name"] for r in codex[-1:] + codex[:-1]),
+        )
+        faction = set(witch_faction(game))
+        seats = game["seats"]
+        truth = [s["id"] in faction for s in seats]
+        false = truth[-1:] + truth[:-1]
+        information(
+            game,
+            events,
+            role_card(game, ID),
+            "全员阵营",
+            "\n".join(
+                f"{s['id']}号：{'魔女阵营' if evil else '好人阵营'}"
+                for s, evil in zip(seats, truth, strict=True)
+            ),
+            "\n".join(
+                f"{s['id']}号：{'魔女阵营' if evil else '好人阵营'}"
+                for s, evil in zip(seats, false, strict=True)
+            ),
         )
 
 
