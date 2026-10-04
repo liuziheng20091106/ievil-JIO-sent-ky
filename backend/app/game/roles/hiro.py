@@ -24,6 +24,9 @@ def rewind_on_death(game, events, half):
     """回溯成功后调用方必须终止本次阶段与伤害写入。"""
     from ..state import rewind
 
+    if half == "night" and (game.get("night") or {}).get("massacre"):
+        return False
+
     mode = "witch" if game["cards"][ID]["witch"] else "normal"
     if game["spiritual"]["hiro_used"][mode]:
         return False

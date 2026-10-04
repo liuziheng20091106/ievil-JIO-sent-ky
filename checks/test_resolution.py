@@ -703,28 +703,66 @@ class EmmaSoloVictory(unittest.TestCase):
         check_winner(game)
         self.assertIsNone(game["winner_candidate"])
 
-    def test_hiro_rewind_cancels_massacre_and_emma_victory(self):
+    def test_massacre_blocks_both_hiro_rewinds_even_with_another_death_cause(self):
+        for witch in (False, True):
+            for knife_first in (False, True):
+                with self.subTest(witch=witch, knife_first=knife_first):
+                    game = self.night_game()
+                    game.update(day=1, half="day", phase="speech")
+                    game["cards"]["hiro"]["witch"] = witch
+                    game["cards"]["meruru"]["witch"] = knife_first
+                    game["spiritual"]["hiro_used"] = {"normal": False, "witch": False}
+                    save_snapshot(game)
+                    game["day"] = 2
+                    begin_night(game, [])
+                    if knife_first:
+                        command(
+                            game,
+                            player(game, "3"),
+                            "night.submit",
+                            {"ability": "knife", "target": "2"},
+                        )
+                        command(game, player(game, "3"), "night.confirm")
+                    command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
+                    command(game, player(game, "1"), "night.confirm")
+                    force_after_wait(game, HOST)
+                    self.assertEqual(
+                        (game["day"], game["phase"], game["half"]), (2, "night_review", "night")
+                    )
+                    death = next(
+                        d for d in game["night"]["preview"]["deaths"] if d["target_card"] == "hiro"
+                    )
+                    self.assertEqual(death["cause"], "knife" if knife_first else "massacre")
+                    command(game, HOST, "host.advance")
+                    self.assertFalse(game["cards"]["hiro"]["alive"])
+                    self.assertEqual(game["public"]["rewinds"], 0)
+                    self.assertEqual(
+                        game["spiritual"]["hiro_used"], {"normal": False, "witch": False}
+                    )
+                    self.assertEqual(game["winner_candidate"]["winner"], "emma")
+
+    def test_both_hiro_rewinds_still_work_without_massacre(self):
         for witch in (False, True):
             with self.subTest(witch=witch):
                 game = self.night_game()
                 game.update(day=1, half="day", phase="speech")
+                game["cards"]["emma"]["witch"] = False
                 game["cards"]["hiro"]["witch"] = witch
+                game["cards"]["meruru"]["witch"] = True
                 game["spiritual"]["hiro_used"] = {"normal": False, "witch": False}
-                snapshot = save_snapshot(game)
+                save_snapshot(game)
                 game["day"] = 2
                 begin_night(game, [])
-                command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
-                command(game, player(game, "1"), "night.confirm")
+                command(
+                    game, player(game, "3"), "night.submit", {"ability": "knife", "target": "2"}
+                )
+                command(game, player(game, "3"), "night.confirm")
                 force_after_wait(game, HOST)
                 self.assertEqual((game["day"], game["phase"], game["half"]), (1, "speech", "day"))
-                self.assertEqual(game["night"], snapshot["state"]["night"])
-                self.assertEqual(game["deaths"], [])
-                self.assertTrue(game["cards"]["emma"]["alive"])
                 self.assertTrue(game["cards"]["hiro"]["alive"])
+                self.assertEqual(game["public"]["rewinds"], 1)
                 self.assertTrue(game["spiritual"]["hiro_used"]["witch" if witch else "normal"])
-                check_winner(game)
-                self.assertIsNone(game["winner_candidate"])
-                self.assertIsNone(game["result"])
+                self.assertFalse(game["spiritual"]["hiro_used"]["normal" if witch else "witch"])
 
 
 class ResolutionEdges(unittest.TestCase):
@@ -2256,8 +2294,7 @@ class WitchEmmaMassacre(unittest.TestCase):
     def test_witch_emma_massacre_is_an_emma_only_win(self):
         """清场夜＝对局结束：全场攻击正常结算后艾玛单独获胜，其余玩家均落败。"""
         game = self.witch_emma_night()
-        # 希罗先出局：否则这一夜的死讯会先触发他的时间回溯，与本用例无关。
-        game["cards"]["hiro"]["alive"] = False
+        save_snapshot(game)
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
         command(game, player(game, "1"), "night.confirm", {})
         force_after_wait(game, HOST)  # 等保护到点，锁夜并预结算
@@ -2269,7 +2306,7 @@ class WitchEmmaMassacre(unittest.TestCase):
     def test_massacre_wins_even_if_a_seat_was_already_eliminated(self):
         """已整席出局的席位不该挡住单独获胜（真实对局里 6 号两张牌早就出局）。"""
         game = self.witch_emma_night()
-        # 2 号（希罗 + 可可）整席出局：既压掉希罗回溯，又留下一个「早就出局」的席位。
+        # 2 号（希罗 + 可可）整席出局，留下一个「早就出局」的席位。
         for cid in next(s for s in game["seats"] if s["id"] == "2")["cards"]:
             game["cards"][cid]["alive"] = False
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
@@ -2281,7 +2318,7 @@ class WitchEmmaMassacre(unittest.TestCase):
     def test_massacre_ends_the_night_even_if_nothing_dies(self):
         """一个人都没打死（全被庇护/爱/替死挡住）也判艾玛单独获胜。"""
         game = self.witch_emma_night()
-        game["cards"]["hiro"]["alive"] = False
+        save_snapshot(game)
         command(game, player(game, "1"), "night.submit", {"ability": "massacre"})
         command(game, player(game, "1"), "night.confirm", {})
         force_after_wait(game, HOST)  # 等保护到点，锁夜并预结算
