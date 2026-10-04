@@ -207,7 +207,7 @@ package-release.cmd
 发行签名：
 
 - 安卓：正式密钥在 `client/android/keystore/magicjudge-release.jks`，口令在 `client/android/key.properties`（两者都已被 `client/android/.gitignore` 忽略，不入库）。`flutter build apk --release` 会自动用它签名；文件缺失时退回 debug 签名并打印警告，只能用于本地调试。**第一次换成正式签名后，存量 debug 签名的安装无法原地覆盖，需要用户卸载后重装一次。**
-- Windows：`tools/sign-windows.ps1` 生成自签名代码签名证书、导出公钥并给 `seven_double_client.exe` 与 `Updater.exe` 签名；Updater 在「准备更新环境」时把这张证书装进 `LocalMachine\Root` 与 `LocalMachine\TrustedPublisher`，这样后续静默更新不会被系统质疑来源。**顺序有要求**（证书要先写进头文件再编译，编出来的 Updater 才是内嵌证书的版本）：
+- Windows：`tools/sign-windows.ps1` 生成自签名代码签名证书、导出公钥并给 `seven_double_client.exe` 与 `Updater.exe` 签名；Updater 在「准备更新环境」时把这张证书装进 `LocalMachine\Root` 与 `LocalMachine\TrustedPublisher`，这样后续更新不会被系统质疑来源。**顺序有要求**（证书要先写进头文件再编译，编出来的 Updater 才是内嵌证书的版本）：
 
   ```cmd
   pwsh -File tools\sign-windows.ps1                    :: 生成/复用证书 + 写 self_signed_cert.local.h
@@ -239,7 +239,7 @@ package-release.cmd
       "latest": "1.1.0",
       "minimum": "1.1.0",
       "title": "必须更新",
-      "notes": "## 更新日志\n\n- 应用内静默更新",
+      "notes": "## 更新日志\n\n- 应用内更新进度界面",
       "url": "https://s3.tkcloud.online/releases/魔法裁判Windows.zip",
       "updater_url": "https://s3.tkcloud.online/releases/Updater.exe",
       "size": 12345678,
@@ -257,14 +257,16 @@ package-release.cmd
 - `notes` 是 Markdown，客户端在更新弹窗里渲染；`guide_url` 非空时多一个「打开网页」按钮；`url` 留空时只引导网页。
 - `size` / `sha256` / `updater_url` 由 `package-release.cmd`（`tools/package-release.py` + `tools/update_manifest.py`）自动刷新（只更新该平台「没有区间边界」的那条兜底区间，手工写的 `title` / `notes` / `minimum` / `guide_url` 与更窄的区间条目都保留）。
 
-Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，由它「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限静默替换程序 → 自动重启客户端，全程无需 UAC。更新器/安装程序向 `/api/health` 要包时用的是自己的版本号，但后端对它不做版本比较：它拿到的永远是当前发布版（首次安装、修复安装、应用内更新是同一条路径）。
+Windows 客户端的更新流程：客户端下载最新 `Updater.exe` 到 `%LOCALAPPDATA%\MagicJudge\`，不再传 `--silent`，由它显示更新进度并「准备更新环境」（首次用一次管理员权限把自签名证书加进系统信任库并创建计划任务 `MagicJudgeUpdater`）→ 之后每次更新都用该计划任务以最高权限显示下载、解压与替换进度 → 自动重启客户端，已有更新环境时无需 UAC。更新器/安装程序向 `/api/health` 要包时用的是自己的版本号，但后端对它不做版本比较：它拿到的永远是当前发布版（首次安装、修复安装、应用内更新是同一条路径）。
 
 `Updater.exe` 是**独立发布产物**（网页首页的「Windows 安装程序」，也是首次安装入口）。它的向导给两个选择：
 
-- **安装**（推荐）：填服务器地址与目录即下载安装，并创建快捷方式——**开始菜单**组一定创建，里面是「魔法裁判」与「卸载魔法裁判」（后者就是带 `--uninstall` 参数的更新器）；**桌面**快捷方式默认也建，可以在向导里取消勾选（命令行用 `--no-desktop-shortcut`）。同时写入注册表安装信息（含「应用和功能」里的卸载入口）并准备好应用内静默更新。
+- **安装**（推荐）：填服务器地址与目录即下载安装，并创建快捷方式——**开始菜单**组一定创建，里面是「魔法裁判」与「卸载魔法裁判」（后者就是带 `--uninstall` 参数的更新器）；**桌面**快捷方式默认也建，可以在向导里取消勾选（命令行用 `--no-desktop-shortcut`）。同时写入注册表安装信息（含「应用和功能」里的卸载入口）并准备好应用内更新。
 - **仅下载便携版**：只把整包解压到指定目录，不写注册表、不建快捷方式、也不装更新组件；换机器直接拷走整个文件夹即可。命令行是 `--install --portable`。
 
-检测到已经装过时可以先选「更新到最新」「下载便携版」「卸载」或「退出」。`--uninstall` 是卸载引导，会一并删掉开始菜单与桌面的快捷方式、注册表键与计划任务，但不会删除 `Updater.exe` 自己。所有功能都有对应命令行参数（`--install --from <地址> [--dir <目录>] [--silent] [--portable] [--to-program-files] [--no-desktop-shortcut]`、`--update-app`、`--prepare`、`--task-entry`、`--uninstall`、`--check-install`），参数足够时零交互。
+检测到已经装过时可以先选「更新到最新」「下载便携版」「卸载」或「退出」。`--uninstall` 是卸载引导，会一并删掉开始菜单与桌面的快捷方式、注册表键与计划任务，但不会删除 `Updater.exe` 自己；勾选「删除持久化数据」或传 `--purge-data` 时删除当前用户的 `%APPDATA%\com.sevendouble\`，不按显示名猜测数据目录。所有功能都有对应命令行参数（`--install --from <地址> [--dir <目录>] [--silent] [--portable] [--to-program-files] [--no-desktop-shortcut]`、`--update-app`、`--prepare`、`--task-entry`、`--uninstall`、`--check-install`）；更新默认显示界面，显式 `--silent` 可用于无界面运行。
+
+Updater 实际运行结束时尝试递归删除 `%LOCALAPPDATA%\MagicJudge\downloads\` 的全部内容，安装成功、失败或取消均清理；被占用或无权限的文件只记日志，不改变退出码，并继续清理其它文件。交给计划任务的更新由任务实例退出时清理，避免父进程删掉仍在使用的包；只读命令与 `--dry-run` 不改缓存。下载目录本身若是链接则跳过，避免越界删除。
 
 安卓客户端的更新流程：下载 APK 到应用缓存目录（同版本只下一次）→ 经 FileProvider 交给系统安装器 → 安装完成或失败后清理残留安装包。
 

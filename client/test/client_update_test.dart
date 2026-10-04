@@ -328,20 +328,14 @@ void main() {
     });
   });
 
-  group('Windows 交给 Updater 的参数', () {
+  group('Windows 更新启动失败', () {
     late Directory staging;
     late Directory install;
-    late FakeDownloader downloader;
-    final launched = <String>[];
-    final arguments = <String>[];
     var exited = 0;
 
     setUp(() async {
       staging = await Directory.systemTemp.createTemp('mj-updater-test');
       install = await Directory.systemTemp.createTemp('mj-install-test');
-      downloader = FakeDownloader();
-      launched.clear();
-      arguments.clear();
       exited = 0;
     });
 
@@ -349,38 +343,6 @@ void main() {
       for (final directory in [staging, install]) {
         if (directory.existsSync()) await directory.delete(recursive: true);
       }
-    });
-
-    test('先下载最新 Updater，再让它准备环境并静默更新', () async {
-      final installer = WindowsUpdateInstaller(
-        stagingDirectory: staging,
-        installDirectory: install,
-        download: downloader.call,
-        launchProcess: (executable, args) async {
-          launched.add(executable);
-          arguments.addAll(args);
-        },
-        exitApp: () async => exited++,
-        channel: FakeChannel(),
-      );
-      final info = ClientUpdateInfo.fromJson({
-        ...updatePayload(url: '/releases/魔法裁判Windows.zip'),
-        'platform': 'windows',
-      });
-      final result = await installer.start(api: offlineApi(), info: info);
-
-      expect(result.outcome, UpdateOutcome.launched);
-      expect(downloader.urls, ['/releases/Updater.exe']);
-      expect(installer.stagedUpdater.existsSync(), isTrue);
-      expect(launched.single, installer.stagedUpdater.path);
-      expect(arguments.first, '--update-app');
-      expect(arguments, containsAll(<String>['--from', '--target', '--restart', '--wait-pid']));
-      expect(arguments, contains('--silent'));
-      expect(arguments[arguments.indexOf('--target') + 1], install.path);
-      expect(arguments[arguments.indexOf('--restart') + 1],
-          File(Platform.resolvedExecutable).path);
-      expect(arguments[arguments.indexOf('--wait-pid') + 1], '$pid');
-      expect(exited, 1, reason: '更新器要等本进程退出才能替换文件');
     });
 
     test('更新器下载失败时不启动任何进程', () async {

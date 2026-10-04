@@ -89,11 +89,18 @@ bool QueryHealth(const std::wstring& base, const std::wstring& userAgent, Packag
   return ExtractUpdateInfo(response.body, base, reference);
 }
 
+void PackageDownloadProgress(void* context, int percent, const std::wstring& message) {
+  ReportProgress(static_cast<const ProgressSink*>(context), percent < 0 ? -1 : 10 + percent / 2,
+                  message);
+}
+
 bool DownloadPackage(const PackageRef& reference, const std::wstring& destination,
                      const ProgressSink* progress, std::wstring* error) {
   const int percent = 10;
-  ReportProgress(progress, percent, Format(L"正在下载 %s", reference.url.c_str()));
-  return HttpDownloadToFile(reference.url, UpdaterUserAgent(), destination, nullptr, nullptr, error);
+  ReportProgress(progress, percent, L"正在下载更新包");
+  return HttpDownloadToFile(reference.url, UpdaterUserAgent(), destination,
+                            progress != nullptr ? &PackageDownloadProgress : nullptr,
+                            const_cast<ProgressSink*>(progress), error);
 }
 
 bool VerifyPackage(const std::wstring& path, const PackageRef& reference, std::wstring* error) {
@@ -685,8 +692,6 @@ int RunUninstall(const Options& options, const ProgressSink* progress) {
     ++failures;
   }
   DeleteUpdateJob();
-  std::wstring downloadError;
-  DeleteTree(DownloadsDir(), L"", &downloadError);
 
   ReportProgress(progress, 100, failures == 0 ? L"卸载完成（Updater.exe 自身保留）"
                                               : L"卸载完成，但有文件未能删除");

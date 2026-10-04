@@ -77,7 +77,7 @@ Future<void> deleteQuietly(File file) async {
 ///
 /// - Android：把 APK 下到应用缓存目录，再交给系统安装器；同一版本的包只下一次。
 /// - Windows：把最新 Updater 下到 `%LOCALAPPDATA%\MagicJudge\`，由它准备更新环境、
-///   在后台静默替换程序并重启客户端，客户端随即退出让出文件锁。
+///   显示更新进度、替换程序并重启客户端，客户端随即退出让出文件锁。
 abstract class UpdateInstaller {
   UpdateInstaller({
     required this.stagingDirectory,
@@ -368,9 +368,9 @@ class WindowsUpdateInstaller extends UpdateInstaller {
       return UpdateResult(UpdateOutcome.failed, message: message);
     }
 
-    // ② 让 Updater 初始化自身并准备更新环境；③ 由它静默替换程序并重启客户端。
+    // ② 让 Updater 准备更新环境并显示进度，替换程序后重启客户端。
     onProgress?.call(const UpdateProgress(UpdateStage.installing,
-        message: '正在准备静默更新'));
+        message: '正在启动更新器'));
     try {
       final executable = File(Platform.resolvedExecutable);
       await launchProcess(updater.path, [
@@ -379,7 +379,6 @@ class WindowsUpdateInstaller extends UpdateInstaller {
         '--target', installDirectory.path,
         '--restart', executable.path,
         '--wait-pid', pid.toString(),
-        '--silent',
       ]);
     } on ProcessException catch (failure) {
       final message = '无法启动更新器：${failure.message}';
@@ -387,7 +386,7 @@ class WindowsUpdateInstaller extends UpdateInstaller {
       return UpdateResult(UpdateOutcome.failed, message: message);
     }
     onProgress?.call(const UpdateProgress(UpdateStage.launching,
-        message: '正在静默更新，客户端会自动重启'));
+        message: '更新器已启动，更新完成后客户端会自动重启'));
     await exitApplication();
     return const UpdateResult(UpdateOutcome.launched);
   }

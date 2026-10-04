@@ -220,9 +220,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previousInstance, PWSTR comman
   } else if (options.command == L"prepare") {
     result = upd::RunPrepare(options, nullptr);
   } else if (options.command == L"update-app") {
-    result = upd::RunUpdateApp(options, nullptr);
+    result = options.silent ? upd::RunUpdateApp(options, nullptr) : upd::RunUpdateWindow(options);
   } else if (options.command == L"task-entry") {
-    result = upd::RunTaskEntry(options);
+    result = upd::RunTaskEntry(options, nullptr);
   } else if (options.command == L"uninstall") {
     if (options.silent) {
       result = upd::RunUninstall(options, nullptr);
@@ -232,6 +232,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previousInstance, PWSTR comman
   } else {
     upd::ConsoleWriteLine(L"未实现的子命令：" + options.command);
     result = upd::kExitFailure;
+  }
+  // 交给计划任务的更新由任务实例清理，避免删掉它正在下载或解压的包。
+  if (!options.dryRun && !(options.command == L"update-app" && result == upd::kExitOk)) {
+    const std::wstring downloads = upd::DownloadsDir();
+    const DWORD attributes = ::GetFileAttributesW(upd::LongPath(downloads).c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+      upd::LogMessage(L"下载目录是链接，跳过清理以免删除目录外的文件");
+    } else {
+      std::wstring cleanupError;
+      if (!upd::DeleteTree(downloads, L"", &cleanupError)) {
+        upd::LogFormat(L"清理下载缓存失败（不影响退出）：%s", cleanupError.c_str());
+      }
+    }
   }
   upd::LogFormat(L"退出码 %d", result);
   return result;

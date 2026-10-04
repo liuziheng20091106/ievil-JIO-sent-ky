@@ -713,14 +713,7 @@ bool RemoveShortcuts(std::wstring* error) {
 }
 
 std::vector<std::wstring> PersistentDataDirs() {
-  std::vector<std::wstring> dirs;
-  const std::wstring roaming = RoamingAppDataDir();
-  const std::wstring local = LocalAppDataDir();
-  dirs.push_back(JoinPath(roaming, L"魔法裁判"));
-  dirs.push_back(JoinPath(local, L"魔法裁判"));
-  dirs.push_back(JoinPath(roaming, L"seven_double_client"));
-  dirs.push_back(JoinPath(local, L"seven_double_client"));
-  return dirs;
+  return {JoinPath(RoamingAppDataDir(), L"com.sevendouble")};
 }
 
 }  // namespace upd

@@ -16,7 +16,7 @@ int RunPrepare(const Options& options, const ProgressSink* progress);
 int RunUninstall(const Options& options, const ProgressSink* progress);
 int RunCheckInstall(const Options& options);
 int RunUpdateApp(const Options& options, const ProgressSink* progress);
-int RunTaskEntry(const Options& options);
+int RunTaskEntry(const Options& options, const ProgressSink* progress);
 
 // 内部共用：解析后端地址或直链得到更新包；提权重跑；启动安装好的程序。
 struct PackageRef {

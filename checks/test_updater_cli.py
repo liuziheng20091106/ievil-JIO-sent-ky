@@ -1,4 +1,4 @@
-"""Windows 更新器的命令行检查（只跑只读/无副作用的子命令）。
+"""Windows 更新器的命令行检查（隔离下载缓存，不改系统安装状态）。
 
 这是应用内更新系统的独立检查，不碰别的检查文件。更新器是随
 `flutter build windows --release` 一起构建出来的 `Updater.exe`；没有构建产物时
@@ -11,10 +11,12 @@
     .venv/Scripts/python.exe -m unittest checks.test_updater_cli -v
 """
 
+import ctypes
 import os
 import subprocess
 import tempfile
 import unittest
+from ctypes import wintypes
 from pathlib import Path
 
 from tools.update_manifest import client_version
@@ -30,6 +32,16 @@ UPDATER = (
 class UpdaterCommandLine(unittest.TestCase):
     """参数足够时命令行就能完成功能：先验证不会改动机器状态的那几条。"""
 
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.local = Path(directory.name)
+        self.environment = {
+            **os.environ,
+            "LOCALAPPDATA": str(self.local),
+            "APPDATA": str(self.local),
+        }
+
     def run_updater(self, *arguments, timeout=120):
         return subprocess.run(
             [str(UPDATER), *arguments],
@@ -38,6 +50,7 @@ class UpdaterCommandLine(unittest.TestCase):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env=self.environment,
             check=False,  # 断言由调用方看 returncode 做，这里不抛异常
         )
 
@@ -47,13 +60,14 @@ class UpdaterCommandLine(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((result.stdout or "").strip(), "magicjudge-updater " + client_version())
 
-    def test_help_lists_the_documented_commands(self):
-        result = self.run_updater("--help")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        output = result.stdout or ""
-        if output.strip():
-            for flag in ("--install", "--update-app", "--prepare", "--uninstall"):
-                self.assertIn(flag, output)
+    def test_read_only_commands_preserve_downloads(self):
+        cache = self.local / "MagicJudge" / "downloads" / "cached.zip"
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(b"cached package")
+        for command in ("--help", "--version", "--check-install"):
+            with self.subTest(command=command):
+                self.run_updater(command, "--dir", str(self.local / "bare"))
+                self.assertEqual(cache.read_bytes(), b"cached package")
 
     def test_check_install_reports_not_installed_for_a_bare_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,14 +76,81 @@ class UpdaterCommandLine(unittest.TestCase):
         self.assertEqual(result.returncode, 4, result.stdout or result.stderr)
 
     def test_prepare_dry_run_changes_nothing(self):
+        cache = self.local / "MagicJudge" / "downloads" / "cached.zip"
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(b"cached package")
         result = self.run_updater("--prepare", "--dry-run")
         self.assertEqual(
             result.returncode,
             0,
             f"dry-run 必须成功：{result.stdout or result.stderr}",
         )
+        self.assertEqual(cache.read_bytes(), b"cached package")
+        self.assertFalse((self.local / "MagicJudge" / "update.log").exists())
+
+    def test_exit_cleanup_continues_past_locked_files_without_changing_exit_code(self):
+        downloads = self.local / "MagicJudge" / "downloads"
+        nested = downloads / "old" / "nested"
+        nested.mkdir(parents=True)
+        (nested / "package.zip").write_bytes(b"old package")
+        locked = downloads / "locked.zip"
+        locked.write_bytes(b"in use")
+        outside = downloads.parent / "keep.txt"
+        outside.write_bytes(b"not a download")
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.CreateFileW(str(locked), 0x80000000, 1, None, 3, 0, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value, ctypes.get_last_error())
+        try:
+            result = self.run_updater(
+                "--install", "--portable", "--dir", str(self.local / "app"), "--silent"
+            )
+        finally:
+            kernel.CloseHandle(handle)
+        self.assertEqual(result.returncode, 1, result.stdout or result.stderr)
+        self.assertEqual(locked.read_bytes(), b"in use")
+        self.assertFalse((downloads / "old").exists())
+        self.assertEqual(outside.read_bytes(), b"not a download")
+        result = self.run_updater(
+            "--install", "--portable", "--dir", str(self.local / "app"), "--silent"
+        )
+        self.assertEqual(result.returncode, 1, result.stdout or result.stderr)
+        self.assertFalse(downloads.exists())
+
+    def test_exit_cleanup_does_not_follow_a_linked_download_directory(self):
+        outside = self.local / "outside"
+        outside.mkdir()
+        keep = outside / "keep.zip"
+        keep.write_bytes(b"not a download")
+        downloads = self.local / "MagicJudge" / "downloads"
+        downloads.parent.mkdir()
+        link = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(downloads), str(outside)],
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(link.returncode, 0, link.stderr)
+        result = self.run_updater(
+            "--install", "--portable", "--dir", str(self.local / "app"), "--silent"
+        )
+        self.assertEqual(result.returncode, 1, result.stdout or result.stderr)
+        self.assertEqual(keep.read_bytes(), b"not a download")
 
     def test_install_against_an_unreachable_server_fails_without_a_half_install(self):
+        downloads = self.local / "MagicJudge" / "downloads"
+        downloads.mkdir(parents=True)
+        (downloads / "previous.zip").write_bytes(b"old package")
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "MagicJudge"
             result = self.run_updater(
@@ -80,12 +161,12 @@ class UpdaterCommandLine(unittest.TestCase):
                 str(target),
                 "--silent",
             )
-        self.assertNotEqual(result.returncode, 0, "取不到更新包时必须报失败")
-        # 网络失败不该留下一个「看起来装好了」的目录。
-        self.assertFalse(
-            (target / "seven_double_client.exe").exists(),
-            "下载失败却留下了程序文件",
-        )
+            self.assertNotEqual(result.returncode, 0, "取不到更新包时必须报失败")
+            self.assertFalse(
+                (target / "seven_double_client.exe").exists(),
+                "下载失败却留下了程序文件",
+            )
+            self.assertFalse(downloads.exists())
 
 
 if __name__ == "__main__":

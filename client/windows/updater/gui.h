@@ -18,6 +18,7 @@ int ShowInstalledChoiceDialog(const std::wstring& installDir, const std::wstring
 void ShowErrorDialog(const std::wstring& title, const std::wstring& text);
 void ShowInfoDialog(const std::wstring& title, const std::wstring& text);
 int RunInstallWizard(const Options& options);
+int RunUpdateWindow(const Options& options);
 int RunUninstallWizard(const Options& options);
 
 }  // namespace upd

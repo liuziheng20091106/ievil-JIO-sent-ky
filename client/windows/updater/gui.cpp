@@ -66,7 +66,7 @@ const wchar_t* const kTextCancelButton = L"取消";
 // 两种方式各自的说明与初始提示：跟着选中的方式走，避免提示与按钮文字对不上。
 const wchar_t* const kModeHintInstallText =
     L"安装：装到上面的目录，创建开始菜单快捷方式（含「卸载魔法裁判」入口），"
-    L"桌面快捷方式可选，并准备好应用内静默更新。";
+    L"桌面快捷方式可选，并准备好应用内更新。";
 const wchar_t* const kModeHintPortableText =
     L"便携版：把整包解压到上面的目录，不写注册表、不建快捷方式，也没有卸载入口；"
     L"换电脑直接拷走整个文件夹即可。";
@@ -518,6 +518,7 @@ WizardLayout ComputeWizardLayout(HDC dc) {
 
 struct WizardState {
   WizardLayout layout;
+  Options updateOptions;
   HWND window = nullptr;
   HWND backendEdit = nullptr;
   HWND directoryEdit = nullptr;
@@ -619,6 +620,16 @@ std::wstring ReadWindowText(HWND control) {
 
 DWORD WINAPI WizardThread(LPVOID parameter) {
   WizardState* state = static_cast<WizardState*>(parameter);
+  if (!state->updateOptions.command.empty()) {
+    ProgressSink sink;
+    sink.report = &WizardProgress;
+    sink.context = state;
+    state->result = state->updateOptions.command == L"task-entry"
+                        ? RunTaskEntry(state->updateOptions, &sink)
+                        : RunUpdateApp(state->updateOptions, &sink);
+    ::PostMessageW(state->window, kMessageDone, static_cast<WPARAM>(state->result), 0);
+    return 0;
+  }
   Options options;
   options.command = L"install";
   options.from = ReadWindowText(state->backendEdit);
@@ -677,6 +688,19 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       state->window = window;
       ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
       const WizardLayout& layout = state->layout;
+      if (!state->updateOptions.command.empty()) {
+        state->statusLabel = CreateChildRect(window, L"STATIC", L"正在准备更新……", SS_LEFT,
+                                              layout.status, kIdStatus);
+        state->progressBar = CreateChildRect(window, PROGRESS_CLASS, L"", WS_BORDER,
+                                              layout.progress, kIdProgress);
+        ::SendMessageW(state->progressBar, PBM_SETRANGE32, 0, 100);
+        state->thread = ::CreateThread(nullptr, 0, &WizardThread, state, 0, nullptr);
+        if (state->thread == nullptr) {
+          state->result = kExitFailure;
+          ::PostMessageW(window, kMessageDone, static_cast<WPARAM>(state->result), 0);
+        }
+        return 0;
+      }
 
       CreateChildRect(window, L"STATIC", kTextBackendLabel, SS_LEFT, layout.backendLabel,
                       kIdBackendLabel);
@@ -804,6 +828,19 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         state->thread = nullptr;
       }
       const int result = static_cast<int>(static_cast<INT_PTR>(wparam));
+      if (!state->updateOptions.command.empty()) {
+        if (result == kExitRebootRequired) {
+          ::MessageBoxW(window, L"部分文件被占用，请重启电脑完成更新。", L"魔法裁判 更新",
+                        MB_OK | MB_ICONINFORMATION);
+        } else if (result != kExitOk && result != kExitUpToDate) {
+          ::MessageBoxW(window,
+                        Format(L"更新没有完成（退出码 %d）。\n详细信息见 %s", result,
+                               LogFilePath().c_str()).c_str(),
+                        L"魔法裁判 更新", MB_OK | MB_ICONERROR);
+        }
+        ::DestroyWindow(window);
+        return 0;
+      }
       if (result == kExitOk) {
         if (state->launch) {
           LaunchApplication(JoinPath(state->directory, kAppExeName), state->directory);
@@ -839,8 +876,9 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     }
     case WM_CLOSE:
       if (state != nullptr && state->thread != nullptr) {
-        ::MessageBoxW(window, L"正在安装，请等待完成。", L"魔法裁判 安装向导",
-                      MB_OK | MB_ICONINFORMATION);
+        ::MessageBoxW(window, state->updateOptions.command.empty() ? L"正在安装，请等待完成。"
+                                                                  : L"正在更新，请等待完成。",
+                      L"魔法裁判", MB_OK | MB_ICONINFORMATION);
         return 0;
       }
       ::DestroyWindow(window);
@@ -1188,6 +1226,43 @@ int RunInstallWizard(const Options& options) {
     return kExitFailure;
   }
   ::SetWindowTextW(window, title.c_str());
+  CenterWindow(window, size.cx, size.cy);
+  ::SetForegroundWindow(window);
+  RunMessageLoop(window);
+  return state.result;
+}
+
+int RunUpdateWindow(const Options& options) {
+  if (!RegisterWindowClass(L"MagicJudgeUpdaterUpdate", &WizardProc)) {
+    ShowErrorDialog(L"魔法裁判 更新", L"注册窗口类失败。");
+    return kExitFailure;
+  }
+  INITCOMMONCONTROLSEX controls{};
+  controls.dwSize = sizeof(controls);
+  controls.dwICC = ICC_PROGRESS_CLASS;
+  ::InitCommonControlsEx(&controls);
+  WizardState state;
+  state.updateOptions = options;
+  state.result = kExitFailure;
+  {
+    ScreenCanvas canvas;
+    const Layout layout = BaseLayout(canvas.dc);
+    state.layout.status = RECT{layout.left(), layout.margin, layout.right(),
+                               layout.margin + 3 * layout.textHeight};
+    const int y = state.layout.status.bottom + layout.sectionGap;
+    state.layout.progress = RECT{layout.left(), y, layout.right(), y + layout.Scale(20)};
+    state.layout.clientWidth = layout.clientWidth();
+    state.layout.clientHeight = state.layout.progress.bottom + layout.margin;
+  }
+  const SIZE size = WindowSizeForClient(state.layout.clientWidth, state.layout.clientHeight);
+  HWND window = ::CreateWindowExW(0, L"MagicJudgeUpdaterUpdate", L"魔法裁判 更新",
+                                  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, size.cx, size.cy, nullptr, nullptr,
+                                  ::GetModuleHandleW(nullptr), &state);
+  if (window == nullptr) {
+    ShowErrorDialog(L"魔法裁判 更新", L"创建窗口失败。");
+    return kExitFailure;
+  }
   CenterWindow(window, size.cx, size.cy);
   ::SetForegroundWindow(window);
   RunMessageLoop(window);

@@ -67,6 +67,7 @@ int RunUpdateApp(const Options& options, const ProgressSink* progress) {
     return kExitFailure;
   }
 
+  ReportProgress(progress, 0, L"正在准备更新环境");
   Options prepareOptions = options;
   prepareOptions.command = L"prepare";
   prepareOptions.silent = true;
@@ -78,6 +79,7 @@ int RunUpdateApp(const Options& options, const ProgressSink* progress) {
   int exitCode = kExitFailure;
   PackageRef reference;
   std::wstring error;
+  ReportProgress(progress, 5, L"正在检查最新版本");
   if (!ResolvePackage(options, &exitCode, &reference, &error)) {
     LogError(error);
     return exitCode;
@@ -117,25 +119,31 @@ int RunUpdateApp(const Options& options, const ProgressSink* progress) {
 
   DWORD childExit = static_cast<DWORD>(kExitFailure);
   std::wstring runError;
-  if (!RunElevatedSelf(L"--task-entry --silent --elevated", 0, &childExit, &runError)) {
+  const std::wstring arguments = options.silent ? L"--task-entry --silent --elevated"
+                                               : L"--task-entry --elevated";
+  if (!RunElevatedSelf(arguments, 0, &childExit, &runError)) {
     LogError(runError);
     return kExitPermission;
   }
   return static_cast<int>(childExit);
 }
 
-int RunTaskEntry(const Options& options) {
+int RunTaskEntry(const Options& options, const ProgressSink* progress) {
   std::wstring error;
   UpdateJob job;
   if (!ReadUpdateJob(&job, &error)) {
     LogError(error);
     return kExitFailure;
   }
+  if (!job.silent && !options.silent && progress == nullptr) {
+    return RunUpdateWindow(options);
+  }
   const std::wstring target = TrimTrailingSlash(job.target);
   LogFormat(L"计划任务开始更新：目标 %s，版本 %s", target.c_str(),
             job.version.empty() ? L"(未知)" : job.version.c_str());
 
   if (job.waitPid != 0) {
+    ReportProgress(progress, 0, L"正在等待客户端退出");
     LogFormat(L"等待进程 %u 退出（最多 %u 秒）", static_cast<unsigned int>(job.waitPid),
               static_cast<unsigned int>(kWaitPidTimeoutMs / 1000));
     const HANDLE process =
@@ -155,9 +163,9 @@ int RunTaskEntry(const Options& options) {
   }
 
   int exitCode = kExitFailure;
-  if (!DownloadAndVerifyPackage(job.packageUrl, job.sha256, job.size, nullptr, &exitCode, &error)) {
+  if (!DownloadAndVerifyPackage(job.packageUrl, job.sha256, job.size, progress, &exitCode, &error)) {
     LogError(error);
-    if (!job.silent) {
+    if (!job.silent && progress == nullptr) {
       ShowErrorDialog(L"更新失败", L"下载或校验更新包失败：\n" + error);
     }
     return exitCode;
@@ -169,10 +177,11 @@ int RunTaskEntry(const Options& options) {
   const std::wstring packagePath = LocalPackagePath(job.packageUrl);
   std::wstring ignored;
   DeleteTree(staging, L"", &ignored);
+  ReportProgress(progress, 60, L"正在解压更新包");
   if (!ExtractArchive(packagePath, staging, &error)) {
     LogError(error);
     DeleteTree(staging, L"", &ignored);
-    if (!job.silent) {
+    if (!job.silent && progress == nullptr) {
       ShowErrorDialog(L"更新失败", L"解压更新包失败：\n" + error);
     }
     return kExitFailure;
@@ -182,8 +191,8 @@ int RunTaskEntry(const Options& options) {
   std::vector<std::wstring> files;
   std::vector<std::wstring> directories;
   if (!ListTreeRelative(payload, &files, &directories, &error)) {
-    return FailTaskEntry(error, target, backup, std::vector<std::wstring>(), job.silent,
-                         kExitFailure);
+    return FailTaskEntry(error, target, backup, std::vector<std::wstring>(),
+                         job.silent || progress != nullptr, kExitFailure);
   }
 
   // 若更新包里带着正在运行的 Updater 自己（计划任务跑的就是 %LOCALAPPDATA% 那一份），
@@ -214,11 +223,12 @@ int RunTaskEntry(const Options& options) {
                 Win32ErrorMessage(::GetLastError()).c_str());
     }
   }
+  ReportProgress(progress, 70, L"正在备份并替换程序文件");
 
   DeleteTree(backup, L"", &ignored);
   if (!EnsureDir(backup, &error)) {
-    return FailTaskEntry(error, target, backup, std::vector<std::wstring>(), job.silent,
-                         kExitFailure);
+    return FailTaskEntry(error, target, backup, std::vector<std::wstring>(),
+                         job.silent || progress != nullptr, kExitFailure);
   }
 
   bool rebootRequired = false;
@@ -226,18 +236,18 @@ int RunTaskEntry(const Options& options) {
   for (size_t index = 0; index < directories.size(); ++index) {
     std::wstring makeError;
     if (!EnsureDir(JoinPath(target, directories[index]), &makeError)) {
-      return FailTaskEntry(makeError, target, backup, backedUp, job.silent, kExitFailure);
+      return FailTaskEntry(makeError, target, backup, backedUp, job.silent || progress != nullptr, kExitFailure);
     }
   }
   for (size_t index = 0; index < files.size(); ++index) {
     const std::wstring source = JoinPath(payload, files[index]);
     const std::wstring destination = JoinPath(target, files[index]);
     if (!EnsureDir(DirectoryOf(destination), &error)) {
-      return FailTaskEntry(error, target, backup, backedUp, job.silent, kExitFailure);
+      return FailTaskEntry(error, target, backup, backedUp, job.silent || progress != nullptr, kExitFailure);
     }
     if (FileExists(destination)) {
       if (!CopyFileTo(destination, JoinPath(backup, files[index]), false, &error)) {
-        return FailTaskEntry(error, target, backup, backedUp, job.silent, kExitFailure);
+        return FailTaskEntry(error, target, backup, backedUp, job.silent || progress != nullptr, kExitFailure);
       }
       backedUp.push_back(files[index]);
     }
@@ -252,7 +262,7 @@ int RunTaskEntry(const Options& options) {
       return FailTaskEntry(
           Format(L"替换 %s 失败：%s", destination.c_str(),
                  Win32ErrorMessage(replaceError).c_str()),
-          target, backup, backedUp, job.silent, kExitFailure);
+          target, backup, backedUp, job.silent || progress != nullptr, kExitFailure);
     }
   }
 
@@ -279,6 +289,7 @@ int RunTaskEntry(const Options& options) {
   DeleteTree(staging, L"", &ignored);
   DeleteTree(backup, L"", &ignored);
   DeleteUpdateJob();
+  ReportProgress(progress, 95, L"正在完成更新并重启客户端");
 
   if (!job.restart.empty()) {
     std::wstring restartPath = job.restart;
@@ -290,12 +301,13 @@ int RunTaskEntry(const Options& options) {
 
   if (rebootRequired) {
     LogMessage(L"部分文件要等重启后才能替换，请重启电脑完成更新");
-    if (!job.silent) {
+    if (!job.silent && progress == nullptr) {
       ShowInfoDialog(L"更新完成", L"部分文件被占用，已安排在下次重启时替换。\n请重启电脑完成更新。");
     }
     return kExitRebootRequired;
   }
   LogMessage(L"更新完成");
+  ReportProgress(progress, 100, L"更新完成");
   return kExitOk;
 }
 
