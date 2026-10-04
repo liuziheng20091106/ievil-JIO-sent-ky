@@ -2913,6 +2913,9 @@ class MessageBubble extends StatelessWidget {
       if (message.payload?['type'] == 'skill') {
         return SkillCastCard(message: message, store: store);
       }
+      if (message.payload?['type'] == 'intelligence') {
+        return IntelligenceCastCard(message: message);
+      }
       if (message.kind == 'alert' && message.payload?['type'] == 'plugin') {
         final payload = message.payload!;
         final name = payload['name'];

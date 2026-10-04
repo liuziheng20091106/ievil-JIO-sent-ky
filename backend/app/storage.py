@@ -452,6 +452,12 @@ def project_message_payload(raw, actor, kind=None):
             for key in ("type", "id", "name", "version", "description", "category")
             if key in payload
         }
+    if payload.get("type") == "intelligence":
+        return {
+            key: payload[key]
+            for key in ("type", "day", "seat_id", "actor_name", "text")
+            if key in payload
+        }
     if payload.get("type") == "animation":
         if kind == "information" and (
             host_capable(actor)

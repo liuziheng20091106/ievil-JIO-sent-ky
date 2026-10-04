@@ -70,6 +70,7 @@ SHORT_LABELS = {
     "night.clear": "清除",
     "night.confirm": "确认",
     "day.skill": "技能",
+    "day.intelligence": "情报",
     "day.challenge": "质疑",
     "hiro.exit": "出局",
     "speech.done": "结束发言",
@@ -122,6 +123,7 @@ DESCRIPTIONS = {
     "photo.permission": "可可赠送的照片：设置是否允许她查看你的夜间行动。",
     "water.use": "用掉本夜的一瓶13水并立即指定目标，毒杀直接进入本夜预结算，无需主持人确认。",
     "evidence.submit": "提交夜间遗留证物；公开范围由主持人裁定。",
+    "day.intelligence": "每天白天一次：填写情报后立即向全员公告，并加入可引用的证物。",
     "player.surrender": "私信主持人申请本阵营交牌；未满足集体条件前继续游戏。",
     "discussion.request_end": "提交一次结束自由发言的请求；六个不同席位提交后10秒自动进入提名。",
     # 私信与房间管理（id 只在 app/views.py 里使用，短名同样是显式给的）。
@@ -1153,6 +1155,14 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                         "night.confirm", "确认已选行动（未选视为放弃）", group="夜间", blocking=True
                     )
                 )
+    if (
+        game["status"] == "playing"
+        and game["half"] == "day"
+        and game["day"] not in active_seat.get("intelligence_days", [])
+    ):
+        result.append(
+            action("day.intelligence", "发布情报", [field("text", "情报内容", "textarea")])
+        )
     if card and game["half"] == "day" and can_use_ability(game, card, puppet_controlled):
         day_cards = [card]
         # 新版规则：艾玛即使在下层也可打断一次发言。

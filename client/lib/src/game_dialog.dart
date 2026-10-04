@@ -231,6 +231,73 @@ class SkillCastCard extends StatelessWidget {
   }
 }
 
+/// 情报只展示公开署名与全文，不携带角色或技能声明。
+class IntelligenceCastCard extends StatelessWidget {
+  const IntelligenceCastCard({super.key, required this.message});
+
+  final GameMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final payload = message.payload ?? const <String, dynamic>{};
+    final day = payload['day']?.toString() ?? '';
+    final seatId = payload['seat_id']?.toString() ?? '';
+    final actorName = payload['actor_name']?.toString() ?? '';
+    final text = payload['text']?.toString() ?? '';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: palette.surface,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              border: Border.all(
+                color: palette.accent.withValues(alpha: .45),
+                width: 1.2,
+              ),
+            ),
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.article_outlined, size: 38,
+                        color: palette.accent),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('第$day天 · 情报', style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600,
+                              color: palette.accent)),
+                          const SizedBox(height: 3),
+                          Text('$seatId号 $actorName', style: TextStyle(
+                              fontSize: 12, color: palette.textTertiary)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(text, softWrap: true, style: TextStyle(
+                    fontSize: 15, height: 1.5, color: palette.text)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 开局插件公告沿用技能播报卡片外观；说明只在点开后展示。
 class PluginCastCard extends StatelessWidget {
   const PluginCastCard({super.key, required this.payload});

@@ -1360,6 +1360,25 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             selected["confirmed"] = True
         game["night"]["confirmed"].append(sid)
         unlock_coco(game, events)
+    elif action == "day.intelligence":
+        text = data["text"].strip()
+        require(bool(text), "情报内容不能为空")
+        s.setdefault("intelligence_days", []).append(game["day"])
+        name = display_player_name(s["name"])
+        notify(
+            game,
+            events,
+            f"第{game['day']}天 · {sid}号 {name}的情报\n{text}",
+            alert=True,
+            reference_title="情报",
+            payload={
+                "type": "intelligence",
+                "day": game["day"],
+                "seat_id": sid,
+                "actor_name": name,
+                "text": text,
+            },
+        )
     elif action == "day.skill":
         ability = data["ability"]
         # 傀儡与失去技能的角色不能发动白天技能（含伪装声明）：行动表里已经不给入口，
@@ -1669,6 +1688,8 @@ def command_log_text(game, actor, action, data, *, by_host=False):
     if action == "day.skill":
         ability = data.get("ability", "")
         return f"{prefix}声明白天技能「{_ability_label(ability)}」{_target_text(game, data)}"
+    if action == "day.intelligence":
+        return f"{prefix}发布情报"
     if action == "day.challenge":
         return f"{prefix}发起质疑"
     if action == "vote.nominate":

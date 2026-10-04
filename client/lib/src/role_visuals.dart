@@ -39,6 +39,7 @@ class ActionIcons {
     'night.confirm': Icons.done_all_outlined,
     'night.clear': Icons.backspace_outlined,
     'day.skill': Icons.auto_awesome_outlined,
+    'day.intelligence': Icons.article_outlined,
     'day.challenge': Icons.help_outline,
     'honoka.disguise': Icons.theater_comedy_outlined,
     'honoka.witness': Icons.visibility_outlined,
