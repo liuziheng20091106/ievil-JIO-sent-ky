@@ -59,7 +59,7 @@ def use(game, actor, events, payload, *, by_host=False):
     notify(
         game,
         events,
-        f"{seat['id']}号发动「视线固定」：全体目光，向我看齐。",
+        f"{seat['id']}号发动「视线固定」。",
         alert=True,
         payload={
             "type": "skill",
