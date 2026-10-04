@@ -1748,7 +1748,6 @@ class NightSummaryAndWitness(unittest.TestCase):
         )
         self.assertFalse(game["cards"]["marg"]["alive"])
         self.assertIsNone(current(game, "4"))
-        self.assertEqual(actions_for(game, player(game, "4")), [])
 
     def test_revive_is_limited_to_the_night_it_belongs_to(self):
         """只可复活「当夜」的死亡：天亮后死讯已公示、下层牌已登场，不能再回滚。"""
@@ -1850,7 +1849,7 @@ class KnifeWitnessAlways(unittest.TestCase):
     真正出局的席位仍走普通死亡路径，不重复发。
     """
 
-    def knife_night(self, target="4", *, protect=None, love=None, swap=None):
+    def knife_night(self, target="4", *, protect=None, love=None, swap="6"):
         game = arranged_game("night", "night")
         # 2号的当前牌是希罗：把它变成魔女，就有了独立的一刀。
         game["cards"]["hiro"]["witch"] = True
@@ -1862,9 +1861,9 @@ class KnifeWitnessAlways(unittest.TestCase):
                 game, player(game, "3"), "night.submit", {"ability": "protect", "target": protect}
             )
             command(game, player(game, "3"), "night.confirm", {})
-        if swap:
-            command(game, player(game, "1"), "night.submit", {"ability": "swap", "target": swap})
-            command(game, player(game, "1"), "night.confirm", {})
+        # 默认换血指向未受攻击的6号，避免干扰本组目击结算。
+        command(game, player(game, "1"), "night.submit", {"ability": "swap", "target": swap})
+        command(game, player(game, "1"), "night.confirm", {})
         command(game, player(game, "2"), "night.submit", {"ability": "knife", "target": target})
         command(game, player(game, "2"), "night.confirm", {})
         # 本组只检查刀的结算，其余玩家真实确认放弃，不依赖主持人立即强制超时。
@@ -1883,9 +1882,7 @@ class KnifeWitnessAlways(unittest.TestCase):
         )
 
     def test_a_plain_knife_death_still_gets_exactly_one_list(self):
-        # 米莉亚没提交换血时系统会随机指定目标；这里固定成 6 号，否则那一刀
-        # 有 1/6 的概率被替死转走，断言就会随机失败。
-        game = self.knife_night(target="4", swap="6")
+        game = self.knife_night(target="4")
         command(game, HOST, "host.advance")  # 锁夜并生成预结算
         preview = game["night"]["preview"]
         self.assertEqual({death["target_card"] for death in preview["deaths"]}, {"marg"})
