@@ -24,7 +24,118 @@ def skill_event(game, sid="4"):
     return next(event for event in events if event.get("payload", {}).get("ability") == "love")
 
 
+def challenge_game(role_id, witch):
+    game = arranged_game()
+    game["seats"][6]["cards"] = ["honoka", "nanoka"]
+    game["cards"]["honoka"]["states"]["disguise"] = "leia"
+    game["seats"][5]["cards"] = ["annan", "noah"]
+    source = next(seat for seat in game["seats"] if role_id in seat["cards"])
+    index = source["cards"].index(role_id)
+    source["cards"][index], game["seats"][0]["cards"][0] = (
+        game["seats"][0]["cards"][0],
+        source["cards"][index],
+    )
+    game["cards"][role_id]["witch"] = witch
+    fake_sid, ability = ("6", "mass_brainwash") if role_id == "honoka" else ("7", "duel")
+    apply_command(game, player(game, fake_sid), "day.skill", {"ability": ability, "target": "5"})
+    return game
+
+
 class GameAnimationProjection(unittest.TestCase):
+    def test_successful_challenge_animates_every_role_without_leaking_witch_state(self):
+        for role, witch in product(CATALOG, (False, True)):
+            with self.subTest(role=role["id"], witch=witch):
+                game = challenge_game(role["id"], witch)
+                events = apply_command(
+                    game,
+                    player(game, "1"),
+                    "day.challenge",
+                    {"declaration_id": game["declarations"][-1]["id"]},
+                )
+                success = next(
+                    event for event in events if event.get("payload", {}).get("type") == "animation"
+                )
+                self.assertIsNone(success["audience"])
+                self.assertEqual(game["declarations"][-1]["status"], "stopped")
+                public = storage.project_message_payload(success["payload"], UNENTERED, "alert")
+                expected_script = {
+                    "emma": "scripts/emma-challenge-success.json",
+                    "hiro": "scripts/hiro-challenge-success.json",
+                }.get(role["id"], "scripts/challenge-success.json")
+                self.assertEqual(public["animation"]["script"], expected_script)
+                self.assertEqual(public["animation"]["texts"]["skill-name"], "质疑成功")
+                self.assertEqual(
+                    public["animation"]["texts"]["role-title"], role["name"] + " · 普通"
+                )
+                self.assertEqual(
+                    public,
+                    storage.project_message_payload(success["payload"], player(game, "5"), "alert"),
+                )
+                expected_portrait = {
+                    "emma": "scripts/images/emma-interrupt/portrait-2.webp",
+                    "hiro": "scripts/images/hiro-forgery/portrait-3.webp",
+                    "honoka": "warden-portrait.png",
+                }.get(role["id"], role["id"] + "/normal/1.png")
+                self.assertEqual(public["animation"]["images"]["skill-portrait"], expected_portrait)
+                owner = storage.project_message_payload(
+                    success["payload"], player(game, "1"), "alert"
+                )
+                self.assertEqual(
+                    owner, storage.project_message_payload(success["payload"], HOST, "alert")
+                )
+                self.assertEqual(
+                    owner["animation"]["texts"]["role-title"],
+                    role["name"] + (" · 魔女" if witch else " · 普通"),
+                )
+                game["cards"][role["id"]]["witch"] = not witch
+                game["seats"][0]["occupant_id"] = "replacement"
+                self.assertEqual(
+                    public,
+                    storage.project_message_payload(
+                        success["payload"], {"access_ids": ["replacement"]}, "alert"
+                    ),
+                )
+
+    def test_successful_honoka_challenge_preserves_locked_public_disguise(self):
+        game = challenge_game("honoka", True)
+        game["cards"]["honoka"]["states"].update(disguise="emma", disguise_locked=True)
+        events = apply_command(
+            game,
+            player(game, "1"),
+            "day.challenge",
+            {"declaration_id": game["declarations"][-1]["id"]},
+        )
+        success = next(
+            event for event in events if event.get("payload", {}).get("type") == "animation"
+        )
+        public = storage.project_message_payload(success["payload"], player(game, "5"), "alert")[
+            "animation"
+        ]
+        self.assertEqual(public["script"], "scripts/emma-challenge-success.json")
+        self.assertEqual(public["texts"]["role-title"], "艾玛 · 普通")
+        self.assertEqual(
+            public["images"]["skill-portrait"], "scripts/images/emma-interrupt/portrait-2.webp"
+        )
+        owner = storage.project_message_payload(success["payload"], player(game, "1"), "alert")[
+            "animation"
+        ]
+        self.assertEqual(owner["texts"]["role-title"], "穗乃香 · 魔女")
+        self.assertEqual(owner["images"]["skill-portrait"], "honoka/EX/1.png")
+
+    def test_failed_challenge_does_not_play_success_animation(self):
+        game = arranged_game()
+        apply_command(game, player(game, "5"), "day.skill", {"ability": "duel", "target": "4"})
+        events = apply_command(
+            game,
+            player(game, "2"),
+            "day.challenge",
+            {"declaration_id": game["declarations"][-1]["id"]},
+        )
+        self.assertFalse(
+            any(event.get("payload", {}).get("type") == "animation" for event in events)
+        )
+        self.assertIn("p2", game["spiritual"]["personal_losses"])
+
     def test_public_fake_matches_real_and_private_branches_use_the_declared_role(self):
         real = arranged_game()
         real["cards"]["marg"]["witch"] = True
@@ -36,6 +147,7 @@ class GameAnimationProjection(unittest.TestCase):
         fake["cards"]["honoka"]["witch"] = True
         ordinary_game = deepcopy(fake)
         claimed = skill_event(fake)["payload"]
+        claimed["declaration_id"] = genuine["declaration_id"]
         before = deepcopy(claimed)
         public = storage.project_message_payload(genuine, player(real, "5"), "alert")
         self.assertEqual(
@@ -253,7 +365,61 @@ class GameAnimationDelivery(unittest.TestCase):
                 return messages
         raise AssertionError("the command's state frame was not delivered")
 
+    def test_challenge_success_reaches_all_players_and_hosts_live_and_in_history(self):
+        viewers = {sid: self.room.seat_headers(self.players, sid) for sid in map(str, range(1, 8))}
+        viewers.update(host=self.room.host, unentered=self.unentered)
+        for role_id in ("emma", "hiro", "marg"):
+            with self.subTest(role=role_id):
+                fresh = challenge_game(role_id, True)
+
+                def arrange(game, fresh=fresh):
+                    game.update(
+                        cards=fresh["cards"],
+                        phase="discussion",
+                        half="day",
+                        day=2,
+                        pending=[],
+                        declarations=fresh["declarations"],
+                        duel=fresh["duel"],
+                    )
+                    for row, source in zip(game["seats"], fresh["seats"], strict=True):
+                        row["cards"] = source["cards"]
+
+                self.room.edit_state(arrange)
+                with ExitStack() as stack:
+                    sockets = {
+                        name: stack.enter_context(self.room.connect(headers))
+                        for name, headers in viewers.items()
+                    }
+                    state = self.room.command(
+                        viewers["1"],
+                        "day.challenge",
+                        {"declaration_id": fresh["declarations"][-1]["id"]},
+                    )
+                    for name, socket in sockets.items():
+                        messages = self.messages_through(socket, state["version"])
+                        success = next(
+                            item
+                            for item in messages
+                            if item.get("payload", {}).get("type") == "animation"
+                        )
+                        animation = success["payload"]["animation"]
+                        self.assertEqual(animation["texts"]["skill-name"], "质疑成功")
+                        self.assertEqual(
+                            animation["texts"]["role-title"],
+                            animations.ROLES[role_id]["name"]
+                            + (" · 魔女" if name in {"1", "host"} else " · 普通"),
+                        )
+                        archived = next(
+                            item
+                            for item in self.history(viewers[name])
+                            if item["id"] == success["id"]
+                        )
+                        self.assertEqual(archived["payload"], success["payload"])
+                        self.assertEqual(set(success["payload"]), {"type", "animation"})
+
     def test_emma_interrupt_and_private_hiro_forgery_keep_frozen_slots(self):
+        self.enterContext(engine.clock.FakeClock(engine.clock.now()).installed())
         emma = self.room.seat_headers(self.players, "1")
         hiro = self.room.seat_headers(self.players, "2")
         for witch, expression in product((False, True), range(1, 4)):
@@ -265,7 +431,10 @@ class GameAnimationDelivery(unittest.TestCase):
                     game["speech_passed"] = []
                     game["speech_queued"] = {}
                     game["public"].update(
-                        speaker="2", speech_order=["2", "1", "3", "4", "5", "6", "7"]
+                        speaker="2",
+                        speech_order=["2", "1", "3", "4", "5", "6", "7"],
+                        speech_deadline=engine.clock.now() + 30,
+                        speech_deadline_seat="2",
                     )
                     game["seats"][0]["cards"] = ["emma", "millia"]
                     game["cards"]["emma"]["witch"] = witch

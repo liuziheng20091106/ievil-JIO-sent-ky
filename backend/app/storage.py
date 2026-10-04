@@ -459,6 +459,14 @@ def project_message_payload(raw, actor, kind=None):
             if key in payload
         }
     if payload.get("type") == "animation":
+        if kind == "alert" and payload.get("public") is True:
+            privileged = host_capable(actor) or payload.get("actor_participant_id") in (
+                actor.get("access_ids") or []
+            )
+            return {
+                "type": "animation",
+                "animation": payload["_animation"]["owner" if privileged else "public"],
+            }
         if kind == "information" and (
             host_capable(actor)
             or payload.get("actor_participant_id") in (actor.get("access_ids") or [])

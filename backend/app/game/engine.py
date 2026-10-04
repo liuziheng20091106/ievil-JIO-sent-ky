@@ -1465,12 +1465,25 @@ def player_command(game, actor, events, action, data, *, by_host=False):
             for seat_id, penalty in list(game["spiritual"]["annan_penalty"].items()):
                 if isinstance(penalty, dict) and penalty.get("declaration_id") == d["id"]:
                     del game["spiritual"]["annan_penalty"][seat_id]
+            animation = skill_animation_snapshot(
+                card["role_id"], "challenge_success", "质疑成功", card["witch"]
+            )
+            if card["role_id"] == "honoka" and card["states"].get("disguise_locked"):
+                animation["public"] = skill_animation_snapshot(
+                    card["states"]["disguise"], "challenge_success", "质疑成功", False
+                )["public"]
             notify(
                 game,
                 events,
                 f"{sid}号质疑成功：这次伪装技能已经生效的部分一并撤销，"
                 f"{d['seat_id']}号的「{DAY_ABILITIES[d['ability']][1]}」本局不能再发动。",
                 alert=True,
+                payload={
+                    "type": "animation",
+                    "public": True,
+                    "actor_participant_id": s["occupant_id"],
+                    "_animation": animation,
+                },
             )
         else:
             if s["occupant_id"] not in game["spiritual"]["personal_losses"]:
