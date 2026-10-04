@@ -82,6 +82,23 @@ Future<GameStore> previewStore() async {
   );
 }
 
+Future<void> _waitForAchievements(WidgetTester tester) async {
+  IconButton refreshButton() => tester
+      .widgetList<IconButton>(find.byType(IconButton))
+      .singleWhere((button) => button.tooltip == '刷新');
+  await tester.runAsync(() async {
+    for (var attempt = 0; attempt < 500; attempt++) {
+      await tester.pump();
+      if (refreshButton().onPressed != null) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  });
+  await tester.pump();
+  expect(refreshButton().onPressed, isNotNull);
+}
+
 GameMessage chatMessage(String senderId, String senderName) =>
     GameMessage.fromJson({
       'id': 1,
@@ -271,16 +288,14 @@ void main() {
           theme: buildAppTheme(),
           home: MyAchievementsPage(store: store),
         ));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
       });
-      await tester.pump();
+      await _waitForAchievements(tester);
 
       Future<void> choose(int index) async {
         await tester.runAsync(() async {
           await tester.tap(find.byType(CheckboxListTile).at(index));
-          await Future<void>.delayed(const Duration(milliseconds: 100));
         });
-        await tester.pump();
+        await _waitForAchievements(tester);
       }
 
       for (var index = 0; index < 5; index++) {
@@ -319,9 +334,8 @@ void main() {
           theme: buildAppTheme(),
           home: MyAchievementsPage(store: store),
         ));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
       });
-      await tester.pump();
+      await _waitForAchievements(tester);
       expect(find.text('特殊'), findsNWidgets(5));
       expect(find.text('专属'), findsNWidgets(2));
       for (var rarity = 5; rarity <= 10; rarity++) {
