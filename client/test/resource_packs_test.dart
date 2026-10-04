@@ -17,6 +17,7 @@ import 'package:path/path.dart' as p;
 import 'package:seven_double_client/src/api.dart';
 import 'package:seven_double_client/src/design.dart';
 import 'package:seven_double_client/src/models.dart';
+import 'package:seven_double_client/src/release.dart';
 import 'package:seven_double_client/src/resource_pack_dialog.dart';
 import 'package:seven_double_client/src/resource_packs.dart';
 import 'package:seven_double_client/src/shell.dart';
@@ -160,6 +161,27 @@ class EntryResources extends ResourcePacks {
       Completer<List<ResourcePackCheck>>();
   @override
   Future<List<ResourcePackCheck>> checkAll() => pending.future;
+}
+
+class EntryRelease extends ReleaseMonitor {
+  EntryRelease() : super(currentVersion: '1.0.0');
+  Completer<void> pending = Completer<void>();
+  String latest = '1.1.0';
+
+  @override
+  Future<void> check(ServerEndpoint endpoint) async {
+    await pending.future;
+    applyHealthPayload({
+      'client_latest': latest,
+      'update': {
+        'platform': 'windows',
+        'latest': latest,
+        'title': '客户端更新 $latest',
+        'notes': '入局更新检查',
+      },
+    });
+    notifyListeners();
+  }
 }
 
 Map<String, dynamic> gamePayload(String id) => {
@@ -723,7 +745,7 @@ void main() {
         throwsFormatException);
   });
 
-  testWidgets('进局前询问，选择继续才挂载对局，刷新不重弹，换局重新检查', (tester) async {
+  testWidgets('入局先提示客户端更新再询问资源，刷新不重弹，换局重新检查', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final store = GameStore.forPreview(
       preferences: await SharedPreferences.getInstance(),
@@ -742,6 +764,8 @@ void main() {
     store.api = api;
     addTearDown(store.dispose);
     final entryCache = EntryResources(api: api, supportDirectory: support);
+    final release = EntryRelease();
+    addTearDown(release.dispose);
     await tester.pumpWidget(MaterialApp(
       theme: buildAppTheme(),
       home: AnimatedBuilder(
@@ -749,11 +773,22 @@ void main() {
           builder: (context, _) => ResourcePackEntry(
                 api: api,
                 gameId: store.gameId!,
+                store: store,
+                release: release,
                 resources: entryCache,
                 child: GameShell(store: store, resources: cache),
               )),
     ));
     expect(find.byType(GameShell), findsNothing);
+    expect(find.byType(ResourcePackDialog), findsNothing);
+    release.pending.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('客户端更新 1.1.0'), findsOneWidget);
+    expect(find.byType(ResourcePackDialog), findsNothing);
+    expect(find.byType(GameShell), findsNothing);
+    await tester.tap(find.text('稍后'));
+    await tester.pump();
     entryCache.pending.complete([
       for (final pack in resourcePackNames)
         ResourcePackCheck(pack: pack, remote: api.manifest(pack)),
@@ -768,11 +803,21 @@ void main() {
     store.applyLiveEvent({'type': 'state', 'state': gamePayload('game-1')});
     await tester.pumpAndSettle();
     expect(find.byType(ResourcePackDialog), findsNothing);
+    expect(find.text('客户端更新 1.1.0'), findsNothing);
+    release.pending = Completer<void>();
+    release.latest = '1.2.0';
     entryCache.pending = Completer<List<ResourcePackCheck>>();
     store.gameId = 'game-2';
     store.applyLiveEvent({'type': 'state', 'state': gamePayload('game-2')});
     await tester.pump();
     expect(find.byType(GameShell), findsNothing);
+    release.pending.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('客户端更新 1.2.0'), findsOneWidget);
+    expect(find.byType(ResourcePackDialog), findsNothing);
+    await tester.tap(find.text('稍后'));
+    await tester.pump();
     entryCache.pending.complete([
       for (final pack in resourcePackNames)
         ResourcePackCheck(pack: pack, remote: api.manifest(pack)),

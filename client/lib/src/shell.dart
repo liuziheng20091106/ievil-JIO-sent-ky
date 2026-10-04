@@ -272,7 +272,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         return Scaffold(
           key: _scaffold,
           extendBody: !twoPane,
-          appBar: focusTyping
+          appBar: focusTyping && !host
               ? null
               : AppBar(
                   title: Column(
@@ -301,11 +301,11 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                           store.api == null ? null : () => _openResources(),
                       icon: const Icon(Icons.download_outlined),
                     ),
-                    if (ended)
+                    if (host || ended)
                       Padding(
                         padding: const EdgeInsets.only(right: AppSpacing.sm),
                         child: TextButton.icon(
-                          onPressed: store.writeBusy
+                          onPressed: !host && store.writeBusy
                               ? null
                               : () => returnToLobby(context, store),
                           icon:
@@ -585,8 +585,7 @@ class PaneDivider extends StatelessWidget {
       );
 }
 
-/// 从已终止的对局返回主界面（大厅）：主持人可在此建下一局，其他身份等待新局。
-/// 对局记录在服务器上保持只读，这里只解除本设备对它的绑定。
+/// 返回大厅，只解除本设备的对局绑定，不改变服务器上的对局与主持权限。
 Future<void> returnToLobby(BuildContext context, GameStore store) async {
   try {
     await store.returnToLobby();
@@ -4548,6 +4547,12 @@ class _HostEntryGateState extends State<HostEntryGate> {
                   onPressed: busy ? null : () => confirmLogout(context, store),
                   icon: const Icon(Icons.logout, size: 18),
                   label: const Text('退出登录（改用玩家身份）'),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                OutlinedButton.icon(
+                  onPressed: () => returnToLobby(context, store),
+                  icon: const Icon(Icons.meeting_room_outlined, size: 18),
+                  label: const Text('返回大厅'),
                 ),
               ],
             ),

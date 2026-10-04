@@ -7,7 +7,11 @@ import 'package:file_picker/file_picker.dart';
 import 'api.dart';
 import 'animation_player.dart';
 import 'design.dart';
+import 'release.dart';
 import 'resource_packs.dart';
+import 'shell.dart' show returnToLobby;
+import 'store.dart';
+import 'update_dialog.dart';
 
 Future<void> showResourcePackDialog(
   BuildContext context, {
@@ -41,10 +45,14 @@ class ResourcePackEntry extends StatefulWidget {
       required this.api,
       required this.gameId,
       required this.child,
+      required this.store,
+      this.release,
       this.resources});
   final GameApi api;
   final String gameId;
   final Widget child;
+  final GameStore store;
+  final ReleaseMonitor? release;
   final ResourcePacks? resources;
 
   @override
@@ -77,6 +85,28 @@ class _ResourcePackEntryState extends State<ResourcePackEntry> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || entry != _entry) return;
       final route = ModalRoute.of(context);
+      final release = widget.release;
+      if (release != null) {
+        try {
+          await release.check(widget.api.endpoint);
+          if (!mounted || entry != _entry) return;
+          if (release.updateAvailable || release.updateRequired) {
+            while (mounted && entry == _entry && route?.isCurrent == false) {
+              await Future<void>.delayed(const Duration(milliseconds: 200));
+            }
+            if (!mounted || entry != _entry) return;
+            await showUpdateDialog(context,
+                store: widget.store, release: release);
+          }
+        } catch (error) {
+          if (mounted && entry == _entry) {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              SnackBar(content: Text('更新检查失败：$error')),
+            );
+          }
+        }
+      }
+      if (!mounted || entry != _entry) return;
       try {
         final resources =
             widget.resources ?? await ResourcePacks.create(widget.api);
@@ -110,7 +140,17 @@ class _ResourcePackEntryState extends State<ResourcePackEntry> {
   Widget build(BuildContext context) => _ready
       ? widget.child
       : Scaffold(
-          appBar: AppBar(title: const Text('正在进入对局')),
+          appBar: AppBar(
+            title: const Text('正在进入对局'),
+            actions: [
+              if (widget.store.actor?.isHost == true)
+                IconButton(
+                  tooltip: '返回大厅',
+                  onPressed: () => returnToLobby(context, widget.store),
+                  icon: const Icon(Icons.meeting_room_outlined),
+                ),
+            ],
+          ),
           body: Center(
               child: _checking
                   ? const CircularProgressIndicator()

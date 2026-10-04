@@ -117,9 +117,7 @@ class GameStore extends ChangeNotifier {
     }
   }
 
-  /// 返回大厅期间置位：服务器仍把已终止的对局当作当前局返回（被移出者
-  /// 的 me() 也可能带旧绑定），此时本地已明确离开，_consumeSession 与
-  /// refreshLobby 都不得用服务器的当前局 gameId 把用户拉回对局。
+  /// 主动返回大厅后忽略服务器的当前局绑定，直到用户再次主动入局。
   bool _stayingInLobby = false;
 
   /// 正在向服务器核对当前参与身份（观战接管席位后的兜底），避免重复请求。
@@ -1015,6 +1013,7 @@ class GameStore extends ChangeNotifier {
 
   Future<void> enterGame(String id) async {
     if (api == null) return;
+    _stayingInLobby = false;
     // 换局要重新确认进入管理界面：上一局的确认不能带到这一局。
     if (gameId != id) {
       _resetGameAnimations();
@@ -1028,12 +1027,18 @@ class GameStore extends ChangeNotifier {
     gameId = id;
     try {
       await loadCatalog();
+      if (gameId != id) return;
+      await preferences.setString(_gameKey, id);
       await loadReferences(refresh: true);
-      _applyView(await api!.state(id));
+      final next = await api!.state(id);
+      if (gameId != id) return;
+      _applyView(next);
       await loadMessages('all');
+      if (gameId != id) return;
       await _startLive();
       error = null;
     } on ApiException catch (failure) {
+      if (gameId != id) return;
       if (failure.statusCode == 401) {
         // 身份失效/被移出对局：清会话回登录页，保留提示说明原因。
         await _clearSession();
@@ -1042,6 +1047,7 @@ class GameStore extends ChangeNotifier {
         error = failure.message;
       }
     } on FormatException catch (failure) {
+      if (gameId != id) return;
       error = failure.message;
     }
     notifyListeners();
@@ -1164,9 +1170,9 @@ class GameStore extends ChangeNotifier {
     }
   }
 
-  /// 从已终止的对局返回主界面：断开本局的只读视图与实时连接，回到大厅。
-  /// 不改动服务器上的参与身份与记录，主持人建下一局时由服务器统一清空。
+  /// 返回大厅，断开本设备的对局视图；不修改服务器参与身份或记录。
   Future<void> returnToLobby() async {
+    _stayingInLobby = true;
     _resetGameAnimations();
     await live?.stop();
     live = null;
@@ -1220,7 +1226,6 @@ class GameStore extends ChangeNotifier {
     await preferences.remove(_gameKey);
     // 本地已明确离开：接下来的会话/大厅刷新都不得用服务器的当前局
     // 绑定把用户拉回对局。
-    _stayingInLobby = true;
     notifyListeners();
     try {
       // 回大厅前身份已失效（被移出/换了新局）：刷新只会再撞 401，
@@ -1249,7 +1254,6 @@ class GameStore extends ChangeNotifier {
       }
       await refreshLobby();
     } finally {
-      _stayingInLobby = false;
       notifyListeners();
     }
   }
@@ -2236,6 +2240,7 @@ class GameStore extends ChangeNotifier {
       // 本地偏好删除失败不阻塞登出。
     }
     actor = null;
+    _stayingInLobby = false;
     gameId = null;
     lobbyGame = null;
     view = null;

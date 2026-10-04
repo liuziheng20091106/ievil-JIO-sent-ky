@@ -223,7 +223,17 @@ class AppGate extends StatelessWidget {
     }
     if (store.view == null) {
       return Scaffold(
-        appBar: AppBar(title:  Text('正在进入对局')),
+        appBar: AppBar(
+          title: const Text('正在进入对局'),
+          actions: [
+            if (store.actor!.isHost)
+              IconButton(
+                tooltip: '返回大厅',
+                onPressed: () => returnToLobby(context, store),
+                icon: const Icon(Icons.meeting_room_outlined),
+              ),
+          ],
+        ),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -254,7 +264,7 @@ class AppGate extends StatelessWidget {
         resources: resources);
     if (api == null) return game;
     return ResourcePackEntry(api: api, gameId: store.gameId!,
-        resources: resources, child: game);
+        store: store, release: release, resources: resources, child: game);
   }
 }
 
@@ -995,6 +1005,16 @@ class _LobbyPageState extends State<LobbyPage> {
                         ],
                       ),
                       const SizedBox(height: AppSpacing.lg),
+                      if (store.actor!.isHost)
+                        FilledButton.icon(
+                          onPressed: store.writeBusy
+                              ? null
+                              : () => store.enterGame(game.id),
+                          icon: const Icon(Icons.admin_panel_settings_outlined,
+                              size: 18),
+                          label: const Text('进入主持人视角'),
+                        )
+                      else
                       Row(
                         children: [
                           Expanded(
