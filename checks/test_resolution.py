@@ -740,6 +740,58 @@ class ResolutionEdges(unittest.TestCase):
         command(game, HOST, "host.confirm_winner", {"confirm": True})
         self.assertEqual(game_view(game, HOST)["result"]["winner"], "witch")
 
+    def test_host_witness_defaults_avoid_non_witchable_fillers(self):
+        for hanna_present in (False, True):
+            with self.subTest(hanna_present=hanna_present):
+                game = arranged_game("night_results", "night")
+                game["seats"][3]["cards"] = ["sherry", "marg"]
+                game["seats"][4]["cards"] = ["arisa", "leia"]
+                if hanna_present:
+                    game["seats"][2]["cards"] = ["hanna", "meruru"]
+                for role in ("millia", "hiro", "nanoka"):
+                    game["cards"][role]["alive"] = False
+                item = pending(
+                    game, "suspects", "目击裁定", seat_id="1", victim="millia", source_card="noah"
+                )
+                descriptor = next(
+                    action
+                    for action in actions_for(game, HOST)
+                    if action["id"] == "host.resolve"
+                    and action["payload"]["pending_id"] == item["id"]
+                )
+                suspects = descriptor["fields"][0]["default"]
+                self.assertNotIn("sherry", suspects)
+                self.assertNotIn("arisa", suspects)
+                self.assertIn("noah", suspects)
+                self.assertEqual("hanna" in suspects, hanna_present)
+                self.assertIn("emma", suspects)
+                command(
+                    game, HOST, "host.resolve", {"pending_id": item["id"], "suspects": suspects}
+                )
+                self.assertEqual(
+                    game["witness"]["text"],
+                    ("四" if hanna_present else "三")
+                    + "名疑似凶手："
+                    + "、".join(ROLES[role]["name"] for role in suspects),
+                )
+
+    def test_host_witness_keeps_non_witchable_display_killer_and_manual_choices(self):
+        game = arranged_game("night_results", "night")
+        game["cards"]["noah"]["states"]["display_killer"] = "sherry"
+        item = pending(
+            game, "suspects", "目击裁定", seat_id="1", victim="millia", source_card="noah"
+        )
+        descriptor = next(
+            action
+            for action in actions_for(game, HOST)
+            if action["id"] == "host.resolve" and action["payload"]["pending_id"] == item["id"]
+        )
+        self.assertIn("sherry", descriptor["fields"][0]["default"])
+        command(
+            game, HOST, "host.resolve", {"pending_id": item["id"], "suspects": ["sherry", "arisa"]}
+        )
+        self.assertEqual(game["witness"]["text"], "二名疑似凶手：雪莉、亚里沙")
+
     def test_host_witness_list_can_omit_known_or_supplied_killer(self):
         for source in (None, "nanoka", "noah"):
             with self.subTest(source=source):

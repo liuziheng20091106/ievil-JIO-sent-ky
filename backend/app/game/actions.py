@@ -508,11 +508,11 @@ def pending_action(game, item):
                 role for role in (killer, "hanna" if present(game, "hanna") else None) if role
             )
         )
-        # 补位优先勾当前在场（存活且为当前牌）的角色，不够时才用出局角色凑；
-        # 两段各自按魔典顺序，保证默认勾选可复现。
+        # 补位先避开不能魔女化的雪莉、亚里沙；同类仍优先在场，再按魔典顺序。
         in_game = [r for r in ROLES if r not in suggested and present(game, r)]
         out_game = [r for r in ROLES if r not in suggested and not present(game, r)]
-        suggested.extend((in_game + out_game)[: size - len(suggested)])
+        pool = sorted(in_game + out_game, key=lambda role: role in {"sherry", "arisa"})
+        suggested.extend(pool[: size - len(suggested)])
         fields = [
             field(
                 "suspects",
