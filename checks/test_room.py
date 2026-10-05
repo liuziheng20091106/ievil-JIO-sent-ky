@@ -137,6 +137,13 @@ class BackendFlow(unittest.TestCase):
         response.raise_for_status()
         return headers, response.json()["actor"], session
 
+    def select_disguises(self, players):
+        for headers, _, _ in players:
+            view = self.client.get(self.root + "/state", headers=headers)
+            view.raise_for_status()
+            if any(action["id"] == "honoka.disguise" for action in view.json()["actions"]):
+                self.command(headers, "honoka.disguise", {"role": "emma"})
+
     def test_challenges_are_one_time_and_web_never_receives_a_token(self):
         challenge = self.client.post("/api/auth/challenges").json()
         self.assertRegex(challenge["code"], r"^\d{6}$")
@@ -839,6 +846,7 @@ class BackendFlow(unittest.TestCase):
             self.command(headers, "lobby.ready")
         for headers, _, _ in players:
             self.command(headers, "lobby.ready")
+        self.select_disguises(players)
         created = self.command(
             first, "channel.create", {"participant_ids": [second_actor["id"]]}
         ).json()
@@ -933,6 +941,7 @@ class BackendFlow(unittest.TestCase):
             self.command(headers, "lobby.ready")
         for headers, _, _ in players:
             self.command(headers, "lobby.ready")
+        self.select_disguises(players)
         self.command(self.host, "host.start")
         # 拨到白天：夜间本来就已经只允许与主持人私信，验不出出局这条新限制。
         self.edit_state(lambda game: game.update(half="day", phase="discussion"))
@@ -1020,6 +1029,7 @@ class BackendFlow(unittest.TestCase):
             self.command(headers, "lobby.ready")
         for headers, _, _ in players:
             self.command(headers, "lobby.ready")
+        self.select_disguises(players)
         self.command(self.host, "host.start")
         state = self.client.get(self.root + "/state", headers=self.host).json()
         seats = {seat["id"]: seat for seat in state["seats"]}

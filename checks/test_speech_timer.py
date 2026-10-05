@@ -156,6 +156,10 @@ class SpeechTimerRelay(unittest.TestCase):
         for _ in range(2):
             for actor in players:
                 self.command(self.account(self._qq_by_actor[actor["id"]]), "lobby.ready")
+        for actor in players:
+            headers = self.account(self._qq_by_actor[actor["id"]])
+            if any(action["id"] == "honoka.disguise" for action in self.state(headers)["actions"]):
+                self.command(headers, "honoka.disguise", {"role": "emma"})
         self.command(self.host, "host.start")
         for _ in range(10):
             state = self.state(self.host)

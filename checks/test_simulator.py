@@ -203,6 +203,64 @@ class SimulatorCase(unittest.TestCase):
             self.assertLessEqual(len(orders), 14, "\n".join(orders))
             self.assertGreaterEqual(len(readies), 7, "\n".join(readies))
 
+    def test_policy_selects_honoka_disguise_once_before_ready(self):
+        """真实协议中上下层穗乃香均能示人、再次准备并开局。"""
+        for upper in (True, False):
+            with self.subTest(upper=upper), self.client() as client:
+                deal = [
+                    "honoka",
+                    "emma",
+                    "meruru",
+                    "millia",
+                    "annan",
+                    "arisa",
+                    "coco",
+                    "hiro",
+                    "hanna",
+                    "noah",
+                    "nanoka",
+                    "marg",
+                    "leia",
+                    "sherry",
+                ]
+                if not upper:
+                    deal[0], deal[6], deal[7] = "coco", "hiro", "honoka"
+                harness = Harness(client, seed=19)
+                harness.join()
+                simulation = harness.simulation
+                with patch(
+                    "backend.app.game.state.SystemRandom.shuffle",
+                    side_effect=lambda cards, deal=deal: cards.__setitem__(slice(None), deal),
+                ):
+                    simulation._drive_until(simulation._dealt, "发牌")
+                for actor in harness.roster.seats:
+                    actor.client.refresh()
+                actor = next(
+                    actor
+                    for actor in harness.roster.seats
+                    if any(card["id"] == "honoka" for card in actor.client.view["self"]["cards"])
+                )
+                order = actor.policy.decide(actor.client)
+                self.assertEqual(order.action, "lobby.order")
+                self.assertEqual(order.payload["top"] == "honoka", upper)
+                actor.client.submit(order.action, order.payload)
+                disguise = actor.policy.decide(actor.client)
+                self.assertEqual(disguise.action, "honoka.disguise")
+                actor.client.submit(disguise.action, disguise.payload)
+                # 准备阶段仍开放改选，但策略必须继续二次准备。
+                self.assertIsNotNone(actor.client.action("honoka.disguise"))
+                ready = actor.policy.decide(actor.client)
+                self.assertEqual(ready.action, "lobby.ready")
+                actor.client.submit(ready.action, ready.payload)
+                simulation._drive_until(simulation._ordered, "再次准备")
+                self.assertTrue(all(seat["ready"] for seat in harness.host.view["seats"]))
+                harness.host.submit("host.start", {})
+                self.assertEqual(harness.host.view["status"], "playing")
+                actor.client.refresh()
+                self.assertEqual(actor.client.action("honoka.disguise") is None, upper)
+                harness.host.refresh()
+                harness.host.submit("host.end", {"winner": "aborted", "reason": "示人准备验证结束"})
+
     def test_millia_substitute_stays_idempotent_across_repeated_preview(self):
         """米莉亚替死在反复重算预结算下保持稳定：只转移一次致命攻击。
 

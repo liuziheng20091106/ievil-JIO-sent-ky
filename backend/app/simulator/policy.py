@@ -113,6 +113,7 @@ class HeuristicPolicy:
         self.aggression = aggression
         # 记住已经做过的「一次就好」决策，避免重复触发把状态来回改。
         self._ordered = set()
+        self._disguised = False
         self._filled_night = set()
         self._answered_photos = set()
         self._evidence_submitted = set()
@@ -170,6 +171,14 @@ class HeuristicPolicy:
                 self_card_ids[0],
             )
             return Decision("lobby.order", {"top": top}, "选上层")
+        disguise = client.action("honoka.disguise")
+        if disguise is not None and not self._disguised:
+            roles = option_values(disguise, "role")
+            if roles:
+                self._disguised = True
+                return Decision(
+                    "honoka.disguise", {"role": self.random.choice(roles)}, "选择示人角色"
+                )
         if view["phase"] == "lobby" and self_seat is not None and self_seat.get("ready"):
             # 首次准备阶段的 ``lobby.ready`` 是开关：已准备时再点一次等于「取消准备」。
             # 七个席位全部入座并准备后才会发牌，重复提交会让准备状态一直闪烁，

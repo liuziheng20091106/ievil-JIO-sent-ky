@@ -268,6 +268,13 @@ class PluginHTTP(unittest.TestCase):
             json={"expected_version": version, "action": name, "payload": payload or {}},
         )
 
+    def select_disguises(self, headers_by_seat):
+        for headers in headers_by_seat.values():
+            view = self.client.get(self.root + "/state", headers=headers)
+            view.raise_for_status()
+            if any(action["id"] == "honoka.disguise" for action in view.json()["actions"]):
+                self.command(headers, "honoka.disguise", {"role": "emma"}).raise_for_status()
+
     def complete_night(self, by_seat):
         # 未选技能的玩家真实确认放弃；可可解锁后再确认一次，不绕过45秒保护。
         for _ in range(2):
@@ -294,6 +301,7 @@ class PluginHTTP(unittest.TestCase):
             self.command(headers, "lobby.ready").raise_for_status()
         for headers, _ in players:
             self.command(headers, "lobby.ready").raise_for_status()
+        self.select_disguises({seat_id: headers for headers, seat_id in players})
         version = self.client.get(self.root + "/state", headers=self.host).json()["version"]
         self.assertEqual(
             self.command(self.host, "host.start", version=version - 1).status_code,
@@ -433,6 +441,7 @@ class PluginHTTP(unittest.TestCase):
             self.command(headers, "lobby.ready").raise_for_status()
         for headers in empty_seats.values():
             self.command(headers, "lobby.ready").raise_for_status()
+        self.select_disguises(empty_seats)
         self.command(self.host, "host.start").raise_for_status()
         empty_notices = [
             message

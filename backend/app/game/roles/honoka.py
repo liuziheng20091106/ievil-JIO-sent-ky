@@ -80,7 +80,11 @@ def disguise(game, actor, events, payload, *, by_host=False):
         )
         return
     require(hc["alive"], "穗乃香已经出局")
-    require(not hc["states"].get("disguise_locked"), "示人角色已经确定，不能再更改")
+    require(
+        not hc["states"].get("disguise_locked")
+        and not (card and card["id"] == ID and hc["states"].get("disguise")),
+        "示人角色已经确定，不能再更改",
+    )
     hc["states"]["disguise"] = payload["role"]
     if card and card["id"] == ID:
         hc["states"]["disguise_locked"] = True
@@ -129,7 +133,7 @@ def panel_actions(game, actor, *, as_seat=None):
                     [field("role", "示人身份", "select", role_options())],
                     group="准备",
                     short_label="示人",
-                    description="穗乃香选择一个示人角色：只改别人看到的角色名，不获得该角色的技能。",
+                    description="上层穗乃香须先选择示人角色才能开局；下层可预选，登场时生效并锁定。示人不获得该角色的技能。",
                 )
             )
         return result
@@ -161,6 +165,7 @@ def panel_actions(game, actor, *, as_seat=None):
         and hc["alive"]
         and owner(game, ID)["id"] == sid
         and not hc["states"].get("disguise_locked")
+        and not (current_card and current_card["id"] == ID and hc["states"].get("disguise"))
     ):
         result.append(
             action(
@@ -170,7 +175,7 @@ def panel_actions(game, actor, *, as_seat=None):
                 else "选择示人角色",
                 [field("role", "示人身份", "select", role_options())],
                 short_label="示人",
-                description="穗乃香选择一个示人角色：只改别人看到的角色名，不获得该角色的技能。",
+                description="未登场可预选或更改；登场时已有选择则锁定，未预选可选择一次，确定后不能更改。示人不获得该角色的技能。",
             )
         )
     return result

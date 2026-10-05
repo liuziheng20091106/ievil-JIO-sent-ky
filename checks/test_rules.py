@@ -368,6 +368,9 @@ class SetupRules(unittest.TestCase):
         self.assertTrue(
             all(seat["avatar_role_id"] is None for seat in game_view(game, observer)["seats"])
         )
+        for actor in actors:
+            if "honoka" in game["seats"][int(actor["seat_id"]) - 1]["cards"]:
+                apply_command(game, actor, "honoka.disguise", {"role": "honoka"})
         apply_command(game, HOST, "host.start", {})
         self.assertEqual((game["status"], game["phase"]), ("playing", "witch"))
         self.assertEqual(
@@ -394,6 +397,9 @@ def staged_game(day=3, half="night", phase="witch", faction=("1", "2")):
         apply_command(game, actor, "lobby.ready", {})
     for actor in actors:
         apply_command(game, actor, "lobby.ready", {})
+    for actor in actors:
+        if "honoka" in game["seats"][int(actor["seat_id"]) - 1]["cards"]:
+            apply_command(game, actor, "honoka.disguise", {"role": "honoka"})
     apply_command(game, HOST, "host.start", {})
     for seat, pair in zip(game["seats"], STAGED_PAIRS, strict=True):
         seat["cards"] = list(pair)

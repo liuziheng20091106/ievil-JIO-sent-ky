@@ -1426,6 +1426,49 @@ class PlaytestFixes(unittest.TestCase):
         self.assertTrue(game["declarations"][0]["fake"])
         self.assertEqual(game["declarations"][0]["status"], "open")
 
+    def test_upper_honoka_without_disguise_blocks_start_without_changing_state(self):
+        game = arranged_game()
+        game.update(status="lobby", phase="ordering", day=1, half="night")
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        before = deepcopy(game)
+        with self.assertRaisesRegex(GameError, "上层穗乃香尚未选择示人角色"):
+            command(game, HOST, "host.start")
+        self.assertEqual(game, before)
+        command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
+        command(game, HOST, "host.start")
+        self.assertEqual(game["status"], "playing")
+        self.assertEqual(game["seats"][6]["avatar_role_id"], "emma")
+
+    def test_entered_honoka_cannot_change_disguise_without_legacy_lock_flag(self):
+        game = arranged_game()
+        game["seats"][6]["cards"] = ["honoka", "nanoka"]
+        game["seats"][6]["avatar_role_id"] = "emma"
+        game["cards"]["honoka"]["states"]["disguise"] = "emma"
+        before = deepcopy(game)
+        self.assertNotIn(
+            "honoka.disguise", [item["id"] for item in actions_for(game, player(game, "7"))]
+        )
+        with self.assertRaises(GameError):
+            command(game, player(game, "7"), "honoka.disguise", {"role": "noah"})
+        self.assertEqual(game, before)
+
+    def test_lower_honoka_without_preselection_can_choose_only_once_on_entry(self):
+        game = arranged_game()
+        game.update(status="lobby", phase="ordering", day=1, half="night")
+        command(game, HOST, "host.start")
+        game["half"] = "day"
+        death_batch(
+            game,
+            [],
+            damage_preview(
+                game, [{"target_card": "nanoka", "cause": "host", "unconditional": True}]
+            ),
+        )
+        command(game, player(game, "7"), "honoka.disguise", {"role": "emma"})
+        self.assertEqual(game["seats"][6]["avatar_role_id"], "emma")
+        with self.assertRaises(GameError):
+            command(game, player(game, "7"), "honoka.disguise", {"role": "noah"})
+
     def test_honoka_lobby_disguise_applies_only_from_the_top_card(self):
         game = arranged_game()
         game.update(status="lobby", phase="ordering", day=1, half="night")

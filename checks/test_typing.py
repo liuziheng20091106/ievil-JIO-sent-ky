@@ -126,6 +126,14 @@ class TypingRelay(unittest.TestCase):
         self._qq_by_actor[actor["id"]] = qq_id
         return actor
 
+    def select_disguises(self):
+        for qq_id in self._qq_by_actor.values():
+            headers = self.account(qq_id)
+            view = self.client.get(self.root + "/state", headers=headers)
+            view.raise_for_status()
+            if any(action["id"] == "honoka.disguise" for action in view.json()["actions"]):
+                self.command(headers, "honoka.disguise", {"role": "emma"})
+
     def edit_state(self, mutate):
         with storage.transaction() as db:
             game = storage.load_game(db, self.game_id)
@@ -252,6 +260,7 @@ class TypingRelay(unittest.TestCase):
             self.command(self.account(str(qq)), "lobby.ready")
         self.command(solo, "lobby.ready")
         self.command(other, "lobby.ready")
+        self.select_disguises()
         self.command(self.host, "host.start")
         state = self.client.get(self.root + "/state", headers=solo).json()
         self.assertIn(state["phase"], {"night", "witch", "night_coco"})
@@ -300,6 +309,7 @@ class TypingRelay(unittest.TestCase):
             self.command(self.account(self._qq_by_actor[actor["id"]]), "lobby.ready")
         for actor in players:
             self.command(self.account(self._qq_by_actor[actor["id"]]), "lobby.ready")
+        self.select_disguises()
         self.command(self.host, "host.start")
         # 玩家真实确认放弃夜间行动后推进到顺序发言，不依赖立即强制超时。
         for _ in range(10):

@@ -974,10 +974,14 @@ def host_command(game, events, action, data):
             all(s["occupant_id"] and s["ready"] for s in game["seats"]),
             "需要7名玩家全部入座、确认上下牌并准备",
         )
+        honoka_seat = owner(game, "honoka")
+        require(
+            current(game, honoka_seat)["id"] != "honoka"
+            or bool(game["cards"]["honoka"]["states"].get("disguise")),
+            "上层穗乃香尚未选择示人角色，请先选择后再开局",
+        )
         for s in game["seats"]:
             s["avatar_role_id"] = current(game, s)["role_id"]
-        honoka_seat = owner(game, "honoka")
-        # 未登场的穗乃香保留已选的示人角色，等她登场时再自动套用（见 state.apply_honoka_disguise）。
         honoka.apply_disguise(game, honoka_seat)
         game["status"] = "playing"
         start_phase(game, "witch")
