@@ -8,7 +8,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-PACKS = ("animation", "memes")
+PACKS = ("animation", "memes", "audio")
 RESOURCES_DIR = Path(__file__).resolve().parents[2] / "resources"
 MEDIA_SUFFIXES = frozenset(
     [
@@ -29,6 +29,7 @@ MEDIA_SUFFIXES = frozenset(
     ]
 )
 IMAGE_SUFFIXES = frozenset([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"])
+AUDIO_SUFFIXES = frozenset([".mp3", ".wav", ".ogg", ".flac"])
 MD5_PATTERN = re.compile(r"[0-9a-f]{32}")
 
 
@@ -62,7 +63,7 @@ def valid_media_path(path: object, pack: str) -> bool:
         pack in PACKS
         and parts[-1].lower() != "manifest.json"
         and (
-            suffix in MEDIA_SUFFIXES
+            suffix in (AUDIO_SUFFIXES if pack == "audio" else MEDIA_SUFFIXES)
             or (
                 pack == "animation"
                 and parts[0] == "scripts"

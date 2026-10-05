@@ -61,6 +61,9 @@ class ActionIcons {
     'host.madness': Icons.psychology_alt_outlined,
     'host.rewind': Icons.history_outlined,
     'host.water': Icons.opacity_outlined,
+    'host.audio_play': Icons.play_circle_outline,
+    'host.audio_update': Icons.queue_music,
+    'host.audio_stop': Icons.stop_circle_outlined,
     'hiro.exit': Icons.logout_outlined,
 
     // 房间与私信

@@ -9,7 +9,7 @@ from .catalog import (
     NIGHT_ABILITIES,
     ROLES,
 )
-from . import plugins
+from . import audio, plugins
 from .resolution import target_allowed
 from .roles.coco import coco_seat
 from .external_plugins.emma_treasure import is_enabled as treasure_enabled, treasure_protected
@@ -63,6 +63,9 @@ SHORT_LABELS = {
     "host.rewind": "回溯",
     "host.confirm_winner": "宣判",
     "host.surrender": "交牌",
+    "host.audio_play": "播音乐",
+    "host.audio_update": "调音乐",
+    "host.audio_stop": "停音乐",
     "lobby.order": "排牌",
     "lobby.ready": "准备",
     "player.profile": "称呼",
@@ -113,7 +116,7 @@ DESCRIPTIONS = {
     "player.profile": "设置本局的公开称呼，其他玩家和主持人都能看到。",
     "night.clear": "清除本席位尚未确认的夜间选择；已确认的行动要改需主持人裁定。已提交寻宝的席位不能清除。",
     "night.confirm": "确认本席夜间选择；未确认的选择不计入结算，未选视为放弃。",
-    "hiro.exit": "魔女化希罗主动出局：夜间提交时并入本夜预结算，白天则立即结算；若魔女回溯额度还没用，会先触发回溯并撤销这次出局，但艾玛全场攻击已生效的这一夜不触发回溯，也不消耗额度。",
+    "hiro.exit": "魔女化希罗主动出局：夜间提交时并入本夜预结算，实际死亡后先完成「夜间结果与证物」及相关裁定、公布夜终结果，若魔女回溯额度未用再自动回溯；白天立即结算，额度未用时即将死亡便立即回溯。夜间回到前一天顺序发言，白天回到前一天自由发言；找不到该时点则回到开局。艾玛全场攻击已锁定生效的这一夜不触发回溯，也不消耗额度。",
     "speech.done": "结束本次发言推进顺序；还没轮到你时是「本轮不发言」，轮到时自动略过。",
     "speech.speak": "提前写下发言内容，轮到你时由系统以本人身份公开，并自动略过你的顺序。",
     "vote.nominate": "提名一名候选人，提交即生效；提名不代表投票，进入投票后仍需自行选择。",
@@ -639,6 +642,84 @@ def pending_action(game, item):
 
 def host_actions(game, actor):
     result = []
+    if game["status"] != "ended":
+        songs = audio.songs()
+        if songs:
+            result.append(
+                action(
+                    "host.audio_play",
+                    "播放新一路音乐",
+                    [
+                        field("song", "歌曲", "select", [(song, song) for song in songs]),
+                        field(
+                            "position",
+                            "起始进度（秒）",
+                            "number",
+                            required=False,
+                            min=0,
+                            max=audio.MAX_POSITION,
+                            default=0,
+                        ),
+                        field(
+                            "rate",
+                            "倍速",
+                            "number",
+                            required=False,
+                            min=audio.MIN_RATE,
+                            max=audio.MAX_RATE,
+                            default=1,
+                        ),
+                    ],
+                    group="音乐",
+                    description="每次播放建立独立音乐路，同一首歌曲也可同时播放多路。",
+                )
+            )
+        tracks = audio.projection(game)["tracks"]
+        if tracks:
+            choices = [(track["id"], f"{track['song']} · {track['id']}") for track in tracks]
+            result.extend(
+                [
+                    action(
+                        "host.audio_update",
+                        "调整进度 / 倍速 / 暂停状态",
+                        [
+                            field("id", "音乐路", "select", choices),
+                            field(
+                                "position",
+                                "进度（秒，留空保留）",
+                                "number",
+                                required=False,
+                                min=0,
+                                max=audio.MAX_POSITION,
+                            ),
+                            field(
+                                "rate",
+                                "倍速（留空保留）",
+                                "number",
+                                required=False,
+                                min=audio.MIN_RATE,
+                                max=audio.MAX_RATE,
+                            ),
+                            field(
+                                "playing",
+                                "播放（关闭即暂停）",
+                                "checkbox",
+                                required=False,
+                                default=True,
+                            ),
+                        ],
+                        group="音乐",
+                        description="按服务端进度定位；暂停保留进度，恢复从该进度继续。",
+                    ),
+                    action(
+                        "host.audio_stop",
+                        "停止一路音乐",
+                        [field("id", "音乐路", "select", choices)],
+                        group="音乐",
+                        description="停止并移除选中的音乐路，其余音乐继续播放。",
+                    ),
+                ]
+            )
     if game["status"] == "lobby":
         if game["phase"] == "ordering":
             result.append(action("host.start", "全部再次准备后开局", group="流程"))

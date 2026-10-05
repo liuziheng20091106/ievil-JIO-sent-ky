@@ -1,5 +1,6 @@
 """聊天提及和撤回：实际 HTTP/WebSocket 口径及旧库迁移。"""
 
+import asyncio
 import base64
 import struct
 import zlib
@@ -11,7 +12,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import storage
+from backend.app import history_storage, realtime, storage
 from backend.app.game import DEFAULT_CODEX
 from backend.app.main import app
 
@@ -105,6 +106,57 @@ class ChatInteractions(unittest.TestCase):
         page.raise_for_status()
         return next((m for m in page.json()["messages"] if m["id"] == message_id), None)
 
+    def test_private_seat_snapshot_survives_replacement_and_missing_channel(self):
+        first, a = self.join("25101")
+        second, b = self.join("25102")
+        third, c = self.join("25103")
+        outsider, _ = self.join("25104")
+        substitute, replacement = self.join("25105", kind="spectator")
+        created = self.command(
+            self.host, "channel.create", {"participant_ids": [c["id"], a["id"], b["id"]]}
+        )
+        channel = next(item for item in created["channels"] if item["id"] != "public")
+        seats = sorted({a["seat_id"], b["seat_id"], c["seat_id"]})
+        sent = self.send(first, channel["id"], "保留发送时私信成员席位")
+        self.assertEqual(sent["channel_seat_ids"], seats)
+        self.assertIsNone(self.history(outsider, sent["id"]))
+        self.command(second, "channel.end", {"channel_id": channel["id"]})
+        self.assertEqual(self.history(third, sent["id"])["channel_seat_ids"], seats)
+        self.command(self.host, "room.kick", {"participant_id": a["id"], "block": False})
+        self.command(
+            self.host,
+            "room.replace",
+            {"seat_id": a["seat_id"], "participant_id": replacement["id"], "share_history": True},
+        )
+        self.assertEqual(self.history(substitute, sent["id"])["channel_seat_ids"], seats)
+        game_id = self.root.rsplit("/", 1)[-1]
+        with storage.transaction() as db:
+            db.execute("DELETE FROM channels WHERE id=?", (channel["id"],))
+            archived = next(
+                item
+                for item in history_storage.archived_events(db, game_id)
+                if item["id"] == sent["id"]
+            )
+            self.assertTrue(archived["channel_name"].startswith("私信" + "".join(seats) + "："))
+        self.assertEqual(self.history(substitute, sent["id"])["channel_seat_ids"], seats)
+        self.assertIsNone(self.history(outsider, sent["id"]))
+        host_channel = self.command(self.host, "channel.create", {"participant_ids": [b["id"]]})
+        host_private = next(item for item in host_channel["channels"] if item["id"] != "public")
+        host_sent = self.send(self.host, host_private["id"], "只有主持与一个玩家")
+        self.assertEqual(host_sent["channel_seat_ids"], [b["seat_id"]])
+
+    def disconnect(self, socket):
+        socket.close()
+
+        async def disconnected():
+            async with asyncio.timeout(2):
+                while any(
+                    peer.game_id == self.root.rsplit("/", 1)[-1] for peer in realtime.connections
+                ):
+                    await asyncio.sleep(0)
+
+        socket.portal.call(disconnected)
+
     def test_chat_images_are_bounded_private_persistent_and_retractable(self):
         def png_data(size=0):
             def chunk(tag, data):
@@ -141,6 +193,7 @@ class ChatInteractions(unittest.TestCase):
             while live["type"] != "message":
                 live = socket.receive_json()
             self.assertEqual(live["message"]["payload"]["image"], image)
+            self.disconnect(socket)
         self.assertEqual(self.history(second, sent["id"])["payload"]["image"], image)
         self.assertIsNone(self.history(third, sent["id"]))
         with storage.connect() as db:
@@ -368,6 +421,7 @@ class ChatInteractions(unittest.TestCase):
             ).json()
             self.assertNotIn("payload", recalled)
             self.assertNotIn("payload", self.history(second, sent["id"]))
+            self.disconnect(socket)
 
     def test_references_reject_private_cross_game_mismatch_and_utf16_splits(self):
         first, _ = self.join("25001")
@@ -429,6 +483,26 @@ class ChatInteractions(unittest.TestCase):
                         audience TEXT, image_id TEXT, payload TEXT)""")
                     db.execute("""INSERT INTO messages(game_id,kind,sender_id,sender_name,channel_id,text,created_at)
                         VALUES('old','chat','original','玩家','public','以前的消息','2000-01-01')""")
+                    db.execute("""CREATE TABLE participants (
+                        id TEXT PRIMARY KEY,game_id TEXT NOT NULL,kind TEXT NOT NULL,seat_id TEXT,
+                        name TEXT NOT NULL,access_ids TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,
+                        blocked INTEGER NOT NULL DEFAULT 0,muted INTEGER NOT NULL DEFAULT 0)""")
+                    for member, seat in (
+                        ("original", "1"),
+                        ("p2", "2"),
+                        ("p4", "4"),
+                        ("oldp2", "2"),
+                    ):
+                        db.execute(
+                            "INSERT INTO participants(id,game_id,kind,seat_id,name,access_ids,active) "
+                            "VALUES(?,'old','player',?,?,?,0)",
+                            (member, seat, member, storage.dumps([member])),
+                        )
+                    db.execute(
+                        "INSERT INTO messages(game_id,kind,sender_id,sender_name,channel_id,text,created_at,audience) "
+                        "VALUES('old','chat','original','玩家','private:missing','历史私信','2000-01-01',?)",
+                        (storage.dumps(["p4", "oldp2", "original", "p2", "host"]),),
+                    )
                 storage.initialize()
                 storage.initialize()
                 with storage.connect() as db:
@@ -446,3 +520,12 @@ class ChatInteractions(unittest.TestCase):
                     )
                     self.assertEqual(row["text"], "以前的消息")
                     self.assertIn("reference_title", row.keys())
+                    private = db.execute(
+                        "SELECT * FROM messages WHERE channel_id='private:missing'"
+                    ).fetchone()
+                    self.assertEqual(
+                        storage.message_view(
+                            private, {"kind": "player", "access_ids": ["original"]}
+                        )["channel_seat_ids"],
+                        ["1", "2", "4"],
+                    )

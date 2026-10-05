@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 
 import 'src/agreement_gate.dart';
 import 'src/app_icons.dart';
+import 'src/audio_player.dart';
+import 'src/game_audio.dart';
 import 'src/achievement_pages.dart';
 import 'src/announcement_pages.dart';
 import 'src/client_version.dart';
@@ -77,10 +79,14 @@ class SevenDoubleApp extends StatelessWidget {
           darkTheme: buildAppTheme(Brightness.dark),
           themeMode: ThemeMode.system,
           navigatorObservers: [PredictiveSheetBack.instance.routeObserver],
-          builder: (context, child) => Stack(children: [
-            Positioned.fill(child: child ?? const SizedBox.shrink()),
-            GameAnimationOverlay(store: store, resources: resources),
-          ]),
+          builder: (context, child) => AudioPreferencesScope(
+            store: store,
+            child: Stack(children: [
+              Positioned.fill(child: child ?? const SizedBox.shrink()),
+              GameAnimationOverlay(store: store, resources: resources),
+              GameAudioPlayback(store: store, resources: resources),
+            ]),
+          ),
           home: AnimatedBuilder(
             animation: store,
             builder: (context, _) => AppGate(store: store, release: release,

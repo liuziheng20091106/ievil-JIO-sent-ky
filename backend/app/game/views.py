@@ -11,7 +11,7 @@ from .actions import (
     puppet_action_panels,
 )
 from .catalog import PHASES, ROLES
-from . import plugins
+from . import audio, plugins
 from .roles.coco import coco_seat
 from .external_plugins.emma_treasure import treasure_protected
 from .state import (
@@ -547,6 +547,7 @@ def game_view(game, actor):
         "actions": actions_for(game, view_actor),
         "information": information,
         "public": public,
+        "audio": audio.projection(game),
         "witness": view_witness,
         "result": deepcopy(game["result"]),
         # 客户端据此显示「进入对局管理界面」的确认页；服务端才是权威，

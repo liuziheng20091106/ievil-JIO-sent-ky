@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -9,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 import 'package:path/path.dart' as p;
 
+import 'audio_player.dart';
+import 'store.dart';
 import 'resource_packs.dart';
 
 void _validateLottie(Map<String, dynamic> animation) {
@@ -405,6 +408,23 @@ class _AnimationPreviewState extends State<_AnimationPreview>
     ..addStatusListener(_statusChanged);
   bool _ready = false;
   bool _playing = false;
+  AnimationSound? _sound;
+  GameStore? _audioStore;
+  Object? _audioError;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = AudioPreferencesScope.maybeOf(context);
+    if (_sound != null && identical(store, _audioStore)) return;
+    _sound?.dispose();
+    _audioStore = store;
+    _sound = AnimationSound(controller: _controller, store: store,
+      onError: (error) {
+        if (mounted) setState(() => _audioError = error);
+      });
+    if (_ready) unawaited(_sound!.load(widget.resources, widget.scriptPath));
+  }
 
   void _statusChanged(AnimationStatus status) {
     if (status == AnimationStatus.completed && mounted) {
@@ -414,6 +434,7 @@ class _AnimationPreviewState extends State<_AnimationPreview>
 
   @override
   void dispose() {
+    _sound?.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -432,6 +453,7 @@ class _AnimationPreviewState extends State<_AnimationPreview>
                     ? null
                     : () {
                         _controller.forward(from: 0);
+                        _sound?.sync();
                         setState(() => _playing = true);
                       },
                 icon: const Icon(Icons.replay),
@@ -449,6 +471,7 @@ class _AnimationPreviewState extends State<_AnimationPreview>
                                   ? 0
                                   : _controller.value);
                         }
+                        _sound?.sync();
                         setState(() => _playing = !_playing);
                       },
                 icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
@@ -460,19 +483,34 @@ class _AnimationPreviewState extends State<_AnimationPreview>
               ),
             ],
           ),
-          body: AnimationPlayer(
-            resources: widget.resources,
-            scriptPath: widget.scriptPath,
-            controller: _controller,
-            onLoaded: (composition) {
-              _controller.duration = composition.duration;
-              _controller.forward(from: 0);
-              setState(() {
-                _ready = true;
-                _playing = true;
-              });
-            },
-          ),
+          body: Stack(children: [
+            AnimationPlayer(
+              resources: widget.resources,
+              scriptPath: widget.scriptPath,
+              controller: _controller,
+              onLoaded: (composition) {
+                _controller.duration = composition.duration;
+                unawaited(_sound!.load(widget.resources, widget.scriptPath));
+                _controller.forward(from: 0);
+                setState(() {
+                  _ready = true;
+                  _playing = true;
+                });
+              },
+            ),
+            if (_audioError != null)
+              Align(alignment: Alignment.topCenter,
+                child: MaterialBanner(
+                  content: Text('动画音效无法播放：$_audioError'),
+                  actions: [TextButton(
+                    onPressed: () {
+                      setState(() => _audioError = null);
+                      unawaited(_sound!.load(widget.resources, widget.scriptPath));
+                    },
+                    child: const Text('重试音效'),
+                  )],
+                )),
+          ]),
         ),
       );
 }

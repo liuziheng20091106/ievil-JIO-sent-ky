@@ -73,6 +73,19 @@ def command(game, actor, action, payload=None):
     return events
 
 
+def settle_night_witnesses(game):
+    while game["pending"]:
+        item = game["pending"][0]
+        if item["kind"] != "suspects":
+            raise AssertionError(item["kind"])
+        command(
+            game,
+            HOST,
+            "host.resolve",
+            {"pending_id": item["id"], "suspects": witness_suspects(game, item.get("source_card"))},
+        )
+
+
 def treasure_game():
     game = arranged_game("night", "night")
     game["rule_plugins"] = plugins.manifest([TREASURE_ID])
@@ -735,6 +748,7 @@ class EmmaSoloVictory(unittest.TestCase):
                     self.assertEqual(death["cause"], "knife" if knife_first else "massacre")
                     command(game, HOST, "host.advance")
                     self.assertFalse(game["cards"]["hiro"]["alive"])
+                    self.assertIsNone(game["night"]["hiro_rewind"])
                     self.assertEqual(game["public"]["rewinds"], 0)
                     self.assertEqual(
                         game["spiritual"]["hiro_used"], {"normal": False, "witch": False}
@@ -757,6 +771,14 @@ class EmmaSoloVictory(unittest.TestCase):
                     game, player(game, "3"), "night.submit", {"ability": "knife", "target": "2"}
                 )
                 command(game, player(game, "3"), "night.confirm")
+                force_after_wait(game, HOST)
+                self.assertEqual((game["day"], game["phase"]), (2, "night_review"))
+                self.assertTrue(game["cards"]["hiro"]["alive"])
+                self.assertFalse(game["spiritual"]["hiro_used"]["witch" if witch else "normal"])
+                command(game, HOST, "host.advance")
+                self.assertEqual(game["phase"], "night_results")
+                self.assertFalse(game["cards"]["hiro"]["alive"])
+                settle_night_witnesses(game)
                 force_after_wait(game, HOST)
                 self.assertEqual((game["day"], game["phase"], game["half"]), (1, "speech", "day"))
                 self.assertTrue(game["cards"]["hiro"]["alive"])
@@ -2236,8 +2258,7 @@ class HostFreeAdjudication(unittest.TestCase):
         self.assertEqual(game["seats"][0]["avatar_role_id"], "millia")
         self.assertEqual(current(game, game["seats"][0])["role_id"], "millia")
 
-    def test_a_night_review_rewind_keeps_the_restored_phase(self):
-        # 预结算回溯后不能再写回 night_review/night_results，否则会覆盖恢复的时间线。
+    def test_a_night_results_rewind_keeps_the_restored_phase(self):
         game = arranged_game("night_review", "night")
         game.update(day=1, phase="speech")
         game["half"] = "night"
@@ -2249,6 +2270,11 @@ class HostFreeAdjudication(unittest.TestCase):
             game, [{"target_card": "hiro", "source_card": "coco", "cause": "knife"}]
         )
         command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "night_results")
+        self.assertFalse(game["cards"]["hiro"]["alive"])
+        self.assertFalse(game["spiritual"]["hiro_used"]["normal"])
+        settle_night_witnesses(game)
+        command(game, HOST, "host.advance")
         self.assertEqual(game["day"], 1)
         self.assertEqual(game["phase"], "speech")
         self.assertTrue(game["spiritual"]["hiro_used"]["normal"])
@@ -2259,18 +2285,22 @@ class HostFreeAdjudication(unittest.TestCase):
         game.update(day=1, phase="night")
         save_snapshot(game)
         game["cards"]["emma"]["alive"] = False
+        game["phase"] = "night_review"
         game["night"]["reactions"] = []
         game["night"]["preview"] = damage_preview(
             game, [{"target_card": "hiro", "source_card": "coco", "cause": "knife"}]
         )
         command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "night_results")
+        settle_night_witnesses(game)
+        command(game, HOST, "host.advance")
+        self.assertEqual(game["phase"], "night")
+        self.assertTrue(game["spiritual"]["hiro_used"]["normal"])
         # 第1天夜里没有前一天快照：回到开局保存的最早快照。
         self.assertEqual(game["day"], 1)
         self.assertTrue(game["cards"]["hiro"]["alive"])
 
-    def test_a_night_preview_rewind_is_announced_to_the_table(self):
-        # 夜间预结算触发的希罗回溯曾经把公告写进空事件列表：额度照扣、整夜被打回
-        # 重来，但玩家和主持人都看不到「游戏时间已回溯」。
+    def test_a_night_results_rewind_is_announced_to_the_table(self):
         game = arranged_game("night", "night")
         game.update(day=1, phase="night", half="night")
         save_snapshot(game)
@@ -2296,14 +2326,17 @@ class HostFreeAdjudication(unittest.TestCase):
             "reactions": [],
             "extra_attacks": [],
         }
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "night_review")
+        self.assertFalse(game["spiritual"]["hiro_used"]["normal"])
+        command(game, HOST, "host.advance", {})
+        self.assertEqual(game["phase"], "night_results")
+        settle_night_witnesses(game)
         events = command(game, HOST, "host.advance", {})
         self.assertTrue(game["spiritual"]["hiro_used"]["normal"])
         self.assertTrue(game["cards"]["hiro"]["alive"])
         self.assertEqual(game["day"], 1)
-        self.assertTrue(
-            any(item["text"].startswith("游戏时间已回溯") for item in events),
-            [item["text"] for item in events],
-        )
+        self.assertTrue(any(item.get("payload", {}).get("ability") == "rewind" for item in events))
 
 
 class WitchHiroMandate(unittest.TestCase):

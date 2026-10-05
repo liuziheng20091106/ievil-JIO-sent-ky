@@ -309,7 +309,7 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
       final selected = await FilePicker.platform.pickFiles(
           type: FileType.custom,
           allowedExtensions: ['zip'],
-          dialogTitle: pack == 'animation' ? '导入动画 ZIP' : '导入表情 ZIP',
+          dialogTitle: '导入${_packLabel(pack)} ZIP',
           lockParentWindow: true,
           withData: false,
           withReadStream: false);
@@ -397,6 +397,12 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
     }
   }
 
+  String _packLabel(String pack) => switch (pack) {
+    'animation' => '动画',
+    'audio' => '音频',
+    _ => '表情',
+  };
+
   String _status(String pack) {
     if (_active == pack) {
       if (_cancelled) return '正在取消';
@@ -453,7 +459,7 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(pack == 'animation' ? '动画资源' : '表情资源',
+                      Text('${_packLabel(pack)}资源',
                           style: const TextStyle(
                               fontSize: 15, fontWeight: FontWeight.w600)),
                       const SizedBox(height: AppSpacing.xs),
@@ -473,7 +479,7 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
                 ),
               ),
               IconButton(
-                tooltip: pack == 'animation' ? '导入动画 ZIP' : '导入表情 ZIP',
+                tooltip: '导入${_packLabel(pack)} ZIP',
                 onPressed: _busy || _checking ? null : () => _import(pack),
                 icon: const Icon(Icons.file_open_outlined),
               ),
@@ -555,6 +561,8 @@ class _ResourcePackDialogState extends State<ResourcePackDialog> {
                         },
                 ),
                 _packRow('animation'),
+                const Divider(height: 1),
+                _packRow('audio'),
                 const Divider(height: 1),
                 _packRow('memes'),
               ],

@@ -106,6 +106,8 @@ def begin_night(game, events):
         "locked": False,
         "preview": None,
         "reactions": [],
+        # 只在实际死亡时记录身份，夜间结果处理完后才消耗回溯额度。
+        "hiro_rewind": None,
         # 本夜梅露露是否已经放弃复活：主持人推进或30秒警告到点时写入，入口随之关闭。
         "revive_declined": False,
     }
@@ -162,17 +164,16 @@ def lock_night(game, events):
     previous = game["phase"]
     start_phase(game, "night_review")
     prepare_night_preview(game, events)
-    if not game.get("rewound_night"):
-        plugins.emit(
-            game,
-            events,
-            "phase_enter",
-            {
-                "from": previous,
-                "to": "night_review",
-                "day": game["day"],
-            },
-        )
+    plugins.emit(
+        game,
+        events,
+        "phase_enter",
+        {
+            "from": previous,
+            "to": "night_review",
+            "day": game["day"],
+        },
+    )
 
 
 def damage_preview(game, attacks, protection=()):
@@ -334,14 +335,8 @@ def resolve_intents(game, events, attacks, protection=(), *, night=False, substi
 def prepare_night_preview(game, events=None):
     night = game["night"]
     night["reactions"] = [r for r in night["reactions"] if r != "millia"]
-    preview, dead = night_damage(game, events if events is not None else [])
+    preview, _ = night_damage(game, events if events is not None else [])
     night["preview"] = preview
-    # 夜间预结算里希罗死亡时立即回溯到前一天顺序发言，不放主持人待办。
-    # 事件队列必须原样传下去：回溯是公开事件，用空列表会把「游戏时间已回溯」
-    # 吞掉，玩家只会看到整夜被打回重来（额度却照扣）。只有拿不到队列的
-    # REST 入口（api.room_command 的替补接管）才允许传 None。
-    if "hiro" in dead:
-        hiro.rewind_on_death(game, events if events is not None else [], "night")
 
 
 def night_damage(game, events=None):
@@ -497,6 +492,9 @@ def death_batch(game, events, preview):
         }
         game["deaths"].append(record)
         killed.append(record)
+        if cid == "hiro" and game["half"] == "night" and not game["night"].get("hiro_rewind"):
+            # 记录死亡时的模式；随后复活或主持人改身份不会取消已触发的回溯。
+            game["night"]["hiro_rewind"] = hiro.rewind_mode(game, "night")
         source = death.get("source_card")
         if source:
             game["cards"][source]["states"].setdefault("kills", []).append(

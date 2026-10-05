@@ -50,7 +50,7 @@ def initialize():
             sender_id TEXT NOT NULL, sender_name TEXT NOT NULL, avatar_role_id TEXT,
             channel_id TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
             audience TEXT, image_id TEXT, payload TEXT, recalled_at TEXT,
-            reference_title TEXT, mention_ids TEXT NOT NULL DEFAULT '[]'
+            reference_title TEXT, mention_ids TEXT NOT NULL DEFAULT '[]', channel_seat_ids TEXT
         );
         CREATE INDEX IF NOT EXISTS message_game_id ON messages(game_id, id);
         CREATE TABLE IF NOT EXISTS evidence (
@@ -102,6 +102,24 @@ def initialize():
             db.execute("ALTER TABLE messages ADD COLUMN mention_ids TEXT NOT NULL DEFAULT '[]'")
         if "reference_title" not in message_columns:
             db.execute("ALTER TABLE messages ADD COLUMN reference_title TEXT")
+        if "channel_seat_ids" not in message_columns:
+            db.execute("ALTER TABLE messages ADD COLUMN channel_seat_ids TEXT")
+            for row in db.execute(
+                "SELECT m.id,m.game_id,COALESCE(m.audience,c.participant_ids) AS members "
+                "FROM messages m LEFT JOIN channels c ON c.id=m.channel_id AND c.game_id=m.game_id "
+                "WHERE m.kind='chat' AND m.channel_id NOT IN ('public','spectator','information','system')"
+            ).fetchall():
+                db.execute(
+                    "UPDATE messages SET channel_seat_ids=? WHERE id=?",
+                    (
+                        dumps(
+                            _channel_seat_ids(
+                                db, row["game_id"], json.loads(row["members"] or "[]")
+                            )
+                        ),
+                        row["id"],
+                    ),
+                )
         # 原游戏没有成就设计：清掉历史对局里残留的占位字段，免得状态查看器继续显示它。
         for row in db.execute("SELECT id,state FROM games").fetchall():
             state = json.loads(row["state"])
@@ -231,6 +249,20 @@ def pending_invites(db, account_id):
     )
 
 
+def _channel_seat_ids(db, game_id, members):
+    """只保留发送时参与玩家的固定席位，主持人不占席位。"""
+    members = set(members)
+    return sorted(
+        {
+            row["seat_id"]
+            for row in db.execute(
+                "SELECT id,seat_id FROM participants WHERE game_id=? AND kind='player'", (game_id,)
+            )
+            if row["id"] in members and row["seat_id"] in {"1", "2", "3", "4", "5", "6", "7"}
+        }
+    )
+
+
 def add_message(
     db,
     game_id,
@@ -248,10 +280,15 @@ def add_message(
     reference_title=None,
 ):
     created_at = now_text()
+    channel_seat_ids = (
+        _channel_seat_ids(db, game_id, audience or [])
+        if kind == "chat" and channel_id not in {"public", "spectator", "information", "system"}
+        else None
+    )
     cursor = db.execute(
         """INSERT INTO messages(game_id,kind,sender_id,sender_name,avatar_role_id,
-           channel_id,text,created_at,audience,image_id,payload,mention_ids,reference_title)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           channel_id,text,created_at,audience,image_id,payload,mention_ids,reference_title,channel_seat_ids)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             game_id,
             kind,
@@ -266,6 +303,7 @@ def add_message(
             None if payload is None else dumps(payload),
             dumps(mention_ids or []),
             reference_title,
+            None if channel_seat_ids is None else dumps(channel_seat_ids),
         ),
     )
     return dict(db.execute("SELECT * FROM messages WHERE id=?", (cursor.lastrowid,)).fetchone())
@@ -368,6 +406,11 @@ def message_view(row, actor):
     # 这里必须保留 .keys()——SIM118 的简化建议在这个类型上是错的（会静默丢掉撤回与播报）。
     recalled = bool(row["recalled_at"]) if "recalled_at" in row.keys() else False  # noqa: SIM118
     result["recalled"] = recalled
+    result["channel_seat_ids"] = (
+        json.loads(row["channel_seat_ids"])
+        if "channel_seat_ids" in row.keys() and row["channel_seat_ids"] is not None  # noqa: SIM118
+        else []
+    )
     result["mention_ids"] = (
         json.loads(row["mention_ids"])
         if not recalled and "mention_ids" in row.keys()  # noqa: SIM118 - 同上，不能用 `in row`

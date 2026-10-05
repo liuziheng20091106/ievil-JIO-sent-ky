@@ -8,7 +8,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.app.resource_packs import PACKS, RESOURCES_DIR, ManifestError, update_manifest  # noqa: E402
+from backend.app.resource_packs import (  # noqa: E402
+    PACKS,
+    RESOURCES_DIR,
+    ManifestError,
+    build_archive,
+    update_manifest,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--resources-dir", type=Path, default=RESOURCES_DIR, help="Resource root directory"
     )
+    parser.add_argument("--archive-dir", type=Path, help="Also build ZIPs in this directory")
     args = parser.parse_args(argv)
     try:
         for pack in (args.pack,) if args.pack else PACKS:
@@ -24,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"{pack}: {manifest['version']} ({len(manifest['files'])} files, {manifest['total_size']} bytes)"
             )
+            if args.archive_dir is not None:
+                archive = build_archive(args.resources_dir, pack, args.archive_dir)
+                print(f"{pack} ZIP: {archive['md5']} ({archive['size']} bytes)")
     except (ManifestError, OSError) as error:
         print(f"Cannot update resource manifest: {error}", file=sys.stderr)
         return 1

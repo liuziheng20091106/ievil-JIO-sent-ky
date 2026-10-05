@@ -14,6 +14,10 @@ dependencies:
   # 直接使用：登录挑战创建前的工作量证明（见 lib/src/pow.dart 与后端 pow_guard.py）。
   crypto: ^3.0.7
   archive: ^4.3.0
+  # 每路独立的本地文件播放器；此版本兼容当前 Flutter 基线。
+  audioplayers: 6.5.1
+  # Windows 原生异步装载销毁补丁仅支持此版本，见 windows/audio_lifecycle.cmake。
+  audioplayers_windows: 4.4.1
   file_picker: 10.3.10
   flutter_secure_storage: ^9.2.4
   lottie: ^3.6.1

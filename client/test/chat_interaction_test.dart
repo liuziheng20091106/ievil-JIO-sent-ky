@@ -12,6 +12,38 @@ import 'typing_status_test.dart' show RecordingLive;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets('私信标签使用消息席位快照，频道消失后仍按升序去重', (tester) async {
+    GameMessage message(int id, String channel, List<String> seats) => GameMessage.fromJson({
+          'id': id,
+          'kind': 'chat',
+          'text': '消息$id',
+          'channel_id': channel,
+          'channel_seat_ids': seats,
+        });
+    final private = message(1, 'private:ended-and-missing', ['4', '2', '1', '2']);
+    expect(private.channelSeatIds, ['1', '2', '4']);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(body: Column(children: [
+        for (final item in [
+          private,
+          message(2, 'private:host', ['1']),
+          message(3, 'public', []),
+          message(4, 'spectator', []),
+          message(5, 'information', []),
+        ])
+          MessageBubble(message: item),
+      ])),
+    ));
+    expect(find.text('私信124'), findsOneWidget);
+    expect(find.text('私信1'), findsOneWidget);
+    expect(find.text('观战频道'), findsOneWidget);
+    expect(find.text('系统信息'), findsOneWidget);
+    expect(find.byIcon(Icons.lock_outline), findsNWidgets(2));
+    expect(find.byIcon(Icons.campaign_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.info_outline), findsOneWidget);
+  });
+
   testWidgets('观战默认公屏，历史与实时按完整频道筛选且只能读取', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final channelIds = [

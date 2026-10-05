@@ -7,7 +7,7 @@ from backend.app.game import apply_command
 from backend.app.game.engine import open_vote
 from backend.app.game.external_plugins import meruru_vote_balance as balance
 from backend.app.game.state import eligible_voters, seat_choice
-from checks.rule_factory import arranged_game, player
+from checks.rule_factory import arranged_game, force_after_wait, player
 
 HOST = {"id": "host", "kind": "host", "seat_id": None, "access_ids": ["host"]}
 
@@ -75,7 +75,7 @@ class MeruruVoteBalance(unittest.TestCase):
                 "vote.cast",
                 {"meruru": "yes" if sid in yes_seats else "no"},
             )
-        events += apply_command(game, HOST, "host.advance", {})
+        events += force_after_wait(game, HOST)
         return game, events
 
     def test_enabled_vs_disabled_and_no_fabricated_ballot_or_private_disclosure(self):

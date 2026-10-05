@@ -523,7 +523,12 @@ def archived_events(db, game_id, names=None):
         )
         channel_id = event["channel_id"]
         channel = channels.get(channel_id)
-        if channel:
+        channel_seats = _loads(event.get("channel_seat_ids"), None)
+        if channel_seats is not None:
+            event["channel_name"] = (
+                "私信" + "".join(channel_seats) + "：" + "、".join(event["audience_names"] or [])
+            )
+        elif channel:
             members = _loads(channel["participant_ids"], [])
             event["channel_name"] = "私聊：" + "、".join(
                 names.get(member, "已离场参与者") for member in members

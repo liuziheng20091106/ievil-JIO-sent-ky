@@ -6,6 +6,7 @@
 并且真的把它推给全场——这条链路断开时，玩家看到的倒计时会停在旧值上。
 """
 
+import asyncio
 import tempfile
 import time
 import unittest
@@ -15,7 +16,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import storage
+from backend.app import auth, realtime, storage
 from backend.app.game import DEFAULT_CODEX
 from backend.app.main import app
 
@@ -133,17 +134,24 @@ class SpeechTimerRelay(unittest.TestCase):
 
     @contextmanager
     def connect(self, headers):
+        token_hash = auth.secret_hash(headers["Authorization"].removeprefix("Bearer "))
         cm = self.client.websocket_connect("/api/live", headers=headers)
         socket = cm.__enter__()
         try:
             frame = socket.receive_json()
             self.assertEqual(frame["type"], "sync")
+            socket._initial_sync = frame
             yield socket
         finally:
-            try:
-                cm.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001 - 关闭期的门户竞态不影响断言结果
-                pass
+            socket.close()
+
+            async def disconnected():
+                async with asyncio.timeout(2):
+                    while any(peer.token_hash == token_hash for peer in realtime.connections):
+                        await asyncio.sleep(0)
+
+            socket.portal.call(disconnected)
+            cm.__exit__(None, None, None)
 
     # ------------------------------------------------------------------ 夹具
 
@@ -267,10 +275,10 @@ class SpeechTimerRelay(unittest.TestCase):
         saved = [item for item in history() if item["kind"] == "speech_turn"]
         seats = [item["payload"]["seat_id"] for item in saved[len(initial) :]]
         self.assertEqual(seats, ["2", "3", "5", "6", "7", "5"])
-        with self.client.websocket_connect("/api/live", headers=headers["2"]) as socket:
-            frame = socket.receive_json()
-            self.assertEqual(frame["type"], "sync")
-            recovered = [item for item in frame["messages"] if item["kind"] == "speech_turn"]
+        with self.connect(headers["2"]) as socket:
+            recovered = [
+                item for item in socket._initial_sync["messages"] if item["kind"] == "speech_turn"
+            ]
             self.assertEqual(recovered, saved)
 
     def test_the_speaking_phase_publishes_one_clock_to_everyone(self):

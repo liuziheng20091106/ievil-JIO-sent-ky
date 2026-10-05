@@ -436,6 +436,7 @@ class GameAnimationDelivery(unittest.TestCase):
                         speech_deadline=engine.clock.now() + 30,
                         speech_deadline_seat="2",
                     )
+                    game["speech_turn"] = [game["day"], game["public"].get("rewinds", 0), "2"]
                     game["seats"][0]["cards"] = ["emma", "millia"]
                     game["cards"]["emma"]["witch"] = witch
                     game["cards"]["hiro"]["witch"] = witch

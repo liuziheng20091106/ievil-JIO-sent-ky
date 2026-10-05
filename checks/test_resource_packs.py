@@ -102,6 +102,51 @@ class ResourcePacks(unittest.TestCase):
         image.write_bytes(b"title image")
         return script
 
+    def test_audio_manifest_zip_and_path_boundaries(self):
+        empty = self.publish("audio")
+        self.assertEqual(empty["files"], [])
+        self.assertEqual(self.client.get("/api/resources/audio/manifest").json(), empty)
+        directory = self.root / "audio"
+        for suffix in ("mp3", "wav", "ogg", "flac"):
+            (directory / f"theme.{suffix}").write_bytes(f"audio {suffix}".encode())
+        (directory / "private.png").write_bytes(b"image")
+        (directory / "script.json").write_text("{}")
+        manifest = self.publish("audio")
+        self.assertEqual(len(manifest["files"]), 4)
+        archive_dir = self.root / "resource-archives"
+        metadata = packs.build_archive(self.root, "audio", archive_dir)
+        with zipfile.ZipFile(archive_dir / f"{metadata['md5']}.zip") as archive:
+            self.assertEqual(
+                set(archive.namelist()),
+                {"manifest.json", *[entry["path"] for entry in manifest["files"]]},
+            )
+            self.assertEqual(json.loads(archive.read("manifest.json")), manifest)
+            self.assertEqual(archive.read("theme.mp3"), b"audio mp3")
+        self.assertEqual(self.client.get("/api/resources/audio/archive").json()["pack"], "audio")
+        for path in (
+            "../theme.mp3",
+            "https://example.org/theme.mp3",
+            "a\\theme.mp3",
+            "/theme.mp3",
+            "private.png",
+            "script.json",
+        ):
+            self.assertFalse(packs.valid_media_path(path, "audio"), path)
+        (directory / "unpublished.mp3").write_bytes(b"unpublished")
+        self.assertEqual(
+            self.client.get("/api/resources/audio/files/unpublished.mp3").status_code, 404
+        )
+        self.assertEqual(
+            self.client.get("/api/resources/audio/files/theme.mp3").content, b"audio mp3"
+        )
+        (directory / "theme.mp3").write_bytes(b"changed")
+        with self.assertRaises(packs.ManifestError):
+            packs.build_archive(self.root, "audio", archive_dir)
+        sound = self.root / "animation" / "scripts" / "start.wav"
+        sound.parent.mkdir(exist_ok=True)
+        sound.write_bytes(b"animation sound")
+        self.assertIn("scripts/start.wav", [entry["path"] for entry in self.publish()["files"]])
+
     def test_lottie_images_shapes_versions_and_json_publication_boundary(self):
         animation = self.animation()
         script = self.write_animation(animation, "scripts/nested/start.json")
@@ -632,6 +677,18 @@ class ResourcePacks(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.root / "animation" / "manifest.json").exists())
         self.assertEqual(packs.load_manifest(self.root, "memes")["files"][0]["path"], "face.gif")
+        archive_dir = self.root / "resource-archives"
+        result = subprocess.run(
+            command + ["--pack", "audio", "--archive-dir", str(archive_dir)],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "animation" / "manifest.json").exists())
+        self.assertFalse((archive_dir / "memes.json").exists())
+        self.assertEqual(packs.load_archive(archive_dir, "audio")["pack"], "audio")
         result = subprocess.run(command, cwd=self.root, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(

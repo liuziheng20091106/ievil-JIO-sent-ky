@@ -93,6 +93,43 @@ Future<void> pumpShell(WidgetTester tester, GameStore store) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('本人警告复用倒计时，刷新截止时间并在撤销后恢复阶段提示', (tester) async {
+    var now = base;
+    await withClock(Clock(() => now), () async {
+      final normal = viewJson(prompt: {'title': '请完成当前操作', 'hint': '先结束私聊'});
+      Map<String, dynamic> warned(double deadline) => {
+            ...normal,
+            'self': {'seat_id': '1', 'warning_deadline': deadline},
+          };
+      final store =
+          await previewStore(warned(base.millisecondsSinceEpoch / 1000 + 30));
+      addTearDown(store.dispose);
+      await pumpShell(tester, store);
+      expect(find.text('主持人警告'), findsOneWidget);
+      expect(find.text('剩余 30 秒'), findsOneWidget);
+      expect(find.text('先结束私聊'), findsOneWidget);
+      now = base.add(const Duration(seconds: 9));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('剩余 21 秒'), findsOneWidget);
+      store.applyLiveEvent({
+        'type': 'state',
+        'state': warned(now.millisecondsSinceEpoch / 1000 + 30)
+      });
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('剩余 30 秒'), findsOneWidget);
+      now = now.add(const Duration(seconds: 31));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('时间到，等待系统处理…'), findsOneWidget);
+      expect(find.text('时间到，正在轮到下一位…'), findsNothing);
+      store.applyLiveEvent({'type': 'state', 'state': normal});
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('主持人警告'), findsNothing);
+      expect(find.text('请完成当前操作'), findsOneWidget);
+      expect(find.textContaining('剩余'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
+
   testWidgets('横幅按剩余秒数逐秒刷新，到点提示正在换人', (tester) async {
     var now = base;
     await withClock(Clock(() => now), () async {

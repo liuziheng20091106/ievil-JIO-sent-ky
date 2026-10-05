@@ -176,6 +176,9 @@ class HistoryFlow(unittest.TestCase):
         private_event = next(
             event for event in detail.json()["events"] if event["text"] == "结束后公开私信"
         )
+        private_label = "私信" + joined.json()["actor"]["seat_id"]
+        self.assertTrue(private_event["channel_name"].startswith(private_label + "："))
+        self.assertIn(private_label + "：", detail.json()["export_text"])
         self.assertIn("QQ20001", private_event["channel_name"])
         self.assertIn("主持人(主持10001)", private_event["channel_name"])
         self.assertEqual(set(private_event["audience_names"]), {"QQ20001", "主持人(主持10001)"})

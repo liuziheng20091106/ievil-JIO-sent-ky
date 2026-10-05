@@ -214,6 +214,7 @@ void main() {
     cache = ResourcePacks(api: api, supportDirectory: support);
     api.publish('animation', {'角色/EX/1.png': 'good'});
     api.publish('memes', {'hello.png': 'meme'});
+    api.publish('audio', {'music/theme.mp3': 'audio'});
   });
   tearDown(() async {
     api.close();
@@ -222,6 +223,61 @@ void main() {
 
   Future<File> localZip(Uint8List bytes) async =>
       File(p.join(support.path, 'import.zip')).writeAsBytes(bytes);
+
+  test('音频包复用增量、全量 ZIP 与本地导入校验流程', () async {
+    await cache.download(api.manifest('audio'));
+    expect(await File((await cache.filePath('audio', 'music/theme.mp3'))!)
+        .readAsString(), 'audio');
+    api.publishArchive('audio', {'music/theme.mp3': 'zip audio'});
+    api.publish('audio', {'music/theme.mp3': 'latest audio'});
+    final full = await cache.downloadArchive('audio');
+    expect(full.synchronized, isTrue);
+    expect(await File((await cache.filePath('audio', 'music/theme.mp3'))!)
+        .readAsString(), 'latest audio');
+    final imported = ResourcePacks(api: api,
+        supportDirectory: Directory(p.join(support.path, 'imported')));
+    final source = await localZip(api.archiveBodies['audio']!);
+    final result = await imported.importArchive('audio', source);
+    expect(result.synchronized, isTrue);
+    final path = (await imported.filePath('audio', 'music/theme.mp3'))!;
+    expect(await File(path).readAsString(), 'latest audio');
+    await File(path).writeAsString('tampered');
+    expect(await imported.filePath('audio', 'music/theme.mp3'), isNull);
+    for (final unsafe in ['../song.mp3', 'https://host/song.mp3', 'cover.png']) {
+      expect(() => ResourcePackManifest.fromJson(
+          manifestPayload('audio', {unsafe: 'bad'}), pack: 'audio'),
+          throwsFormatException);
+    }
+  });
+
+  test('动画音效优先脚本旁及固定后缀，坏首选缓存不能静默降级', () async {
+    api.publish('animation', {
+      'scripts/nested/sample.json': '{}',
+      'scripts/nested/sample.wav': 'inline wav',
+    });
+    api.publish('audio', {'scripts/nested/sample.mp3': 'fallback mp3'});
+    await cache.download(api.manifest('animation'));
+    await cache.download(api.manifest('audio'));
+    expect(await cache.animationSoundPath('scripts/nested/sample.json'),
+        await cache.filePath('animation', 'scripts/nested/sample.wav'));
+    api.publish('animation', {
+      'scripts/nested/sample.json': '{}',
+      'scripts/nested/sample.wav': 'inline wav',
+      'scripts/nested/sample.mp3': 'inline mp3',
+    });
+    await cache.download(api.manifest('animation'));
+    final preferred = await cache.filePath('animation', 'scripts/nested/sample.mp3');
+    expect(await cache.animationSoundPath('scripts/nested/sample.json'), preferred);
+    await File(preferred!).writeAsString('corrupt');
+    await expectLater(cache.animationSoundPath('scripts/nested/sample.json'),
+        throwsFormatException);
+    api.publish('animation', {'scripts/nested/sample.json': '{}'});
+    await cache.download(api.manifest('animation'));
+    expect(await cache.animationSoundPath('scripts/nested/sample.json'),
+        await cache.filePath('audio', 'scripts/nested/sample.mp3'));
+    await expectLater(cache.animationSoundPath('../outside.json'),
+        throwsFormatException);
+  });
 
   test('旧 ZIP 安装后重新获取最新清单，跨包共享缓存只下载差异', () async {
     api.publish('memes', {'face.png': 'shared'});

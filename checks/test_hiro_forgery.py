@@ -15,6 +15,7 @@ from checks.rule_factory import arranged_game, player
 class HiroForgery(unittest.TestCase):
     def test_public_forgery_once_per_day_and_optional_evidence(self):
         disabled = arranged_game()
+        disabled["rule_plugins"] = plugins.manifest([])
         self.assertNotIn(
             "hiro_forgery.publish",
             [a["id"] for a in game_view(disabled, player(disabled, "2"))["actions"]],

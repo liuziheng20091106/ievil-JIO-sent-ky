@@ -3,7 +3,7 @@
 from copy import deepcopy
 from random import SystemRandom
 
-from . import clock
+from . import audio, clock
 from . import plugins
 from .roles import emma, hanna, hiro, honoka, meruru, millia, nanoka, sherry
 from .actions import (
@@ -257,18 +257,14 @@ def convert_daily(game, events):
 
 
 def apply_damage(game, events, preview, allow_reaction=True):
-    """结算一次伤害；希罗缺阵时按固定时点自动回溯并返回 True。"""
-    hiro_card = role_card(game, "hiro")
-    half = game["half"]
-    mode = "witch" if hiro_card["witch"] else "normal"
-    hiro_triggered = (
+    """白天希罗即将死亡时立即回溯；夜间先落实死亡与目击裁定。"""
+    if (
         allow_reaction
-        and not game["spiritual"]["hiro_used"][mode]
+        and game["half"] != "night"
         and any(death["target_card"] == "hiro" for death in preview["deaths"])
-    )
-    if hiro_triggered:
-        if hiro.rewind_on_death(game, events, half):
-            return True
+        and hiro.rewind_on_death(game, events, game["half"])
+    ):
+        return True
     if game["half"] == "night":
         # 夜间的被动播报一律压到天亮（见 publish_night_passives），这里只把事实记在
         # 本夜的预结算结果上；night 属于对局状态，希罗回溯会连同它一起还原。
@@ -610,6 +606,25 @@ def close_vote(game, events):
     open_vote(game, events)
 
 
+def publish_night_outcome(game, events):
+    """夜终只发一条死亡汇总，随后按原权限补发夜间被动信息。"""
+    queued_deaths = game.get("queued_deaths") or []
+    if game["queued_notices"]:
+        notify(
+            game,
+            events,
+            f"第{game['day']}夜：" + "".join(game["queued_notices"]),
+            alert=True,
+            reference_title="夜终公告",
+            payload=death_card_payload(game, queued_deaths, half="night")
+            if queued_deaths
+            else None,
+        )
+    else:
+        notify(game, events, f"第{game['day']}夜是平安夜。", alert=True, reference_title="夜终公告")
+    publish_night_passives(game, events)
+
+
 def advance(game, events):
     require(not game["pending"], "仍有待裁定事项，请先在「裁决」里逐项处理后再推进")
     game.pop("rewound_night", None)
@@ -621,13 +636,16 @@ def advance(game, events):
         lock_night(game, events)
     elif phase == "night_review":
         require(game["night"]["preview"] is not None, "尚无预结算结果")
-        # 统一走 apply_damage：希罗缺阵时先回溯，再决定是否落死亡。
         apply_damage(game, events, game["night"]["preview"])
-        if game.get("rewound_night"):
-            return
         start_phase(game, "night_results")
         check_winner(game)
     elif phase == "night_results":
+        mode = game["night"].get("hiro_rewind")
+        if mode and hiro.rewind_mode(game, "night", mode):
+            # 先按本夜权限公布结果，再恢复旧时间线；不能先切白天或揭下层牌。
+            publish_night_outcome(game, events)
+            hiro.rewind_on_death(game, events, "night", mode)
+            return
         require(
             not game["winner_candidate"],
             "本夜已有胜负候选，请先完成连锁并宣判，不能切换为白天后重新判定",
@@ -650,28 +668,7 @@ def advance(game, events):
                     else "你可以选择一次示人角色。"
                 )
             notify(game, events, text, [s["id"]], "下层登场")
-        # 天亮只发一条汇总：逐条死讯与夜终总结合并，同一批死讯不再刷两遍。
-        # 角色卡死亡卡片与这句话同一条消息：一夜多人都出局时合并成一张卡。
-        queued_deaths = game.get("queued_deaths") or []
-        if game["queued_notices"]:
-            notify(
-                game,
-                events,
-                f"第{game['day']}夜：" + "".join(game["queued_notices"]),
-                alert=True,
-                reference_title="夜终公告",
-                # half 显式写成 night：这句话在天亮时说，但公布的是昨夜出局。
-                payload=death_card_payload(game, queued_deaths, half="night")
-                if queued_deaths
-                else None,
-            )
-        else:
-            notify(
-                game, events, f"第{game['day']}夜是平安夜。", alert=True, reference_title="夜终公告"
-            )
-        # 夜间的被动技能播报也在这一刻补发（替死 / 爱人庇护 / 转爱自己）：
-        # 死亡公告之前发会提前泄露夜里的结算，所以统一压到天亮。
-        publish_night_passives(game, events)
+        publish_night_outcome(game, events)
         dead_first = [
             d["seat_id"] for d in game["deaths"] if d["day"] == game["day"] and d["half"] == "night"
         ]
@@ -751,7 +748,7 @@ def advance(game, events):
     else:
         raise GameError("当前阶段不能推进")
     if game.pop("rewound_night", False):
-        # 本阶段内的预结算触发了希罗回溯：时间线已换掉，不得再写阶段/快照/日志。
+        # 白天出局触发希罗回溯：时间线已换掉，不得再写阶段/快照/日志。
         return
     # 夜间预结算/处决判死发生在本函数里：主人出局后傀儡当前牌要跟着当场出局
     # （见 sync_puppet_bonds）。
@@ -992,7 +989,24 @@ def skill_broadcast_payload(game, declaration):
 
 
 def host_command(game, events, action, data):
-    if action == "host.start":
+    if action == "host.audio_play":
+        audio.play(
+            game,
+            data["song"],
+            position=data.get("position") or 0,
+            rate=data.get("rate") if data.get("rate") not in (None, "") else 1,
+        )
+    elif action == "host.audio_update":
+        audio.change(
+            game,
+            data["id"],
+            position=data.get("position") if data.get("position") != "" else None,
+            rate=data.get("rate") if data.get("rate") != "" else None,
+            playing=data.get("playing"),
+        )
+    elif action == "host.audio_stop":
+        audio.stop(game, data["id"])
+    elif action == "host.start":
         require(game["status"] == "lobby" and game["phase"] == "ordering", "请先全员准备并发牌")
         require(
             all(s["occupant_id"] and s["ready"] for s in game["seats"]),
@@ -1948,6 +1962,8 @@ def force_advance(game, events):
         not any(item["kind"] != "honoka_witness" for item in game["pending"]),
         "仍有待裁定事项，请先在「裁决」里逐项处理后再推进",
     )
+    if game["phase"] == "night_results" and game["night"].get("hiro_rewind"):
+        check_winner(game)
     if game["phase"] in {"night_results", "dusk"}:
         require(not game["winner_candidate"], "已有胜负候选，请先完成连锁并宣判")
     waiting = outstanding_seats(game)

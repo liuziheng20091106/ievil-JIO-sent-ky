@@ -441,25 +441,43 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
-    testWidgets('对局内昵称右边显示佩戴的成就', (tester) async {
+    testWidgets('自己和他人的姓名与成就同排，昵称仍可点击与长按', (tester) async {
       final store = await previewStore();
+      addTearDown(store.dispose);
       store.equippedAchievements = {
         'p1': EquippedAchievement.fromJson(
           {'id': 'grant-1', 'name': '神秘黑幕女', 'rarity': 9},
         ),
       };
-      await tester.pumpWidget(MaterialApp(
-        theme: buildAppTheme(),
-        home: Scaffold(
-          body: MessageBubble(
-            message: chatMessage('p1', '阿雪'),
-            self: 'p9',
-            store: store,
+      final taps = <String?>[];
+      final marks = <String?>[];
+      for (final self in ['p9', 'p1']) {
+        await tester.pumpWidget(MaterialApp(
+          theme: buildAppTheme(),
+          home: Scaffold(
+            body: MessageBubble(
+              message: chatMessage('p1', '阿雪'),
+              self: self,
+              store: store,
+              onAvatar: taps.add,
+              onAvatarLongPress: marks.add,
+            ),
           ),
-        ),
-      ));
-      expect(find.text('阿雪'), findsOneWidget);
-      expect(find.text('神秘黑幕女'), findsOneWidget);
+        ));
+        expect(find.text('阿雪'), findsOneWidget);
+        expect(find.text('神秘黑幕女'), findsOneWidget);
+        expect(find.byType(AchievementBadge), findsOneWidget);
+        expect(tester.getCenter(find.text('阿雪')).dy,
+            closeTo(tester.getCenter(find.text('神秘黑幕女')).dy, 1));
+        final column = tester.widget<Column>(find.ancestor(
+          of: find.text('阿雪'), matching: find.byType(Column)).first);
+        expect(column.crossAxisAlignment,
+            self == 'p1' ? CrossAxisAlignment.end : CrossAxisAlignment.start);
+        await tester.tap(find.text('阿雪'));
+        await tester.longPress(find.text('阿雪'));
+      }
+      expect(taps, ['p1', 'p1']);
+      expect(marks, ['p1', 'p1']);
 
       // 没有佩戴成就的发送者不显示徽章。
       await tester.pumpWidget(MaterialApp(

@@ -410,6 +410,13 @@ class GameMessage {
     kind = raw['kind']?.toString() ?? 'chat';
     text = jsonString(raw['text'], 'message.text');
     channelId = raw['channel_id']?.toString() ?? 'system';
+    final seats = jsonArray(raw['channel_seat_ids'] ?? const [], 'message.channel_seat_ids')
+        .map((seat) => jsonString(seat, 'message.channel_seat_ids[]'))
+        .toSet();
+    if (seats.any((seat) => !const ['1', '2', '3', '4', '5', '6', '7'].contains(seat))) {
+      throw const FormatException('message.channel_seat_ids 不合法');
+    }
+    channelSeatIds = seats.toList()..sort();
     senderId = raw['sender_id']?.toString();
     senderName = raw['sender_name']?.toString();
     avatarRoleId = raw['avatar_role_id']?.toString();
@@ -439,6 +446,8 @@ class GameMessage {
   late final String kind;
   late final String text;
   late final String channelId;
+  /// 发送时的私信参与玩家席位；不依赖当前频道或替补后的占席身份。
+  late final List<String> channelSeatIds;
   late final String? senderId;
   late final String? senderName;
   late final String? avatarRoleId;

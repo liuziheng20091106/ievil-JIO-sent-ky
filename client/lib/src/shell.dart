@@ -13,12 +13,14 @@ import 'action_sheet.dart';
 import 'achievements.dart';
 import 'app_icons.dart';
 import 'chat_image.dart';
+import 'chat_immersion.dart';
 import 'design.dart';
 import 'emoji.dart';
 import 'emoji_picker.dart';
 import 'game_dialog.dart';
 import 'message_time.dart';
 import 'models.dart';
+import 'music_status_card.dart';
 import 'participant_menu.dart';
 import 'picks.dart';
 import 'player_marks.dart';
@@ -215,7 +217,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     }
     final ended = view.status == 'ended';
     // 服务端下发的「请求操作」催办：自己的行动正卡住流程时才有。
-    final prompt = view.actionPrompt;
+    final warningDeadline = view.self['warning_deadline'];
+    final prompt = warningDeadline == null
+        ? view.actionPrompt
+        : _warningPrompt(warningDeadline, hint: view.actionPrompt?['hint']);
     // 服务端下发的悬浮对话框：结束信息 / 私聊申请 / 当日目击名单，第一条优先。
     final dialogs = store.activeDialogs;
     final labels = host ? const ['对局', '状态', '管理'] : const ['对局', '状态', '我的'];
@@ -248,6 +253,14 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         // 多栏布局有自己的栏位标题，聚焦收起只在单页窄屏生效。
         final focusTyping = covered && !twoPane;
         markVisiblePages(twoPane ? (threePane ? 3 : 2) : 0);
+        return ChatImmersionSession(
+          enabled: store.immersionEnabled,
+          active: (twoPane || index == 0) &&
+              (ModalRoute.of(context)?.isCurrent ?? true),
+          builder: (context, visibility, activity) {
+        final mobileChat = !twoPane && index == 0 &&
+            GameStore.defaultImmersionFor(Theme.of(context).platform);
+        final shellVisibility = mobileChat ? visibility : 1.0;
         final inset = twoPane
             ? AppSpacing.lg
             : focusTyping
@@ -257,8 +270,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           store: store,
           resources: widget.resources,
           resourceRefresh: _resourceRefresh,
-          bottomInset: inset,
+          bottomInset: inset * shellVisibility,
           typing: focusTyping,
+          chromeVisibility: visibility,
+          onUserActivity: activity,
           onComposerExpanded: (open) {
             if (open != composerOpen) setState(() => composerOpen = open);
           },
@@ -274,7 +289,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           extendBody: !twoPane,
           appBar: focusTyping && !host
               ? null
-              : AppBar(
+              : ImmersionAppBar(
+                  visibility: shellVisibility,
+                  child: AppBar(
                   title: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -358,6 +375,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
+                ),
           endDrawer: twoPane && !threePane
               ? Drawer(
                   width: 380,
@@ -384,15 +402,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
               // 这两个横幅与下面的 Expanded 同处一个 children 列表：增删子项会挪动
               // Expanded 的下标，Flutter 按下标匹配就把整棵子树重建，输入框 controller
               // 与焦点随之丢失（草稿被清空）。所以始终占住 child 位置，只切换内容。
-              // 催办框常驻：自己的行动卡住流程时，切到哪一页都要看得见。
-              if (prompt == null)
-                const SizedBox.shrink()
-              else
-                _ActionPromptBox(prompt: prompt),
-              if (focusTyping || store.pendingPrivateInfo == null)
-                const SizedBox.shrink()
-              else
-                _PrivateInfoBanner(
+              ImmersionChrome(
+                visibility: shellVisibility,
+                child: prompt == null
+                    ? const SizedBox.shrink()
+                    : _ActionPromptBox(prompt: prompt),
+              ),
+              ImmersionChrome(
+                visibility: shellVisibility,
+                child: focusTyping || store.pendingPrivateInfo == null
+                    ? const SizedBox.shrink()
+                    : _PrivateInfoBanner(
                   message: store.pendingPrivateInfo!,
                   store: store,
                   onOpen: () {
@@ -402,6 +422,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                   },
                   onDismiss: store.acknowledgePrivateInfo,
                 ),
+              ),
               Expanded(
                 child: Stack(
                   children: [
@@ -414,11 +435,22 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                               child: PaneFrame(label: '状态', child: board)),
                           const PaneDivider(),
                           Expanded(
-                            child: PaneFrame(
-                              label: '对局',
-                              count: counts[0],
-                              urgent: urgent,
-                              child: chat,
+                            child: Column(
+                              children: [
+                                ImmersionChrome(
+                                  visibility: visibility,
+                                  child: SizedBox(
+                                    height: 46,
+                                    child: PaneFrame(
+                                      label: '对局',
+                                      count: counts[0],
+                                      urgent: urgent,
+                                      child: const SizedBox.shrink(),
+                                    ),
+                                  ),
+                                ),
+                                Expanded(child: chat),
+                              ],
                             ),
                           ),
                           if (threePane) ...[
@@ -455,8 +487,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                         store: store,
                         item: dialogs.first,
                         pending: dialogs.length - 1,
-                        bottomInset:
-                            twoPane ? AppSpacing.lg : AppSpacing.bottomBar,
+                        bottomInset: twoPane
+                            ? AppSpacing.lg
+                            : AppSpacing.bottomBar * shellVisibility,
                       ),
                   ],
                 ),
@@ -465,7 +498,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           ),
           bottomNavigationBar: (twoPane || focusTyping)
               ? null
-              : SafeArea(
+              : ImmersionChrome(
+                  visibility: shellVisibility,
+                  child: SafeArea(
                   minimum: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                   child: Material(
                     elevation: 10,
@@ -510,6 +545,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
+                ),
+        );
+          },
         );
       },
     );
@@ -666,6 +704,8 @@ class ChatActionPage extends StatefulWidget {
     this.onComposerExpanded,
     this.resources,
     this.resourceRefresh = 0,
+    this.chromeVisibility = 1,
+    this.onUserActivity,
   });
   final GameStore store;
   final ResourcePacks? resources;
@@ -676,6 +716,8 @@ class ChatActionPage extends StatefulWidget {
 
   /// 软键盘是否正打开：为真时隐藏页内除输入区以外的全部控件。
   final bool typing;
+  final double chromeVisibility;
+  final VoidCallback? onUserActivity;
 
   /// 输入区被占位（软键盘或表情面板）时上报外壳：外壳据此收起标题栏、筛选与底栏。
   final ValueChanged<bool>? onComposerExpanded;
@@ -801,6 +843,8 @@ class _ChatActionPageState extends State<ChatActionPage> {
 
   /// 上一次布局时消息视口的高度（由消息列表外的 LayoutBuilder 量得）。
   double? viewportHeight;
+  double _viewportChromeVisibility = 1;
+  (double, bool)? _immersionReadAnchor;
 
   @override
   void initState() {
@@ -880,13 +924,25 @@ class _ChatActionPageState extends State<ChatActionPage> {
     _scheduleJumpCheck();
     final previous = viewportHeight;
     viewportHeight = height;
+    final immersionResizing =
+        _viewportChromeVisibility != widget.chromeVisibility;
+    _viewportChromeVisibility = widget.chromeVisibility;
     if (previous == null || previous == height) return;
     if (!scroll.hasClients) return;
     // LayoutBuilder 在子列表布局之前跑，这里读到的还是变化前的度量：既知道玩家原本是不是
     // 停在最底部，也知道视口下沿当时贴在内容里的哪一处——后者就是变化后要守住的位置。
-    final anchor = scroll.position.pixels + previous;
-    final wasAtBottom =
-        scroll.position.pixels >= scroll.position.maxScrollExtent - 1;
+    final currentAnchor = (
+      scroll.position.pixels + previous,
+      scroll.position.pixels >= scroll.position.maxScrollExtent - 1,
+    );
+    // Keep the unclamped anchor through the whole hide/restore animation:
+    // expanding past the oldest message must not lose the original offset.
+    if (immersionResizing) {
+      _immersionReadAnchor ??= currentAnchor;
+    } else {
+      _immersionReadAnchor = null;
+    }
+    final (anchor, wasAtBottom) = _immersionReadAnchor ?? currentAnchor;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !scroll.hasClients) return;
       final position = scroll.position;
@@ -900,6 +956,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
       final clamped =
           target.clamp(position.minScrollExtent, position.maxScrollExtent);
       if (clamped != position.pixels) scroll.jumpTo(clamped);
+      if (widget.chromeVisibility == 1) _immersionReadAnchor = null;
     });
   }
 
@@ -1070,6 +1127,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
     final target = (position.pixels + delta)
         .clamp(position.minScrollExtent, position.maxScrollExtent);
     if (target == position.pixels) return;
+    _immersionReadAnchor = null;
     scroll.animateTo(target,
         duration: const Duration(milliseconds: 140), curve: Curves.easeOut);
   }
@@ -1356,10 +1414,11 @@ class _ChatActionPageState extends State<ChatActionPage> {
     final draftTarget = _currentDraftKey;
     final body = Column(
       children: [
-        // 键盘打开后页内只留输入区：筛选、阶段进度、主持人快捷工具、傀儡面板与
-        // 常驻提示全部让位，消息列表继续占满剩余空间，边打字边看上下文。
-        if (!typing)
-          SizedBox(
+        ImmersionChrome(
+          visibility: widget.chromeVisibility,
+          child: Column(
+            children: [
+              if (!typing) SizedBox(
             height: 54,
             child: ListView(
               padding: const EdgeInsets.fromLTRB(
@@ -1394,6 +1453,9 @@ class _ChatActionPageState extends State<ChatActionPage> {
         if (!typing && store.view!.phase == 'discussion')
           _DiscussionProgressCard(view: store.view!),
         if (!typing && store.actor!.isHost) _HostQuickTools(store: store),
+            ],
+          ),
+        ),
         Expanded(
           child: Stack(
             // 与原先的 Expanded 子项一样占满整块：Stack 默认给非定位子项松约束，
@@ -1403,7 +1465,15 @@ class _ChatActionPageState extends State<ChatActionPage> {
               // 点一下消息区就把键盘焦点交给聊天区：之后上下键即可滚消息。
               Listener(
                 onPointerDown: (_) => focusMessagesForKeys(),
-                child: _messageList(store),
+                child: NotificationListener<UserScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification.direction != ScrollDirection.idle) {
+                      _immersionReadAnchor = null;
+                    }
+                    return false;
+                  },
+                  child: _messageList(store),
+                ),
               ),
               // 离开最新消息（视口下方压着 10 条以上）才出现，点一下滚回底部。
               if (showJumpToLatest)
@@ -1418,6 +1488,10 @@ class _ChatActionPageState extends State<ChatActionPage> {
             ],
           ),
         ),
+        ImmersionChrome(
+          visibility: widget.chromeVisibility,
+          child: Column(
+            children: [
         if (!typing && store.view!.puppetSpectator)
           const Padding(
             padding: EdgeInsets.fromLTRB(
@@ -1450,6 +1524,7 @@ class _ChatActionPageState extends State<ChatActionPage> {
           onShortcut: insertShortcut,
           onClearError: () => setState(() => sendError = null),
           onChanged: (text) {
+            widget.onUserActivity?.call();
             setState(() => sendError = null);
             final cursor = message.selection.baseOffset;
             if (cursor > 0 && cursor <= text.length) {
@@ -1457,6 +1532,9 @@ class _ChatActionPageState extends State<ChatActionPage> {
               if (text[cursor - 1] == '#') pickEvidence();
             }
           },
+        ),
+            ],
+          ),
         ),
       ],
     );
@@ -2041,6 +2119,7 @@ class _SettingsButton extends StatelessWidget {
               onTap: () => showPredictiveSheet(
                 context: context,
                 useSafeArea: true,
+                isScrollControlled: true,
                 builder: (sheetContext) => _ChatSettingsSheet(store: store),
               ),
               child: Icon(
@@ -2063,7 +2142,12 @@ class _ChatSettingsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SafeArea(
         top: false,
-        child: Column(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .8,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -2100,12 +2184,26 @@ class _ChatSettingsSheet extends StatelessWidget {
                     title: const Text('自动切换到可用聊天频道'),
                     subtitle: const Text('当前频道不可发言时自动切到可用频道'),
                   ),
+                  SwitchListTile(
+                    value: store.immersionEnabled,
+                    onChanged: store.setImmersionEnabled,
+                    title: const Text('沉浸模式'),
+                    subtitle: const Text('15 秒无操作后收起聊天控件，任意操作恢复'),
+                  ),
+                  SwitchListTile(
+                    value: store.allowAudioEnabled,
+                    onChanged: store.setAllowAudioEnabled,
+                    title: const Text('允许音频'),
+                    subtitle: const Text('在本机播放对局音乐与动画音效'),
+                  ),
                 ],
               ),
             ),
             SizedBox(height: AppSpacing.lg),
           ],
         ),
+            ),
+          ),
       );
 }
 
@@ -2996,9 +3094,9 @@ class MessageBubble extends StatelessWidget {
               crossAxisAlignment:
                   mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
-                if (message.senderName != null && !mine)
+                if (message.senderName != null)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 2, left: 2),
+                    padding: EdgeInsets.only(bottom: 2, left: mine ? 0 : 2, right: mine ? 2 : 0),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -3030,15 +3128,6 @@ class MessageBubble extends StatelessWidget {
                           ),
                         ],
                       ],
-                    ),
-                  ),
-                if (mine && badge != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2, right: 2),
-                    child: AchievementBadge(
-                      name: badge.name,
-                      rarity: badge.rarity,
-                      dense: true,
                     ),
                   ),
                 Container(
@@ -3076,7 +3165,7 @@ class MessageBubble extends StatelessWidget {
                                     ? '系统信息'
                                     : message.channelId == 'spectator'
                                         ? '观战频道'
-                                        : '私信',
+                                        : '私信${message.channelSeatIds.join()}',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: mine
@@ -3225,6 +3314,13 @@ class MessageBubble extends StatelessWidget {
       _time.isEmpty ? message.text : '${message.text} · $_time';
 }
 
+Map<String, dynamic> _warningPrompt(Object deadline, {Object? hint}) => {
+      'title': '主持人警告',
+      'text': '请在倒计时结束前完成当前操作。',
+      'hint': hint,
+      'warning_deadline': deadline,
+    };
+
 /// 「请求操作」红色大警告框：自己的行动卡住流程时由服务端下发，催促玩家完成。
 /// 玩家在私聊里时服务端会在 hint 里补一句「先结束私聊」。
 ///
@@ -3241,9 +3337,9 @@ class _ActionPromptBox extends StatefulWidget {
 class _ActionPromptBoxState extends State<_ActionPromptBox> {
   Timer? _ticker;
 
-  /// 顺序发言倒计时的截止时间（Unix 秒）；没有倒计时时为 null。
+  /// 发言或本人警告的截止时间（Unix 秒）；警告只消费自己的投影。
   double? get _deadline {
-    final value = widget.prompt['speech_deadline'];
+    final value = widget.prompt['warning_deadline'] ?? widget.prompt['speech_deadline'];
     if (value is num) return value.toDouble();
     return double.tryParse('$value');
   }
@@ -3295,7 +3391,11 @@ class _ActionPromptBoxState extends State<_ActionPromptBox> {
           Icon(Icons.timer_outlined, size: 15, color: context.palette.danger),
           const SizedBox(width: 4),
           Text(
-            remaining > 0 ? '剩余 $remaining 秒' : '时间到，正在轮到下一位…',
+            remaining > 0
+                ? '剩余 $remaining 秒'
+                : widget.prompt['warning_deadline'] != null
+                    ? '时间到，等待系统处理…'
+                    : '时间到，正在轮到下一位…',
             style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
@@ -4301,25 +4401,7 @@ class ProfilePage extends StatelessWidget {
         ],
         if (self['warning_deadline'] != null) ...[
           SizedBox(height: AppSpacing.md),
-          Card(
-            color: context.palette.dangerSoft,
-            child: Padding(
-              padding: EdgeInsets.all(AppSpacing.lg),
-              child: Row(
-                children: [
-                  Icon(Icons.timer_outlined, color: context.palette.danger),
-                  SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Text(
-                      '主持人已警告，请在 ${_deadlineText(self['warning_deadline'])} 前完成操作。',
-                      style:
-                          TextStyle(fontSize: 13, color: context.palette.text),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _ActionPromptBox(prompt: _warningPrompt(self['warning_deadline'])),
         ],
         const SizedBox(height: AppSpacing.xl),
         if (!actor.isHost) ...[
@@ -4583,7 +4665,7 @@ class HostManagementPage extends StatefulWidget {
 }
 
 class _HostManagementPageState extends State<HostManagementPage> {
-  static const groups = ['当前待办', '流程', '玩家', '私密信息', '纠错'];
+  static const groups = ['当前待办', '流程', '音乐', '玩家', '私密信息', '纠错'];
 
   /// 代操作入口的状态：已读取的席位行动数（null 表示还没有读取结果），
   /// 以及正在读取视角的席位。读取结果按对局版本缓存，版本一变就作废。
@@ -4780,6 +4862,12 @@ class _HostManagementPageState extends State<HostManagementPage> {
         ),
         for (final group in groups) ...[
           SectionTitle(group),
+          if (group == '音乐')
+            MusicStatusCard(
+              audio: view.raw['audio'],
+              allowed: store.allowAudioEnabled,
+              elapsed: () => store.audioSnapshotElapsed,
+            ),
           if (group == '当前待办')
             if (tasks.isEmpty)
               Card(
@@ -4970,6 +5058,9 @@ class _HostManagementPageState extends State<HostManagementPage> {
   }
 
   static String _groupOf(ActionDescriptor action) {
+    if (action.group == '音乐' || action.id.startsWith('host.audio_')) {
+      return '音乐';
+    }
     final value = '${action.group}:${action.id}';
     if (value.contains('待办') ||
         value.contains('warning') ||

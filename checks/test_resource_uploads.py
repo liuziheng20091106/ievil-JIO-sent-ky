@@ -35,6 +35,7 @@ class ResourceUploads(unittest.TestCase):
         for pack, name, body in (
             ("animation", "frame.png", b"frame"),
             ("memes", "face.gif", b"face"),
+            ("audio", "theme.mp3", b"theme"),
         ):
             directory = self.resources / pack
             directory.mkdir(parents=True)
@@ -140,7 +141,7 @@ class ResourceUploads(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def upload(self):
+    def upload(self, pack=None):
         request_once = uploader.release.request_once
 
         def route(url, *args, **kwargs):
@@ -160,6 +161,8 @@ class ResourceUploads(unittest.TestCase):
             "--prefix",
             "test/resources",
         ]
+        if pack is not None:
+            argv.extend(["--pack", pack])
         with (
             patch.object(sys, "argv", argv),
             patch.object(uploader.release, "request_once", side_effect=route),
@@ -167,12 +170,25 @@ class ResourceUploads(unittest.TestCase):
         ):
             return uploader.main()
 
+    def test_selected_audio_upload_preserves_other_packs(self):
+        self.start_server()
+        self.assertEqual(self.upload("audio"), 0)
+        self.assertEqual(len(self.objects), 2)
+        self.assertTrue((self.data / "resource-archives" / "audio.json").is_file())
+        for pack in ("animation", "memes"):
+            self.assertFalse((self.data / "resource-archives" / f"{pack}.json").exists())
+        digest = hashlib.md5(b"theme").hexdigest()
+        self.assertEqual(self.types[digest], "audio/mpeg")
+        records = packs.load_upload_log(self.log)
+        self.assertEqual(records[self.old_url], self.old_record)
+        self.assertEqual(records[f"{self.base}/test/resources/{digest}"]["path"], "audio/theme.mp3")
+
     def test_uploads_both_local_archives_and_reuploads_logged_objects(self):
         self.start_server()
         self.assertEqual(self.upload(), 0)
         first_digests = set(self.objects)
-        self.assertEqual(len(first_digests), 4)
-        self.assertEqual(self.archives_ready, [True] * 4)
+        self.assertEqual(len(first_digests), 6)
+        self.assertEqual(self.archives_ready, [True] * 6)
         records = packs.load_upload_log(self.log)
         self.assertEqual(records[self.old_url], self.old_record)
         for pack in packs.PACKS:
@@ -198,7 +214,7 @@ class ResourceUploads(unittest.TestCase):
                 [method for method, current in self.events if current == digest],
                 ["PUT", "HEAD", "POST", "GET"],
             )
-        self.assertEqual(len(self.posts), 4)
+        self.assertEqual(len(self.posts), 6)
         for path, authorization, payload in self.posts:
             self.assertEqual(path, "/purge")
             self.assertEqual(authorization, "Bearer test-token")
@@ -220,7 +236,7 @@ class ResourceUploads(unittest.TestCase):
                     with self.assertRaises((ValueError, uploader.release.ReleaseError)):
                         self.upload()
                 records = packs.load_upload_log(self.log)
-                self.assertEqual(len(records), 4)
+                self.assertEqual(len(records), 6)
                 self.assertEqual(records[self.old_url], self.old_record)
                 self.assertNotIn(f"{self.base}/test/resources/{self.failed_digest}", records)
                 methods = [method for method, digest in self.events if digest == self.failed_digest]

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:lottie/lottie.dart';
 
 import 'animation_player.dart';
+import 'audio_player.dart';
 import 'models.dart';
 import 'resource_packs.dart';
 import 'store.dart';
@@ -23,11 +26,23 @@ class _GameAnimationOverlayState extends State<GameAnimationOverlay>
     ..addStatusListener(_statusChanged);
   LottieComposition? _composition;
   int _generation = 0;
+  AnimationSound? _sound;
+  Object? _audioError;
+
+  void _storeChanged() {
+    final request = widget.store.gameAnimation.value;
+    if ((_composition != null || _sound != null) &&
+        (widget.store.actor == null || request?.gameId != widget.store.gameId)) {
+      ++_generation;
+      _clear();
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     widget.store.gameAnimation.addListener(_requestChanged);
+    widget.store.addListener(_storeChanged);
   }
 
   @override
@@ -36,6 +51,8 @@ class _GameAnimationOverlayState extends State<GameAnimationOverlay>
     if (oldWidget.store != widget.store ||
         oldWidget.resources != widget.resources) {
       oldWidget.store.gameAnimation.removeListener(_requestChanged);
+      oldWidget.store.removeListener(_storeChanged);
+      widget.store.addListener(_storeChanged);
       widget.store.gameAnimation.addListener(_requestChanged);
       ++_generation;
       _clear();
@@ -49,6 +66,9 @@ class _GameAnimationOverlayState extends State<GameAnimationOverlay>
   }
 
   void _clear() {
+    _sound?.dispose();
+    _sound = null;
+    _audioError = null;
     _controller.stop();
     disposeAnimationComposition(_composition);
     _composition = null;
@@ -92,6 +112,13 @@ class _GameAnimationOverlayState extends State<GameAnimationOverlay>
       }
       _controller.duration = composition.duration;
       setState(() => _composition = composition);
+      _sound = AnimationSound(controller: _controller, store: widget.store,
+        onError: (error) {
+          if (mounted && generation == _generation) {
+            setState(() => _audioError = error);
+          }
+        });
+      unawaited(_sound!.load(resources, request.script));
       _controller.forward(from: 0);
     } catch (_) {
       // Live effects are optional; only the manual preview reports cache errors.
@@ -102,6 +129,8 @@ class _GameAnimationOverlayState extends State<GameAnimationOverlay>
   void dispose() {
     ++_generation;
     widget.store.gameAnimation.removeListener(_requestChanged);
+    widget.store.removeListener(_storeChanged);
+    _sound?.dispose();
     _controller.dispose();
     disposeAnimationComposition(_composition);
     super.dispose();
@@ -137,6 +166,13 @@ class _GameAnimationOverlayState extends State<GameAnimationOverlay>
             frameRate: FrameRate.max,
             filterQuality: FilterQuality.medium,
           ),
+          if (_audioError != null)
+            Align(alignment: Alignment.topCenter,
+              child: SafeArea(child: Material(
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: Padding(padding: const EdgeInsets.all(12),
+                  child: Text('动画音效无法播放：$_audioError')),
+              ))),
         ]),
       ),
     );

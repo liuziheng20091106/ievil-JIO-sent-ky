@@ -294,8 +294,10 @@ PASSIVE_CARDS = {
     "rewind": (
         "hiro",
         "时间回溯",
-        "即将出局时自动回溯一次（本局该身份一次）：回到前一天并保留记忆与普通技能，"
-        "精神系效果不恢复；艾玛全场攻击生效的这一夜不触发普通或魔女回溯，也不消耗额度。",
+        "本局该身份自动回溯一次：夜间实际死亡后，先完成「夜间结果与证物」及相关裁定、"
+        "公布夜终结果，再回到前一天顺序发言；白天即将出局时立即回到前一天自由发言。"
+        "找不到该时点则回到开局。保留记忆与普通技能，精神系效果不恢复；"
+        "艾玛全场攻击锁定生效的这一夜不触发普通或魔女回溯，也不消耗额度。",
     ),
     "bind": (
         "sherry",
@@ -920,6 +922,7 @@ def upgrade_game(game):
         "locked": False,
         "preview": None,
         "reactions": [],
+        "hiro_rewind": None,
         "extra_attacks": [],
         "revive_declined": False,
     }.items():
@@ -930,6 +933,7 @@ def upgrade_game(game):
     add(game, "host", None)
     add(game, "host_entries", [])
     add(game, "queued_deaths", [])
+    add(game, "audio", {"tracks": []})
     # 旧字段名只是同一份记录的前身（当时只用来给通告去重），合并后丢掉。
     legacy_entries = game.pop("host_entry_notices", None)
     if legacy_entries:
@@ -1107,6 +1111,7 @@ def create_game(codex, rule_plugins=None):
         "rules_revision": 6,
         "rule_plugins": manifest(rule_plugins),
         "plugin_state": {},
+        "audio": {"tracks": []},
         # 建立这一局的主持人身份快照：对局内显示「主持人(昵称)」，
         # 也让非本局主持人进入管理界面时能被认出来（见 api.host_enter）。
         "host": None,
@@ -1143,6 +1148,7 @@ def create_game(codex, rule_plugins=None):
             "locked": False,
             "preview": None,
             "reactions": [],
+            "hiro_rewind": None,
             "extra_attacks": [],
             # 本夜梅露露是否已经放弃复活（30秒警告超时或主持人推进＝放弃）；每夜重建。
             "revive_declined": False,
@@ -1235,8 +1241,11 @@ def fallen_upper_role(game, seat):
 
 
 def save_snapshot(game):
+    from . import audio
+
     label = f"第{game['day']}天 · {game['phase']}"
     state = {k: deepcopy(v) for k, v in game.items() if k not in SNAPSHOT_EXCLUDED}
+    state["audio"] = audio.snapshot(game)
     state["seat_cards"] = {s["id"]: list(s["cards"]) for s in game["seats"]}
     snap = {
         "id": uid(),
@@ -1283,6 +1292,9 @@ def rewind(game, snapshot_id, events, mode=None, keep_states=()):
         if key not in SNAPSHOT_EXCLUDED:
             del game[key]
     game.update(mechanical)
+    from . import audio
+
+    audio.restore(game)
     for s in game["seats"]:
         s["cards"] = cards_by_seat[s["id"]]
         # 牌面已恢复到回溯点：曾经因上层出局切到下层牌的公开头像一并改回，
@@ -1355,6 +1367,13 @@ def emma_solo_win(game):
 
 
 def check_winner(game):
+    from .roles import hiro
+
+    mode = (game.get("night") or {}).get("hiro_rewind")
+    if game["half"] == "night" and mode and hiro.rewind_mode(game, "night", mode):
+        # 已发生的希罗死亡先完成夜间结果并回溯，本夜胜负不能抢先宣判。
+        game["winner_candidate"] = None
+        return
     if emma_solo_win(game):
         # 艾玛的单胜独立于两个阵营：她单独获胜，其余玩家均落败。
         game["winner_candidate"] = {
@@ -1408,6 +1427,7 @@ def finish(game, events, winner, reason):
         "personal_results": personal,
     }
     game["status"] = "ended"
+    game["audio"] = {"tracks": []}
     game["deadline"] = None
     game["warnings"] = {}
     game["queued_reveals"] = []
@@ -1459,9 +1479,7 @@ def clear_seat_actions(game, seat_id, events=None):
     if night.get("locked") and game["phase"] == "night_review":
         from .resolution import prepare_night_preview
 
-        game["pending"] = [p for p in game["pending"] if p["kind"] != "hiro" or p.get("preview")]
         night["reactions"] = []
-        # 重算预结算同样可能触发希罗回溯，事件队列要一起传下去（见 prepare_night_preview）。
         prepare_night_preview(game, events)
     game["warnings"].pop(seat_id, None)
     game["deadline"] = min(game["warnings"].values(), default=None)

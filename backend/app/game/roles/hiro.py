@@ -20,19 +20,24 @@ def target_snapshot(game, half):
     return found or (game["snapshots"][0] if game["snapshots"] else None)
 
 
-def rewind_on_death(game, events, half):
-    """回溯成功后调用方必须终止本次阶段与伤害写入。"""
+def rewind_mode(game, half, mode=None):
+    """按死亡时身份检查额度、清场限制与可用回溯点。"""
+    if half == "night" and (game.get("night") or {}).get("massacre"):
+        return None
+    mode = mode or ("witch" if game["cards"][ID]["witch"] else "normal")
+    if game["spiritual"]["hiro_used"][mode] or target_snapshot(game, half) is None:
+        return None
+    return mode
+
+
+def rewind_on_death(game, events, half, mode=None):
+    """白天即将死亡或夜间结果处理完毕时执行；成功后终止本次阶段写入。"""
     from ..state import rewind
 
-    if half == "night" and (game.get("night") or {}).get("massacre"):
-        return False
-
-    mode = "witch" if game["cards"][ID]["witch"] else "normal"
-    if game["spiritual"]["hiro_used"][mode]:
+    mode = rewind_mode(game, half, mode)
+    if mode is None:
         return False
     snap = target_snapshot(game, half)
-    if snap is None:
-        return False
     rewind(game, snap["id"], events, mode)
     game["rewound_night"] = True
     return True

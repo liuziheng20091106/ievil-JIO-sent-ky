@@ -175,6 +175,10 @@ class GameStore extends ChangeNotifier {
   static const _typingPublicKey = 'chat_typing_public';
   static const _autoSwitchKey = 'chat_auto_switch_channel';
   static const _enterToSendKey = 'chat_enter_to_send';
+  static const _immersionKey = 'chat_immersion';
+  static const _allowAudioKey = 'game_allow_audio';
+  bool immersionEnabled = false;
+  bool allowAudioEnabled = true;
   bool typingPublicEnabled = true;
   bool autoSwitchChannel = true;
 
@@ -186,6 +190,9 @@ class GameStore extends ChangeNotifier {
   /// （同 predictive_sheet.dart）。
   static bool defaultEnterToSendFor(TargetPlatform platform) =>
       platform != TargetPlatform.android;
+
+  static bool defaultImmersionFor(TargetPlatform platform) =>
+      platform == TargetPlatform.android || platform == TargetPlatform.iOS;
 
   /// 「正在输入」状态：频道 → 参与者 → (条目, 过期时间)。
   /// 纯内存瞬态，不落库；换局与登出时清空，条目 8 秒无刷新自动过期。
@@ -202,6 +209,9 @@ class GameStore extends ChangeNotifier {
     // 没存过就按平台默认：安卓换行、桌面回车发送。
     enterToSendEnabled = preferences.getBool(_enterToSendKey) ??
         defaultEnterToSendFor(defaultTargetPlatform);
+    immersionEnabled = preferences.getBool(_immersionKey) ??
+        defaultImmersionFor(defaultTargetPlatform);
+    allowAudioEnabled = preferences.getBool(_allowAudioKey) ?? true;
   }
 
   void setTypingPublicEnabled(bool value) {
@@ -229,6 +239,20 @@ class GameStore extends ChangeNotifier {
     if (enterToSendEnabled == value) return;
     enterToSendEnabled = value;
     unawaited(preferences.setBool(_enterToSendKey, value));
+    notifyListeners();
+  }
+
+  void setImmersionEnabled(bool value) {
+    if (immersionEnabled == value) return;
+    immersionEnabled = value;
+    unawaited(preferences.setBool(_immersionKey, value));
+    notifyListeners();
+  }
+
+  void setAllowAudioEnabled(bool value) {
+    if (allowAudioEnabled == value) return;
+    allowAudioEnabled = value;
+    unawaited(preferences.setBool(_allowAudioKey, value));
     notifyListeners();
   }
 
@@ -342,6 +366,8 @@ class GameStore extends ChangeNotifier {
   int unreadMentionCount = 0;
   final Set<int> _mentionedMessageIds = {};
   final Set<int> _seenMentionMessages = {};
+  final _audioSnapshotClock = Stopwatch()..start();
+  Duration get audioSnapshotElapsed => _audioSnapshotClock.elapsed;
 
   Set<String>? _actionBaseline;
   Set<String>? _tutorialBaseline;
@@ -1346,6 +1372,9 @@ class GameStore extends ChangeNotifier {
   void applyLiveEvent(Map<String, dynamic> event) => _onLiveEvent(event);
 
   void _applyView(GameView next, {bool recovering = false}) {
+    if (view?.id != next.id || !identical(view?.raw['audio'], next.raw['audio'])) {
+      _audioSnapshotClock.reset();
+    }
     // 换局（或本进程第一次看到这一局）：上一局「稍后」掉的对话框不该压住新局的内容。
     if (view != null && view!.id != next.id) {
       _resetGameAnimations();
@@ -2288,6 +2317,7 @@ class GameStore extends ChangeNotifier {
 
   @override
   void dispose() {
+    _audioSnapshotClock.stop();
     _resetGameAnimations();
     gameAnimation.dispose();
     _challengeGeneration++;

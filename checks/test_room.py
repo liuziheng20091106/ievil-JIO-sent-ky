@@ -1172,6 +1172,8 @@ class BackendFlow(unittest.TestCase):
         )
         puppet_message.raise_for_status()
         self.assertEqual(puppet_message.json()["sender_name"], victim_actor["name"])
+        private_seats = sorted({victim_actor["seat_id"], stranger_actor["seat_id"]})
+        self.assertEqual(puppet_message.json()["channel_seat_ids"], private_seats)
         # 代读只放行该席参与的聊天频道，不泄露其面向个人的系统情报。
         allowed = self.client.get(
             self.root + f"/messages?as_seat={victim_actor['seat_id']}&scope=all", headers=controller
@@ -1181,6 +1183,12 @@ class BackendFlow(unittest.TestCase):
         self.assertIn(
             puppet_message.json()["id"], [message["id"] for message in allowed.json()["messages"]]
         )
+        historical = next(
+            message
+            for message in allowed.json()["messages"]
+            if message["id"] == puppet_message.json()["id"]
+        )
+        self.assertEqual(historical["channel_seat_ids"], private_seats)
         # 傀儡席原玩家连这条私信也不能回话：代操作期间它只读，投影里所有频道一并禁言。
         blocked_private = self.client.post(
             self.root + "/messages",
@@ -1210,6 +1218,17 @@ class BackendFlow(unittest.TestCase):
                     delivered = True
                     break
             self.assertTrue(delivered, "傀儡席私信里的回话必须实时推给控制者")
+            socket.close()
+
+            async def disconnected():
+                async with asyncio.timeout(2):
+                    while any(
+                        peer.participant_id == controller_actor["id"]
+                        for peer in realtime.connections
+                    ):
+                        await asyncio.sleep(0)
+
+            socket.portal.call(disconnected)
         # 主持人自行代操作仍走主持人授权路径。
         self.command(
             self.host,

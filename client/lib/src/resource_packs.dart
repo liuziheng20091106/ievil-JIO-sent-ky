@@ -11,13 +11,15 @@ import 'package:archive/archive.dart'
         ZipFileHeader,
         getCrc32;
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
 import 'models.dart';
 
-const resourcePackNames = ['animation', 'memes'];
+const resourcePackNames = ['animation', 'audio', 'memes'];
+const audioExtensions = ['.mp3', '.wav', '.ogg', '.flac'];
 const _mediaExtensions = {
   '.png',
   '.jpg',
@@ -69,8 +71,10 @@ void _validatePath(String pack, String path) {
           part.endsWith('.') ||
           part.endsWith(' ') ||
           _reservedName.hasMatch(part)) ||
-      (!_mediaExtensions.contains(p.posix.extension(path).toLowerCase()) &&
-          !(pack == 'animation' && isAnimationScriptPath(path)))) {
+      (pack == 'audio'
+          ? !audioExtensions.contains(p.posix.extension(path).toLowerCase())
+          : (!_mediaExtensions.contains(p.posix.extension(path).toLowerCase()) &&
+              !(pack == 'animation' && isAnimationScriptPath(path))))) {
     throw FormatException('资源路径不安全：$path');
   }
 }
@@ -256,6 +260,7 @@ class ResourcePacks {
   final GameApi api;
   final Directory supportDirectory;
   static final _updating = <String>{};
+  static final audioChanges = ValueNotifier<int>(0);
 
   static Future<ResourcePacks> create(GameApi api) async => ResourcePacks(
       api: api, supportDirectory: await getApplicationSupportDirectory());
@@ -354,6 +359,26 @@ class ResourcePacks {
     return null;
   }
 
+  /// 脚本旁优先；每个包内固定按 mp3、wav、ogg、flac 匹配。
+  Future<String?> animationSoundPath(String scriptPath) async {
+    _validatePath('animation', scriptPath);
+    if (!isAnimationScriptPath(scriptPath)) {
+      throw const FormatException('动画脚本路径不合法');
+    }
+    final stem = p.posix.withoutExtension(scriptPath);
+    for (final pack in ['animation', 'audio']) {
+      final manifest = await _local(pack);
+      for (final extension in audioExtensions) {
+        final path = '$stem$extension';
+        if (manifest?.files.any((file) => file.path == path) != true) continue;
+        final local = await filePath(pack, path);
+        if (local == null) throw FormatException('音效缓存缺失或校验失败：$path');
+        return local;
+      }
+    }
+    return null;
+  }
+
   /// 接收表情读取共享 MD5 缓存，不依赖任何包的路径映射。
   Future<File?> cachedMeme(String hash) async {
     if (!_md5Pattern.hasMatch(hash)) return null;
@@ -385,7 +410,7 @@ class ResourcePacks {
         if (error.statusCode != 404) rethrow;
       }
     }
-    // 两份服务端清单均已取得后才删除；未下载的包不需要安装，也不会误删共享内容。
+    // 所有服务端清单均已取得后才删除；未下载的包不需要安装，也不会误删共享内容。
     await for (final entity in directory.list(followLinks: false)) {
       final name = p.basename(entity.path);
       if ((entity is File || entity is Link) &&
@@ -487,6 +512,7 @@ class ResourcePacks {
       }
     }
     await mapping.rename(_safeFile(directory, '${manifest.pack}.json').path);
+    if (manifest.pack == 'audio') audioChanges.value++;
   }
 
   Future<ResourcePackInstallResult> downloadArchive(

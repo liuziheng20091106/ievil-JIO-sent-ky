@@ -22,8 +22,7 @@ UNENTERED = {**HOST, "host_entered": False, "access_ids": []}
 class LeiaGazeFix(unittest.TestCase):
     def game(self, phase="discussion", *, enabled=True, witch=False):
         game = arranged_game(phase)
-        if enabled:
-            game["rule_plugins"] = plugins.manifest([leia_gaze_fix.ID])
+        game["rule_plugins"] = plugins.manifest([leia_gaze_fix.ID] if enabled else [])
         game["cards"]["leia"]["witch"] = witch
         if phase == "speech":
             game["public"].update(speaker="1", speech_order=list(map(str, range(1, 8))))

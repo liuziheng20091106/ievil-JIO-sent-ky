@@ -78,6 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources-dir", type=Path, default=RESOURCES_DIR)
     parser.add_argument("--env", type=Path, default=release.DEFAULT_ENV_FILE)
+    parser.add_argument("--pack", choices=PACKS, help="Upload only this pack (default: all packs)")
     parser.add_argument(
         "--prefix",
         default="resources",
@@ -97,7 +98,7 @@ def main():
     log_lock = Lock()
     files = {}
     archive_dir = storage.DATA_DIR / "resource-archives"
-    for pack in PACKS:
+    for pack in (args.pack,) if args.pack else PACKS:
         manifest = load_manifest(args.resources_dir, pack)
         for entry in manifest["files"]:
             file = media_file(args.resources_dir / pack, entry["path"], pack)
