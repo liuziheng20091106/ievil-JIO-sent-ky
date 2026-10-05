@@ -103,16 +103,23 @@ class Intelligence(unittest.TestCase):
         apply_command(game, player(game, "1"), ACTION, {"text": "still available"})
         self.assertEqual(game["seats"][0]["intelligence_days"], [2])
 
-    def test_eliminated_seat_can_publish_but_puppet_owner_cannot_bypass_control(self):
+    def test_eliminated_seat_cannot_publish_until_a_card_returns(self):
         game = arranged_game()
+        actor = player(game, "1")
+        game["cards"]["millia"]["alive"] = False
+        self.assertIn(ACTION, self.action_ids(game, actor))
         for card_id in game["seats"][0]["cards"]:
             game["cards"][card_id]["alive"] = False
-        actor = player(game, "1")
         self.assertFalse(game_view(game, actor)["seats"][0]["alive"])
+        self.assertNotIn(ACTION, self.action_ids(game, actor))
+        self.reject(game, actor)
+        self.reject(game, {**actor, "puppet_controlled": True})
+        game["cards"]["emma"]["alive"] = True
         self.assertIn(ACTION, self.action_ids(game, actor))
-        apply_command(game, actor, ACTION, {"text": "after elimination"})
+        apply_command(game, actor, ACTION, {"text": "after returning"})
         self.assertEqual(game["seats"][0]["intelligence_days"], [2])
 
+    def test_puppet_owner_cannot_bypass_control(self):
         game = arranged_game()
         game["cards"]["meruru"]["witch"] = True
         game["cards"]["millia"]["states"].update(puppet="meruru", no_ability=True)

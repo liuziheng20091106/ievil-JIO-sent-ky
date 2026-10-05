@@ -1189,6 +1189,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
     if (
         game["status"] == "playing"
         and game["half"] == "day"
+        and current(game, active_seat) is not None
         and game["day"] not in active_seat.get("intelligence_days", [])
     ):
         result.append(
