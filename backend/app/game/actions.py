@@ -163,7 +163,7 @@ NIGHT_ABILITY_DESCRIPTIONS = {
 # 白天技能：真实与伪装共用同一条效果描述，伪装只额外追加 FAKE_DECLARATION_NOTES。
 # 处决幻视自 2026-09-27 起是被动技能，不再是可声明的白天技能，所以这里没有它。
 DAY_ABILITY_DESCRIPTIONS = {
-    "interrupt": "立即打断指定席位的发言，每个白天一次；艾玛在下层也可使用。",
+    "interrupt": "全员每个白天可声明打断一次他人发言；同席角色牌中有艾玛才是真技能（上下层均可），其余为伪装声明，质疑成功撤销该次打断。",
     "mass_brainwash": "洗脑全场处决一名角色；你与目标一同被处决，且今天不再处决其他人。",
     "love": "宣布爱上一人或移情（从当天夜里开始生效）；此后每夜令爱人席当前牌负伤一次。",
     "duel": "白天宣布与一张当前牌决斗：你失去本技能，今天所有人必须至少同意你或决斗对象之一，且这两张牌达到半数即可处决。",
@@ -376,13 +376,44 @@ def target_field(game, night=False, exclude=None, avoid_treasure=False):
 def day_fields(game, ability, exclude=None):
     if ability == "gaze":
         return []
-    return [target_field(game, avoid_treasure=ability == "duel")]
+    target = target_field(
+        game, exclude=exclude if ability == "interrupt" else None, avoid_treasure=ability == "duel"
+    )
+    if ability == "interrupt" and game["phase"] == "speech":
+        target["options"] = [
+            option
+            for option in target["options"]
+            if option["value"] == game["public"].get("speaker")
+        ]
+    return [target]
+
+
+def interrupt_available(game, card):
+    sid = owner(game, card["id"])["id"]
+    return (
+        game["phase"] in {"speech", "discussion"}
+        and (game["phase"] != "speech" or game["public"].get("speaker") not in {None, sid})
+        and not any(
+            declaration["day"] == game["day"]
+            and declaration["seat_id"] == sid
+            and declaration["ability"] == "interrupt"
+            for declaration in game["declarations"]
+        )
+        and not any(
+            game["cards"][cid]["uses"].get("interrupt_day") == game["day"]
+            for cid in owner(game, card["id"])["cards"]
+        )
+    )
 
 
 def can_day_ability(game, card, ability):
     phase = game["phase"]
     role = card["role_id"]
     witch = card["witch"]
+    if ability == "interrupt":
+        return interrupt_available(game, card) and any(
+            game["cards"][cid]["role_id"] == "emma" for cid in owner(game, card["id"])["cards"]
+        )
     if DAY_ABILITIES[ability][0] != role:
         return False
     if ability == "mass_brainwash":
@@ -390,10 +421,6 @@ def can_day_ability(game, card, ability):
             phase in {"discussion", "nomination", "voting"}
             and witch
             and not card["uses"].get("mass_brainwash")
-        )
-    if ability == "interrupt":
-        return (
-            phase in {"speech", "discussion"} and card["uses"].get("interrupt_day") != game["day"]
         )
     if ability == "gaze":
         # 处决幻视自 2026-09-27 起是被动技能：处决名单一定下来就由 engine.auto_gaze
@@ -435,13 +462,14 @@ def challengeable(game, declaration):
 
 
 def day_fake_allowed(game, card, ability):
+    if ability == "interrupt":
+        return interrupt_available(game, card)
     # 处决幻视是被动技能（engine.auto_gaze），不能伪装成它，真奈乃香也声明不了。
     if ability == "gaze":
         return False
     phase = game["phase"]
     phases = {
         "mass_brainwash": {"discussion", "nomination", "voting"},
-        "interrupt": {"speech", "discussion"},
         # 真蕾雅只能在投票开始前宣布决斗（见 can_day_ability），伪装沿用同一时窗。
         "duel": {"speech", "discussion", "nomination"},
     }.get(ability, {"speech", "discussion", "nomination", "voting"})
@@ -1074,6 +1102,9 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                 result.extend(panel(game, actor, as_seat=sid))
         return result
     phase = game["phase"]
+    interrupt_card = (
+        card if can_use_card(game, card, puppet_controlled, for_interrupt=True) else None
+    )
     if not can_use_card(game, card, puppet_controlled):
         card = None
     # 傀儡席的原玩家一律看不到游戏行动，由控制它的魔女梅露露代为操作。
@@ -1163,30 +1194,21 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
         result.append(
             action("day.intelligence", "发布情报", [field("text", "情报内容", "textarea")])
         )
-    if card and game["half"] == "day" and can_use_ability(game, card, puppet_controlled):
-        day_cards = [card]
-        # 新版规则：艾玛即使在下层也可打断一次发言。
-        emma_card = next((c for c in game["cards"].values() if c["role_id"] == "emma"), None)
-        if (
-            emma_card
-            and emma_card["alive"]
-            and owner(game, "emma")["id"] == sid
-            and emma_card["id"] != card["id"]
-        ):
-            day_cards.append(emma_card)
+    if (card or interrupt_card) and game["half"] == "day":
         for ability in DAY_ABILITIES:
+            ability_card = interrupt_card if ability == "interrupt" else card
+            if not ability_card or (
+                ability != "interrupt"
+                and not can_use_ability(game, ability_card, puppet_controlled)
+            ):
+                continue
             # 被质疑拆穿的技能本局不能再发动，也不再出现在行动表单里。
             if ability in debunked_abilities(game, sid):
                 continue
-            ability_card = next(
-                (
-                    c
-                    for c in day_cards
-                    if can_day_ability(game, c, ability) or day_fake_allowed(game, c, ability)
-                ),
-                None,
-            )
-            if ability_card is None:
+            if not (
+                can_day_ability(game, ability_card, ability)
+                or day_fake_allowed(game, ability_card, ability)
+            ):
                 continue
             if any(
                 declaration["seat_id"] == sid
@@ -1197,9 +1219,6 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                 continue
             fake = not can_day_ability(game, ability_card, ability)
             payload = {"ability": ability}
-            # 下层艾玛打断才需要指定用牌，提交时一并带回。
-            if ability_card["id"] != card["id"]:
-                payload["card_id"] = ability_card["id"]
             result.append(
                 action(
                     "day.skill",
@@ -1231,6 +1250,7 @@ def actions_for(game, actor, *, puppet_controlled=False, as_seat=None):
                 declaration["status"] == "open"
                 and declaration["seat_id"] != sid
                 and challengeable(game, declaration)
+                and (declaration["ability"] != "interrupt" or owner(game, "emma")["id"] != sid)
             ):
                 result.append(
                     action(

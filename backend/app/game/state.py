@@ -697,19 +697,18 @@ def effect_effective(game, card, ability):
     return effective
 
 
-def can_use_card(game, card, puppet_controlled=False):
+def can_use_card(game, card, puppet_controlled=False, *, for_interrupt=False):
     """当前牌是否可行动。
 
     傀儡牌只有控制它的魔女梅露露通过 puppet_controlled 才能代行；
     普通牌被 puppet_controlled 排除，保证一次只生成一个视角的行动。
+    通用打断只跳过 no_ability 限制，不恢复其他行动或角色技能。
     """
     if not card or not card["alive"] or current(game, owner(game, card["id"])) != card:
         return False
     if card["states"].get("puppet"):
         return puppet_controlled
-    if puppet_controlled:
-        return False
-    return not card["states"].get("no_ability")
+    return not puppet_controlled and (for_interrupt or not card["states"].get("no_ability"))
 
 
 def can_use_ability(game, card, puppet_controlled=False):

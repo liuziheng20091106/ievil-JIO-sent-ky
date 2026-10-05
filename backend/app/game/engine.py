@@ -5,7 +5,7 @@ from random import SystemRandom
 
 from . import clock
 from . import plugins
-from .roles import hanna, hiro, honoka, meruru, millia, nanoka, sherry
+from .roles import emma, hanna, hiro, honoka, meruru, millia, nanoka, sherry
 from .actions import (
     CHALLENGE_PHASES,
     actions_for,
@@ -319,6 +319,18 @@ def speech_done(game, events):
             passed.append(finished)
     if public.get("interrupted_speaker"):
         resumed = public.pop("interrupted_speaker")
+        declaration = next(
+            (
+                d
+                for d in reversed(game["declarations"])
+                if d["day"] == game["day"]
+                and d.get("effects", {}).get("speaker") == finished
+                and d.get("effects", {}).get("interrupted_speaker") == resumed
+            ),
+            None,
+        )
+        if declaration:
+            emma.restore_interrupt(game, declaration["effects"])
         publish_speech_turn(game, events, resumed)
         queued = game.get("speech_queued", {})
         if resumed in queued:
@@ -809,7 +821,19 @@ def revert_declaration(game, declaration):
         and game["public"].get("interrupted_speaker") == effects["interrupted_speaker"]
         and game["public"].get("speaker") == effects.get("speaker")
     ):
-        game["public"]["speaker"] = game["public"].pop("interrupted_speaker")
+        emma.restore_interrupt(game, effects)
+    for later in game["declarations"]:
+        later_effects = later.get("effects") or {}
+        if later_effects.get("previous_interrupt") == declaration["id"]:
+            active = (
+                game["public"].get("speaker") == later_effects["speaker"]
+                and game["public"].get("interrupted_speaker")
+                == later_effects["interrupted_speaker"]
+            )
+            later_effects["interrupted_speaker"] = effects["interrupted_speaker"]
+            later_effects["previous_interrupt"] = effects.get("previous_interrupt")
+            if active:
+                game["public"]["interrupted_speaker"] = later_effects["interrupted_speaker"]
     if "execution_card" in effects:
         cid = effects["execution_card"]
         seat_id = owner(game, cid)["id"]
@@ -1385,25 +1409,18 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         )
     elif action == "day.skill":
         ability = data["ability"]
-        # 傀儡与失去技能的角色不能发动白天技能（含伪装声明）：行动表里已经不给入口，
-        # 这里再挡一道，避免绕过表单直接提交。
+        # 打断为全员通用声明；其他白天技能仍受失去技能与傀儡限制。
         require(
-            by_host or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
+            by_host
+            or ability == "interrupt"
+            or can_use_ability(game, card, bool(actor.get("puppet_controlled"))),
             "傀儡与失去技能的角色不能发动技能",
         )
-        use_card = card
-        if data.get("card_id") and data["card_id"] != (card["id"] if card else None):
-            candidate = game["cards"].get(data["card_id"])
-            # 新版规则：艾玛即使在下层也可打断一次发言。
-            require(
-                candidate
-                and candidate["role_id"] == "emma"
-                and ability == "interrupt"
-                and candidate["alive"]
-                and owner(game, candidate["id"])["id"] == sid,
-                "此时不能用该角色牌声明技能",
-            )
-            use_card = candidate
+        use_card = (
+            game["cards"]["emma"]
+            if ability == "interrupt" and can_day_ability(game, card, ability)
+            else card
+        )
         require(use_card is not None, "当前没有可声明技能的角色牌")
         require(
             ability not in debunked_abilities(game, sid),

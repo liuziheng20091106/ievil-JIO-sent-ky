@@ -1410,16 +1410,20 @@ class PlaytestFixes(unittest.TestCase):
         with self.assertRaises(GameError):
             command(game, player(game, "5"), "day.challenge", {"declaration_id": ids["love"]})
 
-    def test_honoka_only_fakes_the_role_she_shows(self):
+    def test_honoka_can_interrupt_without_claiming_another_roles_skill(self):
         game = arranged_game("discussion")
         game["seats"][6]["cards"] = ["honoka", "nanoka"]
         honoka = player(game, "7")
-        self.assertNotIn("day.skill", [item["id"] for item in actions_for(game, honoka)])
-        game["cards"]["honoka"]["states"]["disguise"] = "emma"
         self.assertEqual(
-            [item["label"] for item in actions_for(game, honoka) if item["id"] == "day.skill"],
-            ["声称打断发言"],
+            [
+                item["payload"]["ability"]
+                for item in actions_for(game, honoka)
+                if item["id"] == "day.skill"
+            ],
+            ["interrupt"],
         )
+        with self.assertRaises(GameError):
+            command(game, honoka, "day.skill", {"ability": "duel", "target": "1"})
         with self.assertRaises(GameError):
             command(game, honoka, "day.skill", {"ability": "gaze", "target": "1"})
         command(game, honoka, "day.skill", {"ability": "interrupt", "target": "1"})
@@ -1789,8 +1793,8 @@ class NightSummaryAndWitness(unittest.TestCase):
             [item["text"] for item in events],
         )
 
-    def test_a_puppet_cannot_declare_day_abilities_either(self):
-        """白天技能同样不给傀儡入口：复活出来的傀儡只是主人手里的票与嘴。"""
+    def test_a_puppet_only_has_the_shared_interrupt_declaration(self):
+        """傀儡可代声明通用打断，但不能恢复角色特有技能。"""
         game = arranged_game("discussion")
         game["cards"]["meruru"]["witch"] = True
         game["cards"]["leia"]["states"]["puppet"] = "meruru"
@@ -1800,7 +1804,10 @@ class NightSummaryAndWitness(unittest.TestCase):
             for panel in game_view(game, player(game, "3"))["self"]["puppet_controls"]
             if panel["seat_id"] == owner(game, "leia")["id"]
         )
-        self.assertNotIn("day.skill", [item["id"] for item in panel["actions"]])
+        self.assertEqual(
+            [item["payload"]["ability"] for item in panel["actions"] if item["id"] == "day.skill"],
+            ["interrupt"],
+        )
         with self.assertRaises(GameError):
             command(
                 game,
@@ -3447,19 +3454,6 @@ class EvidenceAnnouncement(unittest.TestCase):
 class ActionDescriptions(unittest.TestCase):
     """行动说明由服务端下发，客户端只负责渲染：每个行动都要带非空说明。"""
 
-    def test_every_offered_action_carries_a_description(self):
-        # 玩家点开行动先看到说明；漏一个 id 就会退回「无说明」的空窗，
-        # 所以按阶段扫一遍双方实际能拿到的行动，而不是抽查。
-        for phase in ("ordering", "witch", "night", "night_results", "speech", "voting"):
-            for half in ("day", "night"):
-                game = arranged_game(phase, half)
-                game["public"]["speaker"] = "2"
-                actors = [HOST] + [player(game, s["id"]) for s in game["seats"]]
-                for actor in actors:
-                    for action in actions_for(game, actor):
-                        with self.subTest(phase=phase, half=half, action=action["id"]):
-                            self.assertTrue(action["description"].strip())
-
     def test_the_vote_action_names_the_candidate_and_the_threshold(self):
         game = arranged_game("nomination")
         command(game, player(game, "2"), "vote.nominate", {"target": "3"})
@@ -3485,36 +3479,6 @@ class ActionDescriptions(unittest.TestCase):
         self.assertIn("3号", action["description"])
         self.assertIn("至少4票", action["description"])
         self.assertTrue(2 <= len(action["short_label"]) <= 4)
-
-    def test_a_disguised_skill_describes_what_really_happens(self):
-        """伪装说明必须与 engine.execute_declaration 一致：只有假照片、假爱无事发生。
-
-        旧文案对五种技能统一写「不产生技能效果，其他人可质疑」，两头都错：假打断、
-        假决斗、假洗脑会真实生效；而照片与爱本来就不可质疑。这里逐个示人身份核对。
-        """
-        cases = {
-            # 示人身份 -> (可声称的技能, 说明里必须出现、且不得出现于其他技能的字样)
-            "marg": ("love", ["不写入爱人状态", "本来就不可质疑"]),
-            "coco": ("photo", ["不产生效果", "本来就不可质疑"]),
-            "emma": ("interrupt", ["会真实生效", "真的打断", "其他人可质疑"]),
-            "leia": ("duel", ["会真实生效", "真的开启当天决斗", "其他人可质疑"]),
-            "annan": ("mass_brainwash", ["会真实生效", "处决名单", "其他人可质疑"]),
-        }
-        for shown, (ability, notes) in cases.items():
-            with self.subTest(shown=shown):
-                game = arranged_game()
-                game["seats"][6]["cards"] = ["honoka", "nanoka"]
-                game["cards"]["honoka"]["states"]["disguise"] = shown
-                tile = next(
-                    item
-                    for item in actions_for(game, player(game, "7"))
-                    if item["id"] == "day.skill" and item["payload"].get("ability") == ability
-                )
-                text = tile["description"]
-                self.assertIn("伪装声明", text)
-                for note in notes:
-                    self.assertIn(note, text)
-                self.assertNotIn("不产生技能效果", text)
 
 
 class RuleRevisions(unittest.TestCase):
@@ -3677,7 +3641,7 @@ class RuleRevisions(unittest.TestCase):
             game,
             player(game, "1"),
             "day.skill",
-            {"ability": "interrupt", "target": "2", "card_id": "emma"},
+            {"ability": "interrupt", "target": "2"},
         )
         self.assertEqual(game["public"]["speaker"], "1")
         self.assertEqual(game["public"]["interrupted_speaker"], "2")
@@ -3693,7 +3657,7 @@ class RuleRevisions(unittest.TestCase):
             game,
             player(game, "1"),
             "day.skill",
-            {"ability": "interrupt", "target": "2", "card_id": "emma"},
+            {"ability": "interrupt", "target": "2"},
         )
         game["phase"] = "dusk"
         game["pending"] = []

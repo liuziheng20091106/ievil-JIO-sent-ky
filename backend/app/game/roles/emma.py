@@ -53,9 +53,36 @@ def execute_declaration(game, events, declaration, target_card):
     require(target != sid, "不能打断自己的发言")
     if game["phase"] == "speech":
         require(game["public"]["speaker"] == target, "只能打断当前发言者")
+        previous_speaker = game["public"].get("interrupted_speaker")
+        previous = next(
+            (
+                d
+                for d in reversed(game["declarations"])
+                if d["day"] == game["day"]
+                and d.get("effects", {}).get("speaker") == target
+                and d.get("effects", {}).get("interrupted_speaker") == previous_speaker
+            ),
+            None,
+        )
+        declaration["effects"] = {
+            "interrupted_speaker": target,
+            "speaker": sid,
+            "previous_interrupt": previous["id"] if previous else None,
+        }
         game["public"]["interrupted_speaker"] = target
         game["public"]["speaker"] = sid
-        declaration["effects"] = {"interrupted_speaker": target, "speaker": sid}
+
+
+def restore_interrupt(game, effects):
+    public = game["public"]
+    public["speaker"] = effects["interrupted_speaker"]
+    public.pop("interrupted_speaker", None)
+    previous = next(
+        (d for d in game["declarations"] if d["id"] == effects.get("previous_interrupt")),
+        None,
+    )
+    if previous:
+        public["interrupted_speaker"] = previous["effects"]["interrupted_speaker"]
 
 
 HANDLERS = {}
