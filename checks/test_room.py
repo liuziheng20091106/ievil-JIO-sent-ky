@@ -500,6 +500,11 @@ class BackendFlow(unittest.TestCase):
         active = self.command(second, "channel.accept", {"channel_id": channel["id"]}).json()
         channel = next(item for item in active["channels"] if item["id"] == channel["id"])
         self.assertEqual(channel["status"], "active")
+        end_action = next(item for item in channel["actions"] if item["id"] == "channel.end")
+        seats = "".join(
+            str(seat) for seat in sorted((first_actor["seat_id"], second_actor["seat_id"]), key=int)
+        )
+        self.assertEqual(end_action["label"], f"结束整个私信频道（{seats}）")
         public = self.client.post(
             self.root + "/messages",
             headers=first,

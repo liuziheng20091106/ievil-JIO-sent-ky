@@ -241,7 +241,7 @@ def participant_summary(row):
     }
 
 
-def channel_actions(row, actor, invitation, current):
+def channel_actions(row, actor, invitation, current, members):
     fixed = {"channel_id": row["id"]}
     actions = []
     if row["status"] == "pending" and invitation == "pending":
@@ -265,10 +265,21 @@ def channel_actions(row, actor, invitation, current):
             ]
         )
     if row["status"] == "active" and current:
+        seats = "".join(
+            str(seat)
+            for seat in sorted(
+                {
+                    member["seat_id"]
+                    for member in members
+                    if member["kind"] == "player" and member["seat_id"]
+                },
+                key=int,
+            )
+        )
         actions.append(
             action(
                 "channel.end",
-                "结束整个私信频道",
+                f"结束整个私信频道（{seats}）" if seats else "结束整个私信频道",
                 payload=fixed,
                 group="私信",
                 short_label="结束私信",
@@ -436,7 +447,9 @@ def channels_for(db, game, actor, domain_view):
             for member in summaries
         )
         actions = (
-            channel_actions(row, actor, invitation, current) if not ended and not spectator else []
+            channel_actions(row, actor, invitation, current, summaries)
+            if not ended and not spectator
+            else []
         )
         result.append(
             {
@@ -668,7 +681,7 @@ def view(db, game, actor, online):
                 continue
             if occupant in json.loads(row["accepted_ids"]):
                 continue
-            puppet_actions.extend(channel_actions(row, identity, "pending", True))
+            puppet_actions.extend(channel_actions(row, identity, "pending", True, []))
         for descriptor in puppet_actions:
             # 同 :func:`puppet_action_panels`：星号只进 label，short_label 保持协议长度。
             descriptor["label"] = f"*{descriptor['label']}"
