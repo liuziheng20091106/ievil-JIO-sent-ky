@@ -19,12 +19,12 @@ class AudioPreferencesScope extends InheritedNotifier<GameStore> {
 
 /// 一路真实本地播放器；串行处理最新控制，不让过期的异步加载恢复声音。
 class LocalAudioVoice {
-  LocalAudioVoice(Source source, {required this.onError}) {
+  LocalAudioVoice(String path, {required this.onError}) {
     player.positionUpdater = null;
     _events = player.eventStream.listen((_) {}, onError: (Object error) {
       _fail(error);
     });
-    _ready = _prepare(source);
+    _ready = _prepare(path);
   }
 
   final AudioPlayer player = AudioPlayer();
@@ -40,7 +40,7 @@ class LocalAudioVoice {
   int _generation = 0;
   ({Duration Function() position, double rate, bool playing})? _pending;
 
-  Future<void> _prepare(Source source) async {
+  Future<void> _prepare(String path) async {
     try {
       // 不申请保活，也不让本应用不同 player 的焦点抢占打断彼此。
       await player.setAudioContext(AudioContext(
@@ -51,7 +51,7 @@ class LocalAudioVoice {
       if (_disposed) return;
       // Windows 补丁使 source method 只在原生工作函数返回后完成；
       // prepared/error 事件及其超时本身不能证明原生装载已经退出。
-      await player.setSource(source);
+      await player.setSource(DeviceFileSource(path));
     } catch (error) {
       if (!_disposed) _fail(error);
     }
@@ -185,16 +185,11 @@ class AnimationSound {
     if (!_enabled || _disposed) return;
     _loading = generation;
     try {
-      final Source source;
-      if (script == 'scripts/host-warning.json') {
-        source = AssetSource('audio/host-warning.wav');
-      } else {
-        final path = await resources.animationSoundPath(script);
-        if (path == null) return;
-        source = DeviceFileSource(path);
+      final path = await resources.animationSoundPath(script);
+      if (_disposed || generation != _generation || !_enabled || path == null) {
+        return;
       }
-      if (_disposed || generation != _generation || !_enabled) return;
-      _voice = LocalAudioVoice(source, onError: onError);
+      _voice = LocalAudioVoice(path, onError: onError);
       sync();
     } catch (error) {
       if (!_disposed && generation == _generation) onError(error);

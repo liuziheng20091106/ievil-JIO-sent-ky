@@ -93,8 +93,7 @@ void main() {
   test('取消装载立刻静音，但 prepared 不能提前触发销毁或恢复播放', () async {
     final platform = LoadingPlatform()..install();
     final errors = <Object>[];
-    final voice = LocalAudioVoice(DeviceFileSource('verified-cache-file'),
-        onError: errors.add);
+    final voice = LocalAudioVoice('verified-cache-file', onError: errors.add);
     voice.update(position: () => const Duration(seconds: 2), playing: true);
     await platform.sourceStarted.future;
     await platform.prepared();

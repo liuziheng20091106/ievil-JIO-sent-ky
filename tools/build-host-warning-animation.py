@@ -3,6 +3,8 @@
 import importlib.util
 import json
 import math
+import os
+import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -232,6 +234,8 @@ def main():
         json.dumps(animation, ensure_ascii=True, allow_nan=False, separators=(",", ":")),
         encoding="utf-8",
     )
+    sound = Path(os.environ.get("SYSTEMROOT", "C:/Windows")) / "Media/Windows Error.wav"
+    shutil.copyfile(sound, output / f"{NAME}.wav")
     print(f"{target.name}: 90 frames / 30 fps = 3 seconds; {len(assets)} local image assets")
 
 

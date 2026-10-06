@@ -42,7 +42,6 @@ flutter:
     - assets/logo.png
     - assets/avatars/
     - assets/icons/
-    - assets/audio/host-warning.wav
     # 静态 QQ 表情（经典 275 + 超级 50），由 temp/gen_emoji.py 从 QFace 导出。
     - assets/emoji/qq/
 
