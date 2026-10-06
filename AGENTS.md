@@ -37,6 +37,7 @@
 - 客户端回归检查各自独立文件，不要混进别的检查脚本：`checks/test_client_release.py`（后端版本下发/入局门槛/协议/更新包分发）、`client/test/client_update_test.dart`、`client/test/agreement_gate_test.dart`、`client/test/endpoint_default_test.dart`、`checks/test_updater_cli.py`（Windows 更新器命令行，缺 exe 时跳过）。设计阶段不要跑后端全量测试。
 - 有意义的行为修改必须实际启动并验证相关服务或浏览器路径；新增回归检查只保护真实规则、权限或数据丢失边界。
 - 更新现有 TXT 运行说明；改动最小，不为假设需求搭框架。并发代理改不同文件，统一在集成结束后格式化、构建、跑检查。
+- 当没有并发改动时，修改完成并验证通过后重启后端；有并发改动时，等所有改动集成并验证通过后统一重启。
 
 ## 守护进程（后端 + 登录网关）
 - `supervisor.py`（`run-supervisor.cmd` 启动）托管两个子进程：后端 `run.py` 与登录网关 `python -m gateway.gateway`；它代替 `start.cmd` 与 `run-gateway.cmd`，不要两边同时启动（会抢端口）。默认自动拉起两者；子进程意外退出按 2s→60s 退避重启；退出守护进程会一并停掉子进程。输出追加在 `logs/backend.log`、`logs/gateway.log`（`logs/` 已 gitignore）。
@@ -48,5 +49,6 @@
 
 ## 版本管理
 - 本地 Git 管理可回退版本；改动前保留基线，验证完成后提交功能变更，自动推送远端。
+- 推送遇到权限错误时，使用 `gh auth switch` 切换到具有该仓库写权限的已登录账号，再执行 `gh auth setup-git` 配置 Git 凭据并重试推送。
 - 不提交 `data/`、`.venv/`、`node_modules/`、构建产物、缓存、会话、私密材料或临时联调脚本。
 - 不要删除用户现有修改，每次改完删除所有验证数据。
