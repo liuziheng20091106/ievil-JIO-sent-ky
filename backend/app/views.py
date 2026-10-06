@@ -4,7 +4,7 @@ import json
 
 from . import storage
 from .game import game_view
-from .game.actions import action, field, outstanding_seats
+from .game.actions import DESCRIPTIONS, action, field, outstanding_seats
 from .game.catalog import AUTO_PHASES, SPEECH_TURN_SECONDS, night_half
 from .game.state import (
     actor_eliminated,
@@ -280,6 +280,7 @@ def channel_actions(row, actor, invitation, current, members):
             action(
                 "channel.end",
                 f"结束整个私信频道（{seats}）" if seats else "结束整个私信频道",
+                description=DESCRIPTIONS["channel.end"] + (f"（{seats}）" if seats else ""),
                 payload=fixed,
                 group="私信",
                 short_label="结束私信",
