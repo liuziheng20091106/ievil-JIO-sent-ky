@@ -116,7 +116,7 @@ class PhaseAdvanceGuard(unittest.TestCase):
         self.command(game, "host.advance")
         candidate = game["nominations"][0]["card_id"]
         for sid in "1234567":
-            self.command(game, "vote.cast", {candidate: "no"}, sid)
+            self.command(game, "vote.cast", {candidate: "abstain"}, sid)
         self.command(game, "host.advance")
         self.assertEqual(game["phase"], "execution")
         self.assertEqual(self.clock.now(), 1000)

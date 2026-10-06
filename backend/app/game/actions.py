@@ -1063,11 +1063,11 @@ def puppet_action_panels(game, controller):
     return panels
 
 
-VOTE_CHOICES = (("yes", "同意"), ("no", "不同意"), ("abstain", "弃票"))
+VOTE_CHOICES = (("yes", "同意"), ("abstain", "弃票"))
 
 
 def vote_action(game, sid, rounds, rows):
-    """一次性投票：每个候选一行，玩家一次决定完同意/不同意/弃票。
+    """一次性投票：每个候选一行，玩家一次决定完同意/弃票。
 
     字段名就是角色牌 id，所以提交上来的 payload 是 ``{角色牌: 选择}``；每行额外带
     ``seat_id``（客户端据此画出该席的头像与角色名）、可选的 ``note`` 标签，以及
@@ -1085,7 +1085,7 @@ def vote_action(game, sid, rounds, rows):
         note = ""
         extra = {"seat_id": item["seat_id"]}
         if bound_sherry and card_id == "hanna":
-            options, note = [("no", "不同意"), ("abstain", "弃票")], "绑定汉娜：不能同意"
+            options, note = [("abstain", "弃票")], "绑定汉娜：不能同意"
         else:
             options = VOTE_CHOICES
         if card_id in duel:
@@ -1098,7 +1098,7 @@ def vote_action(game, sid, rounds, rows):
     text = (
         f"本轮共{len(rounds)}名候选：{names}。"
         f"同意票需严格超过有投票权存活玩家的一半（当前{voters}人，"
-        f"至少{voters // 2 + 1}票）才会通过处决；弃票与不同意都不会通过。"
+        f"至少{voters // 2 + 1}票）才会通过处决；弃票仍计入分母，但不计入同意票。"
         "一次性提交全部候选的选票，提交后本轮不能再改。"
     )
     if len(duel) == 2:

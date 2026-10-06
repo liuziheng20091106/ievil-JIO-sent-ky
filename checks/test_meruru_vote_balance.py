@@ -73,14 +73,14 @@ class MeruruVoteBalance(unittest.TestCase):
                 game,
                 player(game, sid),
                 "vote.cast",
-                {"meruru": "yes" if sid in yes_seats else "no"},
+                {"meruru": "yes" if sid in yes_seats else "abstain"},
             )
         events += force_after_wait(game, HOST)
         return game, events
 
     def test_enabled_vs_disabled_and_no_fabricated_ballot_or_private_disclosure(self):
         enabled, events = self.vote(True, {"2", "3", "4"})
-        disabled, _ = self.vote(False, {"2", "3", "4"})
+        disabled, disabled_events = self.vote(False, {"2", "3", "4"})
         self.assertEqual(
             enabled["vote_rounds"][0],
             {"candidate": "3", "yes": 4, "denominator": 7, "threshold": 4, "passed": True},
@@ -100,7 +100,11 @@ class MeruruVoteBalance(unittest.TestCase):
         )
         self.assertNotIn("1", enabled["ballots"])
         public_text = " ".join(event["text"] for event in events if event.get("audience") is None)
-        self.assertIn("同意4/7，门槛4", public_text)
+        self.assertIn("同意4/7（2号、3号、4号；规则补票+1），门槛4", public_text)
+        ordinary_text = " ".join(
+            event["text"] for event in disabled_events if event.get("audience") is None
+        )
+        self.assertIn("同意3/7（2号、3号、4号），门槛4", ordinary_text)
         self.assertNotIn("傀儡", public_text)
         self.assertNotIn("傀儡", " ".join(row["text"] for row in enabled["log"]))
 

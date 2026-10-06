@@ -553,7 +553,8 @@ def close_vote(game, events):
     nominee = rounds[index]
     choices = {s["id"]: seat_choice(game, s["id"], nominee["card_id"]) for s in voters}
     require(all(choices.values()), "仍有玩家未投票，可先警告")
-    yes = sum(choice == "yes" for choice in choices.values())
+    yes_seats = [sid for sid, choice in choices.items() if choice == "yes"]
+    yes = len(yes_seats)
     # 分母在投票开始时冻结（见 state.vote_denominator）：即使中途有人整席出局，也不能让
     # 玩家表单上已经写明的门槛在计票这一刻变掉。
     n = vote_denominator(game)
@@ -574,6 +575,11 @@ def close_vote(game, events):
     }
     plugins.emit(game, events, "vote_tally", tally)
     yes, n, threshold = tally["yes"], tally["denominator"], tally["threshold"]
+    sources = "、".join(f"{sid}号" for sid in yes_seats) or "无"
+    bonus = yes - len(yes_seats)
+    if bonus:
+        sources += f"；规则补票{bonus:+d}"
+    result = f"同意{yes}/{n}（{sources}）"
     passed = yes >= threshold
     # 投票期间某人可能已经出局（主持人裁定、魔女希罗主动出局等）。轮次表为了不让索引
     # 错位不能中途删候选，但已经不在场的牌不能再被记成「通过处决」并公示一次。
@@ -591,7 +597,7 @@ def close_vote(game, events):
     log_event(
         game,
         "vote",
-        f"投票处决{nominee['seat_id']}号：同意{yes}/{n}，{'通过' if passed else '未通过'}",
+        f"投票处决{nominee['seat_id']}号：{result}，{'通过' if passed else '未通过'}",
     )
     if passed and not alive:
         outcome = "该牌已出局，不再处决"
@@ -600,7 +606,7 @@ def close_vote(game, events):
     notify(
         game,
         events,
-        f"{nominee['seat_id']}号：同意{yes}/{n}，门槛{threshold}，{outcome}。",
+        f"{nominee['seat_id']}号：{result}，门槛{threshold}，{outcome}。",
         alert=True,
     )
     open_vote(game, events)
@@ -1586,7 +1592,7 @@ def player_command(game, actor, events, action, data, *, by_host=False):
         cast = {}
         for card_id, choice in data.items():
             require(card_id in rounds, "候选已变化，请刷新后重新投票")
-            require(choice in {"yes", "no", "abstain"}, "选票无效")
+            require(choice in {"yes", "abstain"}, "选票无效")
             if (
                 choice == "yes"
                 and card_id == "hanna"

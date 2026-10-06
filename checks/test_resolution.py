@@ -2978,7 +2978,7 @@ class NominationFlow(unittest.TestCase):
         self.assertIsNone(seat_choice(game, "2", candidate))
         self.assertEqual(set(outstanding_seats(game)), set("1234567"))
         for sid in "1234567":
-            command(game, player(game, sid), "vote.cast", {candidate: "no"})
+            command(game, player(game, sid), "vote.cast", {candidate: "abstain"})
             self.assertTrue(ballot_complete(game, sid))
         command(game, HOST, "host.advance", {})
         self.assertEqual(len(game["vote_rounds"]), 1)
@@ -2986,7 +2986,7 @@ class NominationFlow(unittest.TestCase):
         self.assertEqual(game["phase"], "execution")
 
     def test_nominators_choose_their_own_votes(self):
-        for choice in ("yes", "no", "abstain"):
+        for choice in ("yes", "abstain"):
             with self.subTest(choice=choice):
                 game = arranged_game("nomination")
                 command(game, player(game, "1"), "vote.nominate", {"target": "3"})
@@ -3001,10 +3001,12 @@ class NominationFlow(unittest.TestCase):
                 self.assertEqual([item["name"] for item in descriptor["fields"]], rounds)
                 self.assertEqual(
                     [option["value"] for option in descriptor["fields"][0]["options"]],
-                    ["yes", "no", "abstain"],
+                    ["yes", "abstain"],
                 )
                 self.assertEqual(game_view(game, player(game, "1"))["self"]["votes"], {})
-                command(game, player(game, "1"), "vote.cast", {rounds[0]: choice, rounds[1]: "no"})
+                command(
+                    game, player(game, "1"), "vote.cast", {rounds[0]: choice, rounds[1]: "abstain"}
+                )
                 self.assertEqual(seat_choice(game, "1", rounds[0]), choice)
                 self.assertTrue(ballot_complete(game, "1"))
                 self.assertNotIn("1", outstanding_seats(game))
@@ -3103,7 +3105,7 @@ class LeiaDuel(unittest.TestCase):
                 game,
                 player(game, sid),
                 "vote.cast",
-                {card: ("yes" if card == approved else "no") for card in rounds},
+                {card: ("yes" if card == approved else "abstain") for card in rounds},
             )
         command(game, HOST, "host.advance", {})
         self.assertEqual(
@@ -3129,11 +3131,11 @@ class LeiaDuel(unittest.TestCase):
         duel_rows = [item for item in descriptor["fields"] if item.get("duel")]
         self.assertEqual([item["name"] for item in duel_rows], rounds)
         self.assertIn("至少同意其中一张", descriptor["description"])
-        # 两张都不同意：整份选票被拒绝。
+        # 两张都弃票：整份选票被拒绝。
         with self.assertRaises(GameError):
-            command(game, player(game, "1"), "vote.cast", dict.fromkeys(rounds, "no"))
+            command(game, player(game, "1"), "vote.cast", dict.fromkeys(rounds, "abstain"))
         # 只提交其中一张同意也合规，而且表态过的席位不再欠这张同意票。
-        command(game, player(game, "1"), "vote.cast", {rounds[0]: "yes", rounds[1]: "no"})
+        command(game, player(game, "1"), "vote.cast", {rounds[0]: "yes", rounds[1]: "abstain"})
         self.assertEqual(seat_choice(game, "1", rounds[0]), "yes")
         self.assertTrue(game["duel_approvals"]["1"])
         self.assertTrue(ballot_complete(game, "1"))
@@ -3147,7 +3149,7 @@ class LeiaDuel(unittest.TestCase):
         self.pass_nominations(game)
         command(game, HOST, "host.advance", {})
         rounds = [item["card_id"] for item in nomination_rounds(game)]
-        command(game, player(game, "1"), "vote.cast", {rounds[0]: "yes", rounds[1]: "no"})
+        command(game, player(game, "1"), "vote.cast", {rounds[0]: "yes", rounds[1]: "abstain"})
         command(
             game,
             HOST,
@@ -3183,7 +3185,7 @@ class LeiaDuel(unittest.TestCase):
         )
         hanna_row = next(item for item in descriptor["fields"] if item["name"] == "hanna")
         # 绑定的雪莉不能同意处决汉娜：这一行根本没有「同意」选项。
-        self.assertEqual([option["value"] for option in hanna_row["options"]], ["no", "abstain"])
+        self.assertEqual([option["value"] for option in hanna_row["options"]], ["abstain"])
         self.assertIn("绑定汉娜", hanna_row["note"])
         self.assertIn("蕾雅决斗", hanna_row["note"])
         self.assertTrue(hanna_row["duel"])
@@ -3194,7 +3196,7 @@ class LeiaDuel(unittest.TestCase):
         self.assertEqual(seat_choice(game, "4", "hanna"), "abstain")
         self.assertFalse(game["duel_approvals"].get("4"))
         for sid in ("1", "2", "3", "5", "6", "7"):
-            command(game, player(game, sid), "vote.cast", {rounds[0]: "yes", "hanna": "no"})
+            command(game, player(game, sid), "vote.cast", {rounds[0]: "yes", "hanna": "abstain"})
         command(game, HOST, "host.advance", {})
         # 蕾雅拿到 6 票通过，汉娜没有票：绑定雪莉的弃票进入分母但不计入同意。
         # 汉娜是这场决斗的另一张牌，门槛同样取 floor(7/2)=3（非决斗候选才按严格过半 4）。
@@ -3507,7 +3509,7 @@ class ActionDescriptions(unittest.TestCase):
         self.assertEqual(row["type"], "select")
         self.assertEqual(row["seat_id"], "3")
         self.assertIn("3号", row["label"])
-        self.assertEqual([option["value"] for option in row["options"]], ["yes", "no", "abstain"])
+        self.assertEqual([option["value"] for option in row["options"]], ["yes", "abstain"])
         self.assertIn("3号", action["label"])
         self.assertIn("3号", action["description"])
         self.assertIn("至少4票", action["description"])
@@ -3741,7 +3743,7 @@ class RuleRevisions(unittest.TestCase):
         self.assertEqual(len(pending_names), 2)
         # 1号先把这两名候选一次投完；之后又有新提名时只补新候选，不能重投旧票。
         second = game["public"]["votes"]["candidates"][1]["card_id"]
-        command(game, player(game, "1"), "vote.cast", {"meruru": "yes", second: "no"})
+        command(game, player(game, "1"), "vote.cast", {"meruru": "yes", second: "abstain"})
         command(game, player(game, "4"), "vote.nominate", {"target": "7"})
         self.assertEqual(game["public"]["votes"]["total"], 3)
         reopen = next(
@@ -3751,7 +3753,7 @@ class RuleRevisions(unittest.TestCase):
         third = reopen["fields"][0]["name"]
         self.assertIn("只列你还没表态的1名候选", reopen["description"])
         with self.assertRaises(GameError):
-            command(game, player(game, "1"), "vote.cast", {"meruru": "no", third: "yes"})
+            command(game, player(game, "1"), "vote.cast", {"meruru": "abstain", third: "yes"})
         self.assertEqual(seat_choice(game, "1", "meruru"), "yes")
 
     def test_nomination_buttons_are_gone_after_the_vote_phase(self):
