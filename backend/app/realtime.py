@@ -10,6 +10,7 @@ from starlette.websockets import WebSocketState
 
 from . import auth, storage, views
 from .game import expire_warnings, run_auto_advance, run_speech_timer, touch_speech_timer
+from .game import audio
 from .game import clock as game_clock
 from .game.state import controlled_cards, owner
 from .game.plugins import PluginMismatch
@@ -293,7 +294,7 @@ async def live(socket):
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
-    except (TimeoutError, WebSocketDisconnect, RuntimeError, ValueError):
+    except TimeoutError, WebSocketDisconnect, RuntimeError, ValueError:
         pass
     finally:
         for task in tasks:
@@ -312,7 +313,7 @@ async def live(socket):
             ):
                 try:
                     await asyncio.wait_for(socket.close(code=1000), timeout=2)
-                except (TimeoutError, WebSocketDisconnect, RuntimeError, OSError):
+                except TimeoutError, WebSocketDisconnect, RuntimeError, OSError:
                     pass
 
 
@@ -360,6 +361,7 @@ def run_timers(now=None):
                 events = expire_warnings(game, stamp)
                 events += run_speech_timer(game, stamp)
                 events += run_auto_advance(game, stamp)
+                audio.expire_finished(game, stamp)
                 changed = game["version"] != previous
                 if changed:
                     storage.save_game(db, game)

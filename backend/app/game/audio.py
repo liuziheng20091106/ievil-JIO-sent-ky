@@ -1,7 +1,10 @@
 """Public multi-track music state; trusted HANDLERS call play/change/stop directly."""
 
+import json
 import math
 import re
+import subprocess
+from functools import lru_cache
 
 from .. import resource_packs
 from . import clock
@@ -44,6 +47,55 @@ def _song(song):
     return song
 
 
+@lru_cache(maxsize=128)
+def _probe_duration(path, size, modified_ns):
+    # Size/mtime invalidate the cached duration when the published file changes.
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file",
+            "-format_whitelist",
+            "mp3,wav,ogg,flac",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=duration:format=duration",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    metadata = json.loads(result.stdout)
+    stream = metadata["streams"][0]
+    duration = float(stream.get("duration") or metadata["format"]["duration"])
+    require(math.isfinite(duration) and 0 < duration <= MAX_POSITION, "歌曲时长无效")
+    return duration
+
+
+def _duration(song):
+    try:
+        path = resource_packs.download_file(resource_packs.RESOURCES_DIR, "audio", song)
+        stat = path.stat()
+        return _probe_duration(path, stat.st_size, stat.st_mtime_ns)
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        KeyError,
+        IndexError,
+        TypeError,
+    ) as error:
+        raise GameError(f"无法读取歌曲「{song}」的时长，请确认音频有效且 ffprobe 可用") from error
+
+
 def _track(game, track_id):
     require(isinstance(track_id, str) and TRACK_ID.fullmatch(track_id), "音乐路标识无效")
     found = next(
@@ -76,6 +128,7 @@ def play(game, song, *, id=None, position=0, rate=1, playing=True):
     position = _number(position, "进度", 0, MAX_POSITION)
     rate = _number(rate, "倍速", MIN_RATE, MAX_RATE)
     require(type(playing) is bool, "播放状态无效")
+    duration = _duration(song)
     game["version"] += 1
     track = {
         "id": track_id,
@@ -85,6 +138,7 @@ def play(game, song, *, id=None, position=0, rate=1, playing=True):
         "playing": playing,
         "revision": game["version"],
         "updated_at": clock.now(),
+        "duration": duration,
     }
     tracks = game.setdefault("audio", {"tracks": []})["tracks"]
     tracks[:] = [existing for existing in tracks if existing["id"] != track_id]
@@ -104,6 +158,9 @@ def change(game, id, *, song=None, position=None, rate=None, playing=None):
     position = (
         _position(track, now) if position is None else _number(position, "进度", 0, MAX_POSITION)
     )
+    duration = (
+        track["duration"] if song == track["song"] and "duration" in track else _duration(song)
+    )
     game["version"] += 1
     track.update(
         song=song,
@@ -112,6 +169,7 @@ def change(game, id, *, song=None, position=None, rate=None, playing=None):
         playing=track["playing"] if playing is None else playing,
         updated_at=now,
         revision=game["version"],
+        duration=duration,
     )
 
 
@@ -120,6 +178,28 @@ def stop(game, id):
     track = _track(game, id)
     game["audio"]["tracks"].remove(track)
     game["version"] += 1
+
+
+def expire_finished(game, now=None):
+    """Remove only playing routes whose authoritative progress reached the end."""
+    if game["status"] == "ended":
+        return False
+    now = clock.now() if now is None else now
+    tracks = game.get("audio", {}).get("tracks", [])
+    remaining = []
+    changed = False
+    for track in tracks:
+        if "duration" not in track:
+            track["duration"] = _duration(track["song"])
+            changed = True
+        if track["playing"] and _position(track, now) >= track["duration"]:
+            changed = True
+        else:
+            remaining.append(track)
+    if changed:
+        tracks[:] = remaining
+        game["version"] += 1
+    return changed
 
 
 def projection(game, now=None):
@@ -139,8 +219,13 @@ def projection(game, now=None):
 
 def snapshot(game):
     """Freeze progress at the mechanical snapshot, rather than an old play anchor."""
-    value = projection(game)
-    return {"tracks": [{**track, "updated_at": value["server_time"]} for track in value["tracks"]]}
+    now = clock.now()
+    tracks = [] if game["status"] == "ended" else game.get("audio", {}).get("tracks", [])
+    return {
+        "tracks": [
+            {**track, "position": _position(track, now), "updated_at": now} for track in tracks
+        ]
+    }
 
 
 def restore(game):
