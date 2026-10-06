@@ -1111,24 +1111,23 @@ def host_command(game, events, action, data):
         for sid in targets:
             game["warnings"][sid] = clock.now() + 30
         game["deadline"] = min(game["warnings"].values())
-        if len(targets) > 1:
-            notify(
-                game,
-                events,
-                "已警告下列席位："
-                + "、".join(f"{sid}号" for sid in targets)
-                + "，请在30秒内完成操作。",
-                targets,
-                "主持人警告",
-            )
-        else:
-            notify(
-                game,
-                events,
-                f"已警告{targets[0]}号玩家：请在30秒内完成操作。",
-                targets,
-                "主持人警告",
-            )
+        text = (
+            "已警告下列席位：" + "、".join(f"{sid}号" for sid in targets)
+            if len(targets) > 1
+            else f"已警告{targets[0]}号玩家："
+        )
+        notify(
+            game,
+            events,
+            text + "请在30秒内完成操作。",
+            targets,
+            "主持人警告",
+            payload={
+                "type": "host_warning",
+                "recipient_ids": audience(game, targets),
+                "animation": {"script": "scripts/host-warning.json", "images": {}, "texts": {}},
+            },
+        )
     elif action == "host.water":
         require(
             game["half"] == "night" and game["phase"] in {"night", "night_coco", "night_review"},

@@ -501,6 +501,14 @@ def project_message_payload(raw, actor, kind=None):
             for key in ("type", "day", "seat_id", "actor_name", "text")
             if key in payload
         }
+    if payload.get("type") == "host_warning":
+        if (
+            kind == "information"
+            and actor.get("kind") == "player"
+            and set(actor.get("access_ids") or []).intersection(payload.get("recipient_ids") or [])
+        ):
+            return {"type": "host_warning", "animation": payload["animation"]}
+        return None
     if payload.get("type") == "animation":
         if kind == "alert" and payload.get("public") is True:
             privileged = host_capable(actor) or payload.get("actor_participant_id") in (

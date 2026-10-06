@@ -266,7 +266,7 @@ class _MusicTrack {
       if (path == null) {
         throw StateError('音频包未下载、文件缺失或校验失败；请在资源包中下载音频后重试');
       }
-      voice = LocalAudioVoice(path, onError: (error) {
+      voice = LocalAudioVoice(DeviceFileSource(path), onError: (error) {
         if (!_disposed) onError(error);
       });
       sync();

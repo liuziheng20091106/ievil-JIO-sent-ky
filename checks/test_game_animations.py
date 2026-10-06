@@ -365,6 +365,58 @@ class GameAnimationDelivery(unittest.TestCase):
                 return messages
         raise AssertionError("the command's state frame was not delivered")
 
+    def test_host_warning_animates_only_recipients_for_single_all_and_repeat(self):
+        self.room.edit_state(lambda game: game.update(phase="nomination", nomination_done=[]))
+        viewers = {
+            "4": self.headers["4"],
+            "5": self.headers["5"],
+            "host": self.room.host,
+            "unentered": self.unentered,
+        }
+        warning_ids = []
+        with ExitStack() as stack:
+            sockets = {
+                name: stack.enter_context(self.room.connect(headers))
+                for name, headers in viewers.items()
+            }
+            for payload in ({"seat_id": "4"}, {"seat_id": "4"}, {"all": True}):
+                state = self.room.command(self.room.host, "host.warn", payload)
+                for name, socket in sockets.items():
+                    messages = self.messages_through(socket, state["version"])
+                    warnings = [item for item in messages if item["kind"] == "information"]
+                    recipient = name == "4" or (name == "5" and payload.get("all"))
+                    if recipient:
+                        self.assertEqual(len(warnings), 1)
+                        warning = warnings[0]
+                        self.assertEqual(
+                            warning["payload"],
+                            {
+                                "type": "host_warning",
+                                "animation": {
+                                    "script": "scripts/host-warning.json",
+                                    "images": {},
+                                    "texts": {},
+                                },
+                            },
+                        )
+                        self.assertEqual(
+                            next(
+                                item
+                                for item in self.history(viewers[name])
+                                if item["id"] == warning["id"]
+                            )["payload"],
+                            warning["payload"],
+                        )
+                        if name == "4":
+                            warning_ids.append(warning["id"])
+                    elif name == "host":
+                        self.assertEqual(len(warnings), 1)
+                        self.assertNotIn("payload", warnings[0])
+                    else:
+                        self.assertEqual(warnings, [])
+                self.assertIsNotNone(self.room.state(viewers["4"])["self"]["warning_deadline"])
+        self.assertEqual(len(set(warning_ids)), 3, "重复警告必须产生新事件并重新播放")
+
     def test_challenge_success_reaches_all_players_and_hosts_live_and_in_history(self):
         viewers = {sid: self.room.seat_headers(self.players, sid) for sid in map(str, range(1, 8))}
         viewers.update(host=self.room.host, unentered=self.unentered)
