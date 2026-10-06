@@ -34,6 +34,7 @@ APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`
 独立资源包：`animation`（游戏动画）、`memes`（表情）与 `audio`（音乐）由后端分发，不打进安装包。客户端每次进入对局前检查，各包可独立增量下载、下载全量 ZIP、导入本机 ZIP 或跳过；跳过、取消和失败均不阻止对局。恢复登录与换局同样检查，普通刷新与断线重连不重复询问。大厅和对局标题栏的“资源包”入口可手动检查与重试。
 
 缓存位于应用数据目录的 `resources/`，文件以 MD5 命名；`animation.json`、`memes.json`、`audio.json` 分别记录路径映射，同内容跨包只保存一份。增量下载验证大小与 MD5 后才替换映射，清理时取得三包服务端清单的并集，网络或清单故障时停止清理并报告。修改素材后运行 `.venv\Scripts\python.exe -X utf8 tools\update-resource-manifests.py`，单包可加 `--pack audio`；加 `--archive-dir downloads/audio` 可同时生成该包 ZIP，不上传。音频包只接受 MP3、WAV、OGG、FLAC；本机解码失败明确提示。MD5 用于完整性，不替代 HTTPS。
+双击项目根目录的 `compress-audio.cmd` 可将 `resources/audio` 下超过 2,000,000 字节的歌曲压到该限制内，保留完整时长；原曲先备份到 `downloads/audio-originals/`，已达标歌曲跳过。MP3保留文件名，其它超限音频转成同名MP3，重名不覆盖。成功后刷新音频清单，发布仍需单独上传；`--dry-run` 可只预览。此为有损压缩并移除封面与标签。
 资源缓存的符号链接校验从系统提供的应用支持目录开始，允许 Android 等系统在该目录上层使用路径别名；应用内的 resources 目录、临时下载目录、清单与 MD5 文件仍拒绝符号链接，不读取或写入缓存之外的文件。
 从1.1.2起下载支持HTTP(S)的302/CDN重定向，最多5次，下载请求不携带登录令牌或Cookie。后端在 `data/resource-downloads.json` 配置 `base_url` 后可将文件下载跳转至R2公网地址下的MD5对象；资源清单与本地缓存格式不变，下载完成仍校验大小和MD5。1.1.1及更早客户端禁止重定向，使用该下载方式需要更新客户端。
 资源管理提供“增量下载”和“全量 ZIP”，支持导入动画、表情、音频 ZIP；全量或导入验证成功后重新读取最新清单增量补差异。导入逐项验证包名、路径、大小、CRC 和 MD5，拒绝穿越、重复、链接、未列出内容、加密、多卷和 ZIP64；失败或取消不替换旧映射。后端媒体与 ZIP 共用三个本地下载名额，第四个起才允许已记录上传对象的 302。`tools/upload-resources.py --pack audio --prefix <当前前缀>` 只打包上传音频，不传 `--pack` 则处理三包；按配置清对应 URL 缓存，详见 TXT 运行说明。
