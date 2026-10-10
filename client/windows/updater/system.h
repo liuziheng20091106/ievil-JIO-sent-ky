@@ -62,9 +62,9 @@ bool CreateShortcuts(const std::wstring& installDir, const std::wstring& updater
 bool RemoveShortcuts(std::wstring* error);
 
 // ==== 其它 ====
-// %LOCALAPPDATA%\MagicJudge\Updater.exe 是否与当前这份内容一致（大小 + SHA-256）。
-bool UpdaterCopyIsCurrent();
-bool EnsureInstalledUpdaterCopy(std::wstring* error);
+// %LOCALAPPDATA%\MagicJudge\Updater.exe 是否与指定源文件一致（大小 + SHA-256）。
+bool UpdaterCopyIsCurrent(const std::wstring& source);
+bool EnsureInstalledUpdaterCopy(const std::wstring& source, std::wstring* error);
 bool StopProcessByImagePath(const std::wstring& imagePath, int* stopped, std::wstring* error);
 bool DirectoryIsWritable(const std::wstring& dir);
 std::vector<std::wstring> PersistentDataDirs();

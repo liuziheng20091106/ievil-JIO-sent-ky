@@ -234,6 +234,9 @@ std::wstring BuildElevatedArguments(const Options& options, bool forceSilent) {
   if (options.purgeData) {
     arguments += L" --purge-data";
   }
+  if (options.skipProgramFiles) {
+    arguments += L" --keep-program-files";
+  }
   if (options.noLaunch) {
     arguments += L" --no-launch";
   }
@@ -460,6 +463,7 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
     return kExitFailure;
   }
   const std::wstring payload = LocatePayloadRoot(staging);
+  const bool packageHasUpdater = FileExists(JoinPath(payload, kUpdaterExeName));
   if (!CopyTree(payload, effective.dir, &error)) {
     // 覆盖正在运行的游戏会失败（文件被占用）：先结束它，再试一次。
     const std::wstring appExe = JoinPath(effective.dir, kAppExeName);
@@ -492,15 +496,16 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
   const std::wstring targetUpdater = JoinPath(effective.dir, kUpdaterExeName);
   const std::wstring selfPath = ExePath();
   std::wstring copyError;
-  if (_wcsicmp(selfPath.c_str(), targetUpdater.c_str()) != 0) {
+  // 优先保留更新包里的版本，不能再被启动本次安装的旧 Updater 覆盖。
+  if (!packageHasUpdater && _wcsicmp(selfPath.c_str(), targetUpdater.c_str()) != 0) {
     if (!CopyFileTo(selfPath, targetUpdater, false, &copyError)) {
       LogError(copyError);
     }
   }
   // 安装/更新后 %LOCALAPPDATA%\MagicJudge\Updater.exe 必须是同一份（计划任务跑的就是它）。
   const std::wstring installedUpdater = InstalledUpdaterPath();
-  if (_wcsicmp(selfPath.c_str(), installedUpdater.c_str()) != 0) {
-    if (CopyFileTo(selfPath, installedUpdater, false, &copyError)) {
+  if (_wcsicmp(targetUpdater.c_str(), installedUpdater.c_str()) != 0) {
+    if (CopyFileTo(targetUpdater, installedUpdater, false, &copyError)) {
       LogFormat(L"已把 Updater 复制到 %s", installedUpdater.c_str());
     } else {
       LogError(copyError);
@@ -542,9 +547,12 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
 
 int RunPrepare(const Options& options, const ProgressSink* progress) {
   std::wstring error;
+  const std::wstring targetUpdater = JoinPath(options.dir, kUpdaterExeName);
+  const std::wstring source = !options.dir.empty() && FileExists(targetUpdater)
+                                  ? targetUpdater : ExePath();
   const CertState certState = CheckCertificate(&error);
   const bool taskReady = UpdaterTaskReady(&error);
-  const bool updaterCopyReady = UpdaterCopyIsCurrent();
+  const bool updaterCopyReady = UpdaterCopyIsCurrent(source);
   const bool needCertificate = certState == CertState::NeedsInstall;
   const bool needTask = !taskReady;
   const bool needCopy = !updaterCopyReady;
@@ -581,7 +589,7 @@ int RunPrepare(const Options& options, const ProgressSink* progress) {
   // 副本存在也要比内容（大小 + SHA-256）：旧构建或坏文件都要刷新。
   {
     std::wstring copyError;
-    if (!EnsureInstalledUpdaterCopy(&copyError)) {
+    if (!EnsureInstalledUpdaterCopy(source, &copyError)) {
       LogError(copyError);
       if (needCopy) {
         return kExitFailure;
@@ -632,6 +640,18 @@ int RunUninstall(const Options& options, const ProgressSink* progress) {
                                ? std::wstring()
                                : (options.dir.empty() ? TrimTrailingSlash(info.installDir)
                                                       : TrimTrailingSlash(options.dir));
+  if (!IsProcessElevated()) {
+    // 未获管理员权限时不先删一部分；子进程也不得无限重复请求提权。
+    if (options.elevated) {
+      LogError(L"未能获得管理员权限，未开始卸载");
+      return kExitPermission;
+    }
+    Options elevated = options;
+    elevated.command = L"uninstall";
+    elevated.dir = dir;
+    ReportProgress(progress, 0, L"卸载需要管理员权限，正在请求提权");
+    return RerunElevated(elevated, true);
+  }
   int failures = 0;
 
   if (!dir.empty() && DirExists(dir)) {

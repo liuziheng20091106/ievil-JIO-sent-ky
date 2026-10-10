@@ -12,11 +12,16 @@
 """
 
 import ctypes
+import hashlib
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
+import zipfile
 from ctypes import wintypes
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tools.update_manifest import client_version
@@ -167,6 +172,89 @@ class UpdaterCommandLine(unittest.TestCase):
                 "下载失败却留下了程序文件",
             )
             self.assertFalse(downloads.exists())
+
+    def test_install_running_from_target_replaces_itself_and_preserves_package_updater(self):
+        target = self.local / "安装目录 with spaces"
+        target.mkdir()
+        updater = target / "Updater.exe"
+        original = UPDATER.read_bytes()
+        updater.write_bytes(original)
+        client = target / "seven_double_client.exe"
+        client.write_bytes(b"old client")
+
+        class Handler(SimpleHTTPRequestHandler):
+            def log_message(self, *_arguments):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, directory=str(self.local)))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for index, directory in enumerate((str(target), ".")):
+                with self.subTest(directory=directory):
+                    # PE 尾部附加数据不影响运行，能核对包内新文件没有被旧自身覆盖。
+                    replacement = original + f"package updater {index}".encode()
+                    package = self.local / "update.zip"
+                    with zipfile.ZipFile(package, "w") as archive:
+                        archive.writestr("Updater.exe", replacement)
+                        archive.writestr("seven_double_client.exe", b"new client")
+                    result = subprocess.run(
+                        [
+                            str(updater),
+                            "--install",
+                            "--portable",
+                            "--silent",
+                            "--dir",
+                            directory,
+                            "--from",
+                            f"http://127.0.0.1:{server.server_port}/update.zip",
+                            "--sha256",
+                            hashlib.sha256(package.read_bytes()).hexdigest(),
+                            "--size",
+                            str(package.stat().st_size),
+                        ],
+                        cwd=target,
+                        env=self.environment,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=120,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(updater.read_bytes(), replacement)
+                    self.assertEqual(client.read_bytes(), b"new client")
+                    self.assertFalse((target / ".install-staging").exists())
+                    self.assertFalse((self.local / "MagicJudge" / "downloads").exists())
+            installed_updater = self.local / "MagicJudge" / "Updater.exe"
+            installed_updater.write_bytes(replacement)
+            result = self.run_updater("--prepare", "--dry-run", "--dir", str(target))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("updater_copy=ready", result.stdout)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    @unittest.skipIf(
+        os.name == "nt" and bool(ctypes.windll.shell32.IsUserAnAdmin()),
+        "此边界需要普通用户令牌，管理员终端由隔离原生验收覆盖",
+    )
+    def test_uninstall_without_elevated_privileges_preserves_files_and_data(self):
+        target = self.local / "app"
+        target.mkdir()
+        client = target / "seven_double_client.exe"
+        client.write_bytes(b"installed client")
+        data = self.local / "com.sevendouble" / "save.dat"
+        data.parent.mkdir()
+        data.write_bytes(b"saved game")
+        result = self.run_updater(
+            "--uninstall", "--dir", str(target), "--purge-data", "--silent", "--elevated"
+        )
+        self.assertEqual(result.returncode, 3, result.stdout or result.stderr)
+        self.assertEqual(client.read_bytes(), b"installed client")
+        self.assertEqual(data.read_bytes(), b"saved game")
 
 
 if __name__ == "__main__":

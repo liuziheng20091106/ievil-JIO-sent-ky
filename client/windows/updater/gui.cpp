@@ -1094,6 +1094,9 @@ LRESULT CALLBACK UninstallProc(HWND window, UINT message, WPARAM wparam, LPARAM 
       if (result == kExitOk) {
         ::MessageBoxW(window, L"卸载完成，Updater.exe 自身已保留。", L"魔法裁判 卸载",
                       MB_OK | MB_ICONINFORMATION);
+      } else if (result == kExitPermission) {
+        ::MessageBoxW(window, L"未能获得管理员权限，未开始卸载。", L"魔法裁判 卸载",
+                      MB_OK | MB_ICONWARNING);
       } else {
         ::MessageBoxW(window, L"卸载完成，但有部分文件未能删除（可能仍在使用中）。",
                       L"魔法裁判 卸载", MB_OK | MB_ICONWARNING);

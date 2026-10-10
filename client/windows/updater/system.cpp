@@ -447,8 +447,7 @@ bool InstallCertificate(std::wstring* error) {
 
 // ==== 其它 ====
 
-bool UpdaterCopyIsCurrent() {
-  const std::wstring source = ExePath();
+bool UpdaterCopyIsCurrent(const std::wstring& source) {
   const std::wstring target = InstalledUpdaterPath();
   if (_wcsicmp(source.c_str(), target.c_str()) == 0) {
     return true;
@@ -463,8 +462,7 @@ bool UpdaterCopyIsCurrent() {
          Sha256File(target, &targetHash, &hashError) && HexEqualI(sourceHash, targetHash);
 }
 
-bool EnsureInstalledUpdaterCopy(std::wstring* error) {
-  const std::wstring source = ExePath();
+bool EnsureInstalledUpdaterCopy(const std::wstring& source, std::wstring* error) {
   const std::wstring target = InstalledUpdaterPath();
   if (_wcsicmp(source.c_str(), target.c_str()) == 0) {
     return true;

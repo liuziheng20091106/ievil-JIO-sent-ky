@@ -645,7 +645,31 @@ bool CopyFileTo(const std::wstring& source, const std::wstring& destination, boo
     return false;
   }
   if (!::CopyFileW(LongPath(source).c_str(), LongPath(destination).c_str(), failIfExists ? TRUE : FALSE)) {
-    const DWORD code = ::GetLastError();
+    DWORD code = ::GetLastError();
+    // Windows 可重命名运行中的 EXE，但不能原地覆盖；复制失败时才处理自身。
+    if (!failIfExists && (code == ERROR_SHARING_VIOLATION || code == ERROR_ACCESS_DENIED)) {
+      const DWORD length = ::GetFullPathNameW(destination.c_str(), 0, nullptr, nullptr);
+      std::vector<wchar_t> fullPath(length);
+      if (length != 0 && ::GetFullPathNameW(destination.c_str(), length, fullPath.data(), nullptr) != 0 &&
+          _wcsicmp(fullPath.data(), ExePath().c_str()) == 0 &&
+          _wcsicmp(source.c_str(), destination.c_str()) != 0) {
+        const std::wstring oldPath = destination + L".old";
+        std::wstring ignored;
+        DeleteFileIfExists(oldPath, &ignored);
+        if (!MoveFileTo(destination, oldPath, false, error)) {
+          return false;
+        }
+        if (::CopyFileW(LongPath(source).c_str(), LongPath(destination).c_str(), FALSE)) {
+          LogFormat(L"已替换正在运行的 Updater，旧文件保留至下次替换：%s", oldPath.c_str());
+          return true;
+        }
+        code = ::GetLastError();
+        DeleteFileIfExists(destination, &ignored);
+        if (!MoveFileTo(oldPath, destination, false, &ignored)) {
+          LogError(ignored);
+        }
+      }
+    }
     if (code == ERROR_FILE_EXISTS && !failIfExists) {
       return true;
     }
