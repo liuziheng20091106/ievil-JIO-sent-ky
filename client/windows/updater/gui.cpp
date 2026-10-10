@@ -554,7 +554,15 @@ bool DirectoryIsAutomatic(const WizardState* state, const std::wstring& value) {
 }
 
 void ApplyWizardMode(HWND window, WizardState* state, bool portable) {
+  const bool modeChanged = state->portable != portable;
   state->portable = portable;
+  if (portable) {
+    state->programFiles = false;
+  } else if (modeChanged) {
+    state->programFiles = true;
+  }
+  ::SendMessageW(state->programFilesCheck, BM_SETCHECK,
+                 state->programFiles ? BST_CHECKED : BST_UNCHECKED, 0);
   ::EnableWindow(state->programFilesCheck, portable ? FALSE : TRUE);
   ::EnableWindow(state->desktopShortcutCheck, portable ? FALSE : TRUE);
   if (state->modeHint != nullptr) {
@@ -567,9 +575,9 @@ void ApplyWizardMode(HWND window, WizardState* state, bool portable) {
   if (state->statusLabel != nullptr && state->thread == nullptr) {
     ::SetWindowTextW(state->statusLabel, portable ? kStatusReadyPortable : kStatusReadyInstall);
   }
-  // 目录还是自动值时跟着模式换；用户自己填过就不动他填的路径。
+  // 切回安装时采用 Program Files 默认值；便携模式保留用户自己选的目录。
   const std::wstring current = Trim(ReadWindowText(state->directoryEdit));
-  if (DirectoryIsAutomatic(state, current)) {
+  if ((!portable && modeChanged) || DirectoryIsAutomatic(state, current)) {
     ::SetWindowTextW(state->directoryEdit,
                      (portable ? state->portableDefaultDir : state->installDefaultDir).c_str());
   }
@@ -659,6 +667,27 @@ void BeginInstall(HWND window, WizardState* state) {
     return;
   }
   state->directory = TrimTrailingSlash(directory);
+  std::wstring directoryError;
+  if (!ValidateInstallDirectory(state->directory, &directoryError)) {
+    ShowErrorDialog(L"安装目录不安全", directoryError);
+    return;
+  }
+  if (DirExists(state->directory)) {
+    std::vector<std::wstring> files;
+    std::wstring error;
+    if (!ListTreeRelative(state->directory, &files, nullptr, &error)) {
+      ShowErrorDialog(L"无法检查安装目录", error);
+      return;
+    }
+    if (!files.empty() &&
+        ::MessageBoxW(window,
+                      (L"请不要与其他文件混合，避免卸载时误删\n\n" + state->directory +
+                       L"\n\n此目录已有文件，是否仍要继续安装？").c_str(),
+                      L"魔法裁判 安装目录警告",
+                      MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+      return;
+    }
+  }
   state->portable =
       ::SendMessageW(state->modePortableRadio, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state->programFiles = ::SendMessageW(state->programFilesCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -772,6 +801,14 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         ApplyWizardMode(window, state, id == kIdModePortable);
         return 0;
       }
+      if (id == kIdDirectoryEdit && HIWORD(wparam) == EN_CHANGE &&
+          state->programFilesCheck != nullptr) {
+        state->programFiles = !state->portable &&
+            _wcsicmp(Trim(ReadWindowText(state->directoryEdit)).c_str(), state->programFilesDir.c_str()) == 0;
+        ::SendMessageW(state->programFilesCheck, BM_SETCHECK,
+                       state->programFiles ? BST_CHECKED : BST_UNCHECKED, 0);
+        return 0;
+      }
       if (id == kIdCancel && state->thread == nullptr) {
         ::DestroyWindow(window);
         return 0;
@@ -779,13 +816,13 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       if (id == kIdBrowse) {
         BROWSEINFOW browse{};
         browse.hwndOwner = window;
-        browse.lpszTitle = L"选择魔法裁判的安装目录";
+        browse.lpszTitle = L"选择安装位置（将在所选文件夹下创建 MagicJudge）";
         browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
         LPITEMIDLIST item = ::SHBrowseForFolderW(&browse);
         if (item != nullptr) {
           wchar_t path[MAX_PATH] = L"";
           if (::SHGetPathFromIDListW(item, path)) {
-            ::SetWindowTextW(state->directoryEdit, path);
+            ::SetWindowTextW(state->directoryEdit, JoinPath(path, kProductDirName).c_str());
           }
           ::ILFree(item);
         }
@@ -1091,6 +1128,11 @@ LRESULT CALLBACK UninstallProc(HWND window, UINT message, WPARAM wparam, LPARAM 
         state->thread = nullptr;
       }
       const int result = static_cast<int>(static_cast<INT_PTR>(wparam));
+      state->result = result;
+      if (result == kExitCancelled) {
+        ::DestroyWindow(window);
+        return 0;
+      }
       if (result == kExitOk) {
         ::MessageBoxW(window, L"卸载完成，Updater.exe 自身已保留。", L"魔法裁判 卸载",
                       MB_OK | MB_ICONINFORMATION);
@@ -1202,14 +1244,13 @@ int RunInstallWizard(const Options& options) {
   commonControls.dwICC = ICC_PROGRESS_CLASS;
   ::InitCommonControlsEx(&commonControls);
   WizardState state;
-  // 三份自动目录：安装默认当前目录（或 --dir），便携版默认在其下建一个子目录，
-  // 免得几百个文件直接散进用户选的目录里；--dir 明确给了就两个模式都用它。
-  state.installDefaultDir =
-      options.dir.empty() ? TrimTrailingSlash(CurrentDirectory()) : TrimTrailingSlash(options.dir);
-  state.portableDefaultDir = options.dir.empty()
-                                 ? JoinPath(state.installDefaultDir, kProductDirName)
-                                 : state.installDefaultDir;
+  // 安装默认 Program Files；便携版仍在当前目录下建独立子目录。
   state.programFilesDir = JoinPath(ProgramFilesDir(), kProductDirName);
+  state.installDefaultDir = options.dir.empty() ? state.programFilesDir : TrimTrailingSlash(options.dir);
+  state.portableDefaultDir = options.dir.empty()
+                                 ? JoinPath(CurrentDirectory(), kProductDirName)
+                                 : TrimTrailingSlash(options.dir);
+  state.programFiles = !options.portable && options.dir.empty();
   state.portable = options.portable;
   state.desktopShortcut = options.desktopShortcut;
   state.directory = state.portable ? state.portableDefaultDir : state.installDefaultDir;

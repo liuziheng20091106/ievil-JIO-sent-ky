@@ -553,6 +553,7 @@ QQ登录：复制 gateway\.env.example 为 gateway\.env 并填写 NapCat 地址�
 
 2. 开局与日常操作
 主持人新建对局时确认11角色魔典名单，系统随机排序；点击“开放加入”后，已登录账号自行选择加入或观战，无需审核。玩家随机进入空席，选择上下牌并准备，7人准备后由主持人开局。
+参局、接受邀请、观战与主持确认进入要求完整的 seven-double-flutter/x.y.z (windows|android) UA；缺失、未知、缺少平台、夹带前后文本或更新器 UA 均返回426。玩家入局还需满足对应平台更新清单的 minimum；即使清单缺失也校验 UA，合法 UA 的旧客户端仍可观战和主持。登录、大厅、健康与更新查询不受入局 UA 限制；模拟器与协议回归同样发送合法客户端 UA，没有测试豁免。
 按页面提示确认行动，由主持人推进阶段、处理“可能”与未定规则待办。观战账号取得只读全牌桌；需要替补时，主持人从观战者中接管空席，并分别决定是否继承私密历史及保留原行动。
 移出/本局拉黑对玩家与观战者均有效；只撤销该参与身份，不重置角色牌，也不删除该账号的QQ登录。没有设备识别或IP封禁，玩家换设备重新登录即恢复参与身份。
 不明确或未写明的概率与规则交由主持人裁决；系统自己知道做完的阶段（魔女化、夜间行动、顺序发言、提名、投票、处决前响应）无人待办时5秒后自动推进，主持人可暂停或手动推进。
@@ -570,6 +571,7 @@ Windows 发行须完整执行 flutter build windows --release，签名打包后�
 Windows 更新器从 client/lib/src/client_version.dart 读取 kClientVersion 的完整三段发行版本，CMake 将该文件登记到 CMAKE_CONFIGURE_DEPENDS；版本宏仍 source scoped，只刷新使用版本宏的原生源文件。构建后运行 Updater.exe --version，应输出 magicjudge-updater 与相同的完整发行版本，不能留空；checks/test_updater_cli.py 会对照 Dart 常量核验。
 Windows 更新流程不再传 --silent：Updater 显示准备、等待客户端退出、下载、解压和替换进度，计划任务或提权后的更新实例同样显示进度，完成后自动重启客户端。实际运行结束时尝试递归清空 %LOCALAPPDATA%\MagicJudge\downloads，失败只记日志且不改变退出码；更新交接后由任务实例退出时清理，只读命令和 --dry-run 不清缓存，下载目录本身是链接时跳过以免越界删除。卸载勾选「删除持久化数据」或传 --purge-data 时，使用当前用户的 %APPDATA%\com.sevendouble\，不写死用户名，也不再猜测按显示名或工程名命名的数据目录。
 Windows 安装目录内直接运行 Updater 更新时，若包内含 Updater.exe，先将正在运行的旧文件改名为 Updater.exe.old，再写入新文件；写入失败则尝试恢复旧文件，旧副本在下一次替换时清理。安装与更新环境准备统一使用安装目录中包内的新更新器，避免启动本次更新的旧文件覆盖新版或计划任务副本。卸载在删除任何内容前请求管理员权限；提权失败退出码为3，不开始删除，也不重复请求提权。提权重跑保留已确定的安装目录、「删除持久化数据」与「保留程序文件」选择。
+Windows 安装向导默认勾选 Program Files，安装到其下 MagicJudge；切到便携版使用独立便携目录，切回安装恢复 Program Files 默认，手动改目录时同步取消该勾选。浏览选择父目录后自动追加 MagicJudge。目标目录已有文件时，在开始安装前警告「请不要与其他文件混合，避免卸载时误删」，默认不继续。共用安装入口拒绝磁盘根目录、Windows 及其子目录、用户主目录，以及桌面、文档、下载目录本身；相对路径、大小写和目录联接不能绕过，用户目录下的独立子目录仍可安装。卸载在删除前检查实际选中的程序与持久化数据；发现压缩包、文本、Office/PDF等常见用户文件，或待删文件达到800个时，列出数量与最多5个样例再次确认，默认不继续；保留的Updater.exe不计数。取消退出码1223，程序、数据、注册表、快捷方式、任务与下载缓存均不删除。
 检查依赖：.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 规则/访问检查：.venv\Scripts\python.exe -m unittest discover -s checks -v
 Python静态检查：.venv\Scripts\python.exe -m ruff check backend checks run.py gateway

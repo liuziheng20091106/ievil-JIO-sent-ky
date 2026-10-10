@@ -42,7 +42,7 @@ inline constexpr DWORD kWaitPidTimeoutMs = 60000;
 inline constexpr unsigned int kFileReplaceRetries = 6;
 inline constexpr DWORD kFileReplaceDelayMs = 500;
 
-// 退出码：0 成功 / 1 一般失败 / 2 网络失败 / 3 权限不足 / 4 已安装或已最新 / 5 需要重启。
+// 退出码：0 成功 / 1 一般失败 / 2 网络失败 / 3 权限不足 / 4 已安装或已最新 / 5 需要重启 / 1223 已取消。
 enum ExitCode {
   kExitOk = 0,
   kExitFailure = 1,
@@ -50,6 +50,7 @@ enum ExitCode {
   kExitPermission = 3,
   kExitUpToDate = 4,
   kExitRebootRequired = 5,
+  kExitCancelled = ERROR_CANCELLED,
 };
 
 // 命令行解析结果。

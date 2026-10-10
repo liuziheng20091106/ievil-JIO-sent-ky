@@ -4,8 +4,8 @@
 `flutter build windows --release` 一起构建出来的 `Updater.exe`；没有构建产物时
 整个文件跳过，不会让其它环境的后端检查失败。
 
-刻意**不**执行 `--uninstall`、`--prepare`（不带 --dry-run）这类会改动机器状态的命令：
-它们会删计划任务、删注册表键、往系统信任库装证书，必须由人工按 README 的步骤验证。
+不执行真实安装的 --uninstall 或会装证书的 --prepare；卸载检查只运行改了产品名与
+快捷方式名的临时副本，所有程序文件、下载缓存与数据都在独立临时目录中。
 
 运行方式（仓库根目录）：
     .venv/Scripts/python.exe -m unittest checks.test_updater_cli -v
@@ -17,7 +17,9 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
+import uuid
 import zipfile
 from ctypes import wintypes
 from functools import partial
@@ -255,6 +257,134 @@ class UpdaterCommandLine(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stdout or result.stderr)
         self.assertEqual(client.read_bytes(), b"installed client")
         self.assertEqual(data.read_bytes(), b"saved game")
+
+    def test_install_rejects_protected_targets_before_creating_or_downloading(self):
+        shell = ctypes.WinDLL("shell32", use_last_error=True)
+        shell.SHGetKnownFolderPath.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        ole = ctypes.WinDLL("ole32")
+        ole.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+        targets = [Path(os.environ["SYSTEMROOT"]).anchor]
+        for guid in (
+            "F38BF404-1D43-42F2-9305-67DE0B28FC23",  # Windows
+            "5E6C858F-0E22-4760-9AFE-EA3317B67173",  # 用户主目录
+            "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",  # 桌面
+            "FDD39AD0-238F-46AF-ADB4-6C85480369C7",  # 文档
+            "374DE290-123F-4565-9164-39C4925E467B",  # 下载
+        ):
+            identifier = ctypes.create_string_buffer(uuid.UUID(guid).bytes_le)
+            path = ctypes.c_void_p()
+            self.assertEqual(shell.SHGetKnownFolderPath(identifier, 0, None, ctypes.byref(path)), 0)
+            try:
+                targets.append(ctypes.wstring_at(path))
+            finally:
+                ole.CoTaskMemFree(path)
+        targets.extend((targets[1] + r"\System32", targets[2] + r"\child\.."))
+        alias = self.local / "windows-alias"
+        link = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(alias), targets[1]],
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(link.returncode, 0, link.stderr)
+        self.addCleanup(alias.rmdir)
+        targets.extend((str(alias), str(alias / "System32")))
+        for target in targets:
+            with self.subTest(target=target):
+                result = self.run_updater(
+                    "--install",
+                    "--portable",
+                    "--silent",
+                    "--from",
+                    "http://127.0.0.1:1",
+                    "--dir",
+                    target,
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+    @unittest.skipUnless(
+        os.name == "nt" and bool(ctypes.windll.shell32.IsUserAnAdmin()),
+        "隔离卸载检查需要管理员终端，避免自动化触发 UAC",
+    )
+    def test_uninstall_warning_cancellation_preserves_files_and_count_boundary(self):
+        product = "MJ" + uuid.uuid4().hex[:8]
+        display = "验收" + uuid.uuid4().hex[:2]
+        binary = UPDATER.read_bytes()
+        for source, replacement in (("MagicJudge", product), ("魔法裁判", display)):
+            before, after = source.encode("utf-16le"), replacement.encode("utf-16le")
+            self.assertIn(before, binary)
+            binary = binary.replace(before, after)
+        updater = self.local / "isolated-Updater.exe"
+        updater.write_bytes(binary)
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+        user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user.GetDlgItem.argtypes = [wintypes.HWND, ctypes.c_int]
+        user.GetDlgItem.restype = wintypes.HWND
+        user.PostMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        for suffix, count, warning_expected in (
+            (".TxT", 1, True),
+            (".dll", 799, False),
+            (".dll", 800, True),
+        ):
+            with self.subTest(suffix=suffix, count=count):
+                target = self.local / f"app-{count}"
+                target.mkdir()
+                (target / "Updater.exe").write_bytes(binary)
+                nested = target / "nested"
+                nested.mkdir()
+                for index in range(count):
+                    (nested / f"file-{index}{suffix}").write_bytes(b"keep")
+                cache = self.local / product / "downloads" / "cached.zip"
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_bytes(b"cached package")
+                process = subprocess.Popen(
+                    [str(updater), "--uninstall", "--silent", "--dir", str(target)],
+                    env=self.environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                dialogs = []
+
+                @callback_type
+                def cancel_warning(window, _parameter, expected_pid=process.pid, observed=dialogs):
+                    pid = wintypes.DWORD()
+                    user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+                    no_button = user.GetDlgItem(window, 7) if pid.value == expected_pid else None
+                    if no_button:
+                        observed.append(window)
+                        user.PostMessageW(no_button, 0xF5, 0, 0)  # BM_CLICK / IDNO
+                    return True
+
+                try:
+                    deadline = time.monotonic() + 15
+                    while process.poll() is None and time.monotonic() < deadline:
+                        user.EnumWindows(cancel_warning, 0)
+                        time.sleep(0.02)
+                    process.communicate(timeout=5)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=5)
+                self.assertEqual(bool(dialogs), warning_expected, f"exit={process.returncode}")
+                self.assertEqual(process.returncode, 1223 if warning_expected else 0)
+                self.assertEqual((target / "Updater.exe").read_bytes(), binary)
+                if warning_expected:
+                    self.assertEqual(cache.read_bytes(), b"cached package")
+                    for index in range(count):
+                        self.assertEqual((nested / f"file-{index}{suffix}").read_bytes(), b"keep")
+                else:
+                    self.assertFalse(nested.exists())
 
 
 if __name__ == "__main__":

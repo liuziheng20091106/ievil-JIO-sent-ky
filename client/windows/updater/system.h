@@ -67,6 +67,7 @@ bool UpdaterCopyIsCurrent(const std::wstring& source);
 bool EnsureInstalledUpdaterCopy(const std::wstring& source, std::wstring* error);
 bool StopProcessByImagePath(const std::wstring& imagePath, int* stopped, std::wstring* error);
 bool DirectoryIsWritable(const std::wstring& dir);
+bool ValidateInstallDirectory(const std::wstring& dir, std::wstring* error);
 std::vector<std::wstring> PersistentDataDirs();
 std::wstring RegistryUninstallString(const std::wstring& installDir);
 

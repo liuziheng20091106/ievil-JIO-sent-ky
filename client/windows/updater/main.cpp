@@ -163,7 +163,7 @@ void PrintUsage() {
   ConsoleWriteLine(L"  Updater.exe --check-install [--dir <目录>]");
   ConsoleWriteLine(L"  Updater.exe --version | --help");
   ConsoleWriteLine(L"");
-  ConsoleWriteLine(L"退出码：0 成功 / 1 一般失败 / 2 网络失败 / 3 权限不足 / 4 已安装或已最新 / 5 需要重启");
+  ConsoleWriteLine(L"退出码：0 成功 / 1 一般失败 / 2 网络失败 / 3 权限不足 / 4 已安装或已最新 / 5 需要重启 / 1223 已取消");
   ConsoleFlush();
 }
 
@@ -234,7 +234,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previousInstance, PWSTR comman
     result = upd::kExitFailure;
   }
   // 交给计划任务的更新由任务实例清理，避免删掉它正在下载或解压的包。
-  if (!options.dryRun && !(options.command == L"update-app" && result == upd::kExitOk)) {
+  if (!options.dryRun && result != upd::kExitCancelled &&
+      !(options.command == L"update-app" && result == upd::kExitOk)) {
     const std::wstring downloads = upd::DownloadsDir();
     const DWORD attributes = ::GetFileAttributesW(upd::LongPath(downloads).c_str());
     if (attributes != INVALID_FILE_ATTRIBUTES &&

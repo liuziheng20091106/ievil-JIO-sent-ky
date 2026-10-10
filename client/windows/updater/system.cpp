@@ -3,6 +3,7 @@
 #include <objbase.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <shlwapi.h>
 #include <tlhelp32.h>
 #include <wincrypt.h>
 
@@ -576,6 +577,51 @@ std::wstring KnownFolderPath(REFKNOWNFOLDERID id) {
   return path;
 }
 
+// 解析相对路径及现有父目录的联接/符号链接，未创建的末级目录仍可校验。
+std::wstring CanonicalDirectoryPath(const std::wstring& path, std::wstring* error) {
+  const DWORD length = ::GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+  std::vector<wchar_t> buffer(length);
+  if (length == 0 || ::GetFullPathNameW(path.c_str(), length, buffer.data(), nullptr) == 0) {
+    *error = L"无法解析安装目录";
+    return std::wstring();
+  }
+  const std::wstring full = TrimTrailingSlash(buffer.data());
+  std::wstring existing = full;
+  for (;;) {
+    const HANDLE directory = ::CreateFileW(LongPath(existing).c_str(), 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (directory != INVALID_HANDLE_VALUE) {
+      const DWORD size = ::GetFinalPathNameByHandleW(directory, nullptr, 0, FILE_NAME_NORMALIZED);
+      std::vector<wchar_t> finalPath(size + 1);
+      const DWORD written = ::GetFinalPathNameByHandleW(directory, finalPath.data(),
+          static_cast<DWORD>(finalPath.size()), FILE_NAME_NORMALIZED);
+      ::CloseHandle(directory);
+      if (size == 0 || written == 0 || written >= finalPath.size()) {
+        *error = L"无法确认安装目录的真实位置";
+        return std::wstring();
+      }
+      std::wstring resolved(finalPath.data());
+      if (StartsWithI(resolved, L"\\\\?\\UNC\\")) {
+        resolved = L"\\\\" + resolved.substr(8);
+      } else if (StartsWithI(resolved, L"\\\\?\\")) {
+        resolved.erase(0, 4);
+      }
+      return TrimTrailingSlash(JoinPath(resolved, full.substr(existing.size())));
+    }
+    const DWORD code = ::GetLastError();
+    if ((code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) ||
+        existing.empty() || ::PathIsRootW(existing.c_str())) {
+      *error = Format(L"无法检查安装目录：%s", Win32ErrorMessage(code).c_str());
+      return std::wstring();
+    }
+    existing = DirectoryOf(existing);
+    if (existing.size() == 2 && existing[1] == L':') {
+      existing += L'\\';
+    }
+  }
+}
+
 // 写一个 .lnk；可能在工作线程里调用，所以在本线程按需初始化 COM。
 bool WriteShortcut(const std::wstring& linkPath, const std::wstring& target,
                    const std::wstring& arguments, const std::wstring& workingDirectory,
@@ -708,6 +754,39 @@ bool RemoveShortcuts(std::wstring* error) {
     LogFormat(L"开始菜单目录未能删除（可能还有别的文件）：%s", folder.c_str());
   }
   return ok;
+}
+
+bool ValidateInstallDirectory(const std::wstring& dir, std::wstring* error) {
+  const std::wstring target = CanonicalDirectoryPath(dir, error);
+  if (target.empty()) {
+    return false;
+  }
+  if (::PathIsRootW(target.c_str())) {
+    *error = L"禁止安装到磁盘根目录，请选择独立的 MagicJudge 子目录";
+    return false;
+  }
+  const KNOWNFOLDERID* protectedFolders[] = {
+      &FOLDERID_Windows, &FOLDERID_Profile, &FOLDERID_Desktop, &FOLDERID_Documents, &FOLDERID_Downloads};
+  for (const KNOWNFOLDERID* folder : protectedFolders) {
+    const std::wstring known = KnownFolderPath(*folder);
+    if (known.empty()) {
+      *error = L"无法确定受保护的系统或用户目录，已停止安装";
+      return false;
+    }
+    const std::wstring protectedPath = CanonicalDirectoryPath(known, error);
+    if (protectedPath.empty()) {
+      return false;
+    }
+    const bool same = _wcsicmp(target.c_str(), protectedPath.c_str()) == 0;
+    const bool insideWindows = folder == &FOLDERID_Windows &&
+        target.size() > protectedPath.size() && target[protectedPath.size()] == L'\\' &&
+        _wcsnicmp(target.c_str(), protectedPath.c_str(), protectedPath.size()) == 0;
+    if (same || insideWindows) {
+      *error = Format(L"禁止安装到此系统或用户目录：%s\n请选择独立的 MagicJudge 子目录", dir.c_str());
+      return false;
+    }
+  }
+  return true;
 }
 
 std::vector<std::wstring> PersistentDataDirs() {

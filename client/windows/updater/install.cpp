@@ -424,6 +424,11 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
                                              : CurrentDirectory();
   }
   effective.dir = TrimTrailingSlash(effective.dir);
+  std::wstring error;
+  if (!ValidateInstallDirectory(effective.dir, &error)) {
+    LogError(error);
+    return kExitFailure;
+  }
   ReportProgress(progress, 0,
                  Format(portable ? L"便携版目录：%s" : L"安装目录：%s", effective.dir.c_str()));
 
@@ -432,7 +437,6 @@ int RunInstall(const Options& options, const ProgressSink* progress) {
     return RerunElevated(effective, true);
   }
 
-  std::wstring error;
   if (!EnsureDir(effective.dir, &error)) {
     LogError(error);
     return kExitFailure;
@@ -651,6 +655,66 @@ int RunUninstall(const Options& options, const ProgressSink* progress) {
     elevated.dir = dir;
     ReportProgress(progress, 0, L"卸载需要管理员权限，正在请求提权");
     return RerunElevated(elevated, true);
+  }
+  std::vector<std::wstring> roots;
+  if (!dir.empty() && DirExists(dir)) {
+    roots.push_back(dir);
+  }
+  if (options.purgeData) {
+    for (const std::wstring& dataDir : PersistentDataDirs()) {
+      if (DirExists(dataDir)) {
+        roots.push_back(dataDir);
+      }
+    }
+  }
+  size_t fileCount = 0;
+  size_t userFileCount = 0;
+  std::wstring examples;
+  constexpr const wchar_t* userExtensions[] = {
+      L".zip", L".7z", L".rar", L".tar", L".gz", L".txt", L".md", L".rtf",
+      L".xls", L".xlsx", L".xlsm", L".csv", L".doc", L".docx", L".ppt", L".pptx",
+      L".pdf", L".odt", L".ods", L".odp", L".html", L".htm"};
+  for (const std::wstring& root : roots) {
+    std::vector<std::wstring> files;
+    std::wstring error;
+    if (!ListTreeRelative(root, &files, nullptr, &error)) {
+      LogError(error);
+      return kExitFailure;
+    }
+    for (const std::wstring& file : files) {
+      if (root == dir && _wcsicmp(file.c_str(), kUpdaterExeName) == 0) {
+        continue;
+      }
+      ++fileCount;
+      const size_t dot = file.find_last_of(L'.');
+      if (dot == std::wstring::npos) {
+        continue;
+      }
+      for (const wchar_t* extension : userExtensions) {
+        if (_wcsicmp(file.c_str() + dot, extension) == 0) {
+          if (++userFileCount <= 5) {
+            examples += L"\n  " + JoinPath(root, file);
+          }
+          break;
+        }
+      }
+    }
+  }
+  if (userFileCount != 0 || fileCount >= 800) {
+    std::wstring warning = Format(L"即将删除 %llu 个文件。", static_cast<unsigned long long>(fileCount));
+    if (userFileCount != 0) {
+      warning += Format(L"\n发现 %llu 个可能属于您的文档或压缩包：%s",
+                        static_cast<unsigned long long>(userFileCount), examples.c_str());
+    }
+    if (fileCount >= 800) {
+      warning += L"\n待删除文件达到 800 个，明显多于正常程序文件。";
+    }
+    warning += L"\n\n请确认没有与其他文件混合，避免误删。是否仍要继续卸载？";
+    if (::MessageBoxW(nullptr, warning.c_str(), L"魔法裁判 卸载警告",
+                      MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND) != IDYES) {
+      LogMessage(L"已取消卸载，未删除任何内容");
+      return kExitCancelled;
+    }
   }
   int failures = 0;
 
