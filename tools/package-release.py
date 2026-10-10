@@ -192,6 +192,34 @@ def fingerprint(paths) -> dict:
     return result
 
 
+def check_windows_release(zip_path: Path) -> None:
+    """核对包内引擎，避免共享 ephemeral 目录留下 Debug DLL。"""
+    try:
+        config = json.loads(
+            (ROOT / "client" / ".dart_tool" / "package_config.json").read_text(encoding="utf-8")
+        )
+        sdk = Path(urllib.request.url2pathname(urllib.parse.urlsplit(config["flutterRoot"]).path))
+        expected = sha256_file(
+            sdk
+            / "bin"
+            / "cache"
+            / "artifacts"
+            / "engine"
+            / "windows-x64-release"
+            / "flutter_windows.dll"
+        )
+        with zipfile.ZipFile(zip_path) as archive, archive.open("flutter_windows.dll") as engine:
+            actual = hashlib.file_digest(engine, "sha256").hexdigest()
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
+        raise ReleaseError(f"无法核验 Windows Release 引擎：{error}") from error
+    if actual != expected:
+        raise ReleaseError(
+            "Windows 包内 flutter_windows.dll 与当前 Flutter SDK 的 Release 引擎不一致。\n"
+            "Debug 引擎不能运行 Release 的 app.so；请重新 flutter build windows --release，"
+            "核对引擎后再打包，不能只重编 Updater。"
+        )
+
+
 def make_zip(zip_path: Path, source_dir: Path) -> None:
     """把 Windows 发行目录整体打成一个 zip（不夹带目录里已有的 *.zip）。
 
@@ -227,6 +255,11 @@ def make_zip(zip_path: Path, source_dir: Path) -> None:
             f"打包过程中发行目录被改动了 {len(changed)} 个文件（{preview}…）\n"
             "多半是 flutter build 还在跑，等构建结束再重试。"
         )
+    try:
+        check_windows_release(tmp)
+    except ReleaseError:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, zip_path)
 
 
@@ -776,6 +809,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.skip_zip:
             if not WINDOWS_ZIP.exists():
                 raise ReleaseError(f"--skip-zip 需要已有 {WINDOWS_ZIP}")
+            check_windows_release(WINDOWS_ZIP)
             log(f"复用已有压缩包 {WINDOWS_ZIP.name}")
         else:
             make_zip(WINDOWS_ZIP, WINDOWS_RELEASE)
