@@ -203,9 +203,17 @@ def convert_daily(game, events):
             and not c["witch"]
             and current(game, s) == c
             and other["original_role_id"] not in {"millia", "arisa"}
+            and (
+                day >= 3
+                or not any(
+                    game["cards"][x]["original_role_id"] in {"emma", "millia", "arisa", "sherry"}
+                    for x in s["cards"]
+                )
+            )
         )
 
     converted = False
+    opening_rewind = False
     if day == 3:
         # 第三天：**当前牌是艾玛**的那个席位以最高优先级成为当天魔女。她还在下层、尚未
         # 登场时不算——否则会出现「没有刀可点的魔女」，私信里「你的当前角色已魔女化」
@@ -232,10 +240,22 @@ def convert_daily(game, events):
         if day - 1 < len(destiny["first"]):
             s = seat(game, destiny["first"][day - 1])
             card = current(game, s)
+            opening_rewind = (
+                day == 1
+                and card is not None
+                and card["id"] == "hiro"
+                and card["witch"]
+                and game["spiritual"]["hiro_used"]["witch"]
+            )
+            if opening_rewind:
+                # 第一夜魔女希罗回溯后，由原第二天的 B 席接替，不查魔典。
+                card = current(game, seat(game, destiny["first"][1]))
             if card and legal(card["id"]):
                 set_witch(game, events, card["id"])
                 converted = True
-    if not converted and day != 3:
+            elif card and card["witch"]:
+                converted = True
+    if not converted and day != 3 and not opening_rewind:
         # 命运席位当前牌不可转化（雪莉当道、亚里沙/米莉亚同席、已出局等）时，
         # 退回魔典顺序找第一个合法目标；仍无目标才交主持人裁定。
         for cid in game["codex"]:
@@ -251,7 +271,13 @@ def convert_daily(game, events):
                 "第三天没有以当前牌登场的艾玛，且魔女阵营无可转化目标，本夜不产生新的魔女。",
             )
         else:
-            pending(game, "codex", "本日无合法魔女化目标：主持人裁定转化或耗尽处理")
+            pending(
+                game,
+                "codex",
+                "回溯后原第二天席位无合法魔女化目标：主持人裁定"
+                if opening_rewind
+                else "本日无合法魔女化目标：主持人裁定转化或耗尽处理",
+            )
             return
     begin_night(game, events)
 
