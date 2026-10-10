@@ -2,7 +2,7 @@ import 'dart:io';
 
 /// 客户端实际发行版本号的唯一源码来源；常规发版只改这里，pubspec 保留系列版本。
 /// 后端按 UA 里的这个版本做更新下发与入局门槛，故意不用 package_info_plus。
-const kClientVersion = '1.1.7';
+const kClientVersion = '1.1.8';
 
 /// 默认后端服务地址：首次进入「连接服务器」时预填，但玩家可以随意改成别的地址。
 const kDefaultServerEndpoint = 'https://super.tkcloud.online:447';
@@ -15,7 +15,7 @@ String get clientPlatform {
 }
 
 /// 所有客户端请求都带的 UA：`seven-double-flutter/<版本> (<平台>)`。
-/// 后端只认这个形状；不带或形状不对时一律不下发平台相关的更新信息、也不拦入局。
+/// 后端用它下发平台更新信息；进入对局要求完整 UA，玩家还需满足最低版本。
 String clientUserAgent() => 'seven-double-flutter/$kClientVersion ($clientPlatform)';
 
 /// Updater 自己的 UA：Windows 更新器请求 `/api/health` 时用它取 Windows 更新包。

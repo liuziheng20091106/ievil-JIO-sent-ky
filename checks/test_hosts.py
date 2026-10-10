@@ -39,7 +39,10 @@ class HostFlow(unittest.TestCase):
         self.client = TestClient(
             app,
             base_url="http://testserver",
-            headers={"Origin": "http://testserver"},
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -125,9 +128,7 @@ class HostFlow(unittest.TestCase):
         )
 
     def create_game(self, headers):
-        return self.client.post(
-            "/api/games", headers=headers, json={"codex": DEFAULT_CODEX}
-        )
+        return self.client.post("/api/games", headers=headers, json={"codex": DEFAULT_CODEX})
 
     def end_game(self, headers, game_id):
         state = self.client.get(f"/api/games/{game_id}/state", headers=headers).json()
@@ -163,9 +164,7 @@ class HostFlow(unittest.TestCase):
         self.assertEqual(response.status_code, 403, response.text)
         # 密码登录入口已经彻底删掉：只剩下 SPA 兜底路由（只回 GET，所以 POST 是 405）。
         self.assertIn(
-            self.client.post(
-                "/api/native/host/login", json={"password": "114514"}
-            ).status_code,
+            self.client.post("/api/native/host/login", json={"password": "114514"}).status_code,
             (404, 405),
         )
 
@@ -183,9 +182,7 @@ class HostFlow(unittest.TestCase):
                     "group_id": 123456,
                 },
             ).raise_for_status()
-            response = self.client.get(
-                "/api/native/auth/host/challenges/" + challenge["id"]
-            )
+            response = self.client.get("/api/native/auth/host/challenges/" + challenge["id"])
             self.assertEqual(response.status_code, 403, response.text)
 
     # ------------------------------------------------------------------ 等级
@@ -334,6 +331,7 @@ class HostFlow(unittest.TestCase):
         self.assertEqual(
             entered.json(), {"owner": False, "announced": True, "owner_name": "主持人(主持10001)"}
         )
+
         # 对局内系统公告：在本局的记录里发一条全场可见的 alert，写清谁进了谁的对局。
         def alerts(headers):
             page = self.client.get(
@@ -360,7 +358,9 @@ class HostFlow(unittest.TestCase):
 
         # 建局主持人自己进入不算越权，不产生公告。
         mine = self.client.post(f"/api/games/{game_id}/host/enter", headers=self.admin)
-        self.assertEqual(mine.json(), {"owner": True, "announced": False, "owner_name": "主持人(主持10001)"})
+        self.assertEqual(
+            mine.json(), {"owner": True, "announced": False, "owner_name": "主持人(主持10001)"}
+        )
         self.assertEqual(len(alerts(self.admin)), 1)
 
     def test_unconfirmed_host_has_no_host_data_or_power(self):
@@ -397,9 +397,7 @@ class HostFlow(unittest.TestCase):
             self.assertIn("确认进入", refused.json()["detail"])
         # 席位视角与本局佩戴信息同样不放行。
         self.assertEqual(
-            self.client.get(
-                f"/api/games/{game_id}/seats/1/view", headers=self.admin
-            ).status_code,
+            self.client.get(f"/api/games/{game_id}/seats/1/view", headers=self.admin).status_code,
             403,
         )
         self.assertEqual(
@@ -423,9 +421,7 @@ class HostFlow(unittest.TestCase):
         headers, _ = self.host_login("10003")
         self.assertEqual(self.create_game(headers).status_code, 200)
         # 一键初始化等于这一局被清空。
-        self.assertEqual(
-            self.client.post("/api/reset", headers=self.admin).status_code, 200
-        )
+        self.assertEqual(self.client.post("/api/reset", headers=self.admin).status_code, 200)
         self.assertIsNone(self.client.get("/api/me", headers=headers).json()["actor"])
 
 
@@ -449,7 +445,10 @@ class AnnouncementFlow(unittest.TestCase):
         self.client = TestClient(
             app,
             base_url="http://testserver",
-            headers={"Origin": "http://testserver"},
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -499,9 +498,7 @@ class AnnouncementFlow(unittest.TestCase):
             ).status_code,
             403,
         )
-        self.assertEqual(
-            self.client.get("/api/announcements", headers=player).status_code, 200
-        )
+        self.assertEqual(self.client.get("/api/announcements", headers=player).status_code, 200)
 
         created = self.client.post(
             "/api/announcements",
@@ -547,9 +544,7 @@ class AnnouncementFlow(unittest.TestCase):
             403,
         )
 
-        removed = self.client.delete(
-            f"/api/announcements/{announcement['id']}", headers=self.admin
-        )
+        removed = self.client.delete(f"/api/announcements/{announcement['id']}", headers=self.admin)
         self.assertEqual(removed.status_code, 200, removed.text)
         empty = self.client.get("/api/lobby", headers=player).json()
         self.assertEqual(empty["announcements"], [])
@@ -612,7 +607,9 @@ class SessionCleanup(unittest.TestCase):
     def remaining(self):
         with auth_storage.connect() as db:
             challenges = {row["id"] for row in db.execute("SELECT id FROM login_challenges")}
-            tokens = {row["token_hash"] for row in db.execute("SELECT token_hash FROM login_tokens")}
+            tokens = {
+                row["token_hash"] for row in db.execute("SELECT token_hash FROM login_tokens")
+            }
         return challenges, tokens
 
     def test_cleanup_drops_only_dead_sessions(self):

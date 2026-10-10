@@ -18,6 +18,8 @@ flutter build windows --debug
 
 版本检查与应用内更新：所有请求都带 `seven-double-flutter/<版本> (<平台>)` 的 UA（完整发行版本唯一源码是 `lib/src/client_version.dart` 的 `kClientVersion`，当前为 `1.1.2`）。从 1.1.0 起正常补丁发版只改该常量；`pubspec.yaml` 固定 `version: 1.1.0+1`，仅跨 `x.y` 系列才改 `x.y`，`+1` 不动。连接服务器后读 `/api/health` 下发的 `client_latest` / `client_minimum` 与 `update` 详情；大厅每 5 秒轮询 `/api/online`，它回一句「有没有更新」，说有更新时客户端再请求一次 `/api/health` 取版本字段与更新日志（同一服务地址、同一 latest 标签 10 分钟内只查一次）。低于 latest 提示可更新、低于 minimum 强制更新（强制更新时不提供「稍后」，且服务端会拒绝以玩家身份入局，其它功能不受限）。 Flutter 要求三段合法 SemVer，跨系列使用 x.y.0+1；这是固定包基线，并非跟随补丁发行版本同步。
 
+参局、接受邀请、观战与主持确认进入必须发送完整的 `seven-double-flutter/x.y.z (windows|android)` UA。后端拒绝缺失、未知、缺少平台、夹带前后文本及更新器 UA（426）；玩家额外受平台最低版本限制。登录、大厅、健康与更新查询仍可正常使用。
+
 APK `output-metadata.json` 的 `versionName` 为 `1.1.0`、`versionCode` 为 `1`；Windows runner 系统文件版本同样来自固定包基线。客户端 UA、更新比较、发布清单 `latest`、三条上传对象键与 `Updater.exe --version` 使用完整 `kClientVersion`。更新器 CMake 从 Dart 常量读取版本，将该文件登记到 `CMAKE_CONFIGURE_DEPENDS`，版本宏保持 source scoped；不使用 `--build-name` / `--build-number` 补丁同步，也不做 `flutter clean`，改变 Dart 常量仍正常重编 Dart AOT。本地输出名不变，上传名为「原 stem-完整发行版本.扩展名」（如 `app-release-1.1.0.apk`）。1.1.0 的版本来源迁移已完成；正式发行按 `docs/客户端编译发行手册.md` 执行。
 
 更新弹窗渲染服务端下发的 Markdown 更新日志，`guide_url` 非空时多一个「打开网页」按钮（打不开就把链接复制到剪切板）。「更新」按钮在更新完成或用户主动关掉弹窗前始终可见——大厅里另有一个常驻的「立即更新」入口，关掉横幅或弹窗都不会让它消失。横幅可以点「知道了」关掉，记的是被关掉的 latest 标签，服务端下发更新的版本才会重新提示。

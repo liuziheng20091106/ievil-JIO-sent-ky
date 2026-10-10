@@ -10,6 +10,10 @@ import threading
 import time
 from collections.abc import Iterable
 
+from tools.update_manifest import client_version
+
+CLIENT_USER_AGENT = f"seven-double-flutter/{client_version()} (windows)"
+
 
 def solve_pow(token, difficulty):
     """解出使 ``sha256(token + nonce)`` 十六进制前缀有 difficulty 个 '0' 的 nonce。
@@ -61,7 +65,7 @@ class ProtocolClient:
     # ------------------------------------------------------------------ 传输
 
     def request(self, method, path, body=None, *, token=None, headers=None):
-        merged = {"Origin": self.origin}
+        merged = {"Origin": self.origin, "User-Agent": CLIENT_USER_AGENT}
         bearer = token if token is not None else self.token
         if bearer:
             merged["Authorization"] = "Bearer " + bearer
@@ -170,15 +174,15 @@ class ProtocolClient:
     def submit(self, action, payload=None, *, expected_version=None, as_seat=None):
         """提交一条命令；版本冲突抛 :class:`VersionConflict`，其它拒绝抛 ProtocolError。"""
         body = {
-            "expected_version": self.view["version"] if expected_version is None else expected_version,
+            "expected_version": self.view["version"]
+            if expected_version is None
+            else expected_version,
             "action": action,
             "payload": payload or {},
         }
         if as_seat:
             body["as_seat"] = as_seat
-        state = self.call(
-            "POST", f"/api/games/{self.game_id}/commands", body, action=action
-        )
+        state = self.call("POST", f"/api/games/{self.game_id}/commands", body, action=action)
         self.view = state
         return state
 
@@ -251,9 +255,7 @@ class ProtocolClient:
         真实客户端在管理页确认后才调用它；模拟器走同一条路径，否则拿到的只是
         最窄的观察者投影（没有上下牌、没有主持人行动）。
         """
-        return self.call(
-            "POST", f"/api/games/{self.game_id}/host/enter", action="host_enter"
-        )
+        return self.call("POST", f"/api/games/{self.game_id}/host/enter", action="host_enter")
 
     def open_join(self, open=True):
         """开放/关闭主动参局。

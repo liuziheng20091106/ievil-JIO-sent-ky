@@ -40,7 +40,10 @@ class BackendFlow(unittest.TestCase):
         self.client = TestClient(
             app,
             base_url="http://testserver",
-            headers={"Origin": "http://testserver"},
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -1471,7 +1474,10 @@ class NoOriginGate(unittest.TestCase):
         self.addCleanup(self.env.stop)
         storage.initialize()
         auth_storage.initialize()
-        self.client = TestClient(app)
+        self.client = TestClient(
+            app,
+            headers={"User-Agent": "seven-double-flutter/1.1.0 (windows)"},
+        )
 
     def host_login(self, qq_id):
         challenge = self.client.post("/api/native/auth/host/challenges").json()

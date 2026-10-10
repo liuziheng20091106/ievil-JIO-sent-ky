@@ -454,7 +454,12 @@ class SimulatorCase(unittest.TestCase):
 
     def client(self):
         return TestClient(
-            app, base_url="http://testserver", headers={"Origin": "http://testserver"}
+            app,
+            base_url="http://testserver",
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
 
 

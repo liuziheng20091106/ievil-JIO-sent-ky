@@ -139,7 +139,7 @@ flutter build windows --debug
 
 客户端启动后先填写服务根地址（默认已填好 `https://super.tkcloud.online:447`，可以自行修改）：局域网可用 HTTP，公网地址必须 HTTPS。首次连接某个服务地址时会展示该服务端下发的用户协议（Markdown），由用户选择「同意并继续」或「取消连接」；同意记录按「服务地址 + 协议内容哈希」存在本机，协议改过会重新询问。玩家端与主持人端按登录身份自动切换界面；Android 提供触觉反馈，Windows 静默。Windows 主持人端同时只允许一个实例：重复启动会把已有窗口唤到前台并直接退出，不会开出第二个窗口。
 
-所有请求都带 `seven-double-flutter/<版本> (<平台>)` 形式的 UA，后端据此下发更新信息、并只对「过旧客户端加入对局」设限（详见下文「客户端更新」）。
+所有请求都带 `seven-double-flutter/<版本> (<平台>)` 形式的 UA。参局、接受邀请、观战与主持确认进入要求完整客户端标识，平台只接受 `windows` 或 `android`；玩家入局还需满足平台最低版本（详见下文「客户端更新」）。
 
 ### 应用图标
 
@@ -253,7 +253,7 @@ package-release.cmd
 
 - 匹配规则：`min_version <= 客户端版本 < max_version`（缺省边界表示不限），`platform` 可以是 `windows` / `android` / `any`；**版本标签只认这个文件**，后端不读任何版本环境变量，文件缺失或没有匹配区间时就什么都不下发。文件每次请求现读，改完不用重启后端。
 - Windows 更新器/安装程序（UA `magicjudge-updater/<版本> (windows)`）是唯一例外：它不问自己旧不旧，直接拿该平台那份兜底区间（没有 `min_version` / `max_version` 的那条）的更新包——它要装的就是「当前发布版」，按版本比较会让刚发布的那一版更新器拿不到自己的包。
-- 客户端低于该区间的 `minimum` 时判为强制更新：`POST /api/games/{id}/participations`（以玩家身份入局）与接受邀请会被拒（426），**其它功能一律不受限**。UA 缺失或不认识（浏览器、模拟器、检查脚本）时不做任何拦截。
+- 参局、接受邀请、观战与主持确认进入要求完整的 `seven-double-flutter/x.y.z (windows|android)` UA；缺失、未知、缺少平台、夹带前后文本或使用更新器 UA 均返回 426。即使没有更新清单也执行 UA 校验。客户端低于该区间的 `minimum` 时，以玩家身份入局与接受邀请还会被拒（426）；合法 UA 的旧客户端仍可观战或主持。登录、大厅、健康与更新查询不受入局 UA 限制。模拟器与协议回归也发送合法客户端 UA，无专用豁免。
 - `notes` 是 Markdown，客户端在更新弹窗里渲染；`guide_url` 非空时多一个「打开网页」按钮；`url` 留空时只引导网页。
 - `size` / `sha256` / `updater_url` 由 `package-release.cmd`（`tools/package-release.py` + `tools/update_manifest.py`）自动刷新（只更新该平台「没有区间边界」的那条兜底区间，手工写的 `title` / `notes` / `minimum` / `guide_url` 与更窄的区间条目都保留）。
 

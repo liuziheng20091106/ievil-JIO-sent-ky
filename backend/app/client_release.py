@@ -9,8 +9,8 @@
 - `data/releases/`：更新包本体（Windows zip、APK、Updater.exe），由 `/releases/{name}` 同源下发。
 
 客户端版本从请求的 User-Agent 里读：`seven-double-flutter/<x.y.z> (windows|android)`。
-UA 缺失或不是本客户端时一律「不作判断」：既不下发平台相关的更新信息，也不拒绝入局
-（浏览器、网页端、模拟器与检查脚本都不发这个 UA）。
+UA 缺失或不是本客户端时不下发平台更新信息；进入对局必须使用完整的本客户端 UA。
+玩家入局还需满足该平台更新清单里的最低版本要求。
 
 Windows 更新器/安装程序发的是自己那一份 UA：`magicjudge-updater/<x.y.z> (windows)`。
 它的任务不是「判断自己旧不旧」，而是把**当前发布版**装上去（首次安装、修复安装与应用内
@@ -107,7 +107,7 @@ def load_update_entries():
     path = storage.DATA_DIR / "updates.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return []
     if not isinstance(data, dict):
         return []
@@ -268,15 +268,19 @@ def update_available(user_agent):
     return bool(comparison is not None and comparison < 0)
 
 
-def require_joinable_client(request: Request):
-    """过旧的客户端只拒绝「加入对局」，其它功能一律不受限。
-
-    判据只用 UA 里的版本号：UA 缺失或不是本客户端时放行（浏览器、模拟器、
-    检查脚本都不发这个 UA，按「不满足 UA」拦会把它们一起误伤）。
-    """
-    version, platform = parse_client_agent(request.headers.get("user-agent"))
-    if version is None:
+def require_joinable_client(request: Request, *, player=True):
+    """进入对局要求完整客户端 UA；玩家还检查最低版本。"""
+    match = CLIENT_AGENT.fullmatch(request.headers.get("user-agent", ""))
+    if (
+        not match
+        or match.group(1).lower() != "seven-double-flutter"
+        or (match.group(3) or "").lower() not in PLATFORMS
+        or not match.group(2).isascii()
+    ):
+        raise HTTPException(426, "客户端标识不符合要求，请使用 Windows 或 Android 客户端加入对局")
+    if not player:
         return
+    version, platform = match.group(2), match.group(3).lower()
     minimum = resolve_client(version, platform)[1]
     if not minimum:
         return

@@ -135,10 +135,7 @@ class GameSimClock(game_clock.FakeClock):
     def next_deadline(self):
         """场上最近的倒计时终点：顺序发言、自动推进与主持人警告。"""
         with storage.connect() as db:
-            ids = [
-                row["id"]
-                for row in db.execute("SELECT id FROM games WHERE status != 'ended'")
-            ]
+            ids = [row["id"] for row in db.execute("SELECT id FROM games WHERE status != 'ended'")]
         moments = []
         for game_id in ids:
             with storage.connect() as db:
@@ -276,17 +273,24 @@ class WholeGameOnTheClock(unittest.TestCase):
     def test_a_whole_game_finishes_without_waiting_for_the_clock(self):
         virtual = GameSimClock()
         # 关掉后台计时循环：检查自己用虚拟时钟驱动同一条计时路径。
-        with patch.object(realtime, "clock", idle_clock), virtual.installed(), TestClient(
-            app, base_url="http://testserver", headers={"Origin": "http://testserver"}
-        ) as client:
+        with (
+            patch.object(realtime, "clock", idle_clock),
+            virtual.installed(),
+            TestClient(
+                app,
+                base_url="http://testserver",
+                headers={
+                    "Origin": "http://testserver",
+                    "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+                },
+            ) as client,
+        ):
             harness = Harness(
                 client,
                 seed=self.SEED,
                 clock=virtual,
                 fast_forward=False,
-                policies=[
-                    SilentSpeechPolicy(seed=self.SEED * 100 + index) for index in range(7)
-                ],
+                policies=[SilentSpeechPolicy(seed=self.SEED * 100 + index) for index in range(7)],
             )
             harness.simulation.host_brain = CountdownHostBrain(harness.log)
             started = time.monotonic()

@@ -36,7 +36,12 @@ class ChatInteractions(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.client = TestClient(
-            app, base_url="http://testserver", headers={"Origin": "http://testserver"}
+            app,
+            base_url="http://testserver",
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)

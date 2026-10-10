@@ -575,9 +575,7 @@ def join_game(db, game, account, kind, hashed):
 @router.post("/games/{game_id}/participations")
 async def participate(game_id: str, body: schemas.Participation, request: Request):
     account = auth.require_account(request)
-    if body.kind == "player":
-        # 版本过旧的客户端只拒绝「加入对局」：观战入席与其它功能一律不受限。
-        client_release.require_joinable_client(request)
+    client_release.require_joinable_client(request, player=body.kind == "player")
     async with realtime.lock:
         with storage.transaction() as db:
             game = require_game(db, game_id, mutable=True)
@@ -679,7 +677,7 @@ async def create_invite(game_id: str, body: schemas.Invite, request: Request):
 @router.post("/invites/{invite_id}/accept")
 async def accept_invite(invite_id: str, request: Request):
     account = auth.require_account(request)
-    # 接受邀请同样是以玩家身份入局，版本过旧时和主动参局一样被拒。
+    # 接受邀请同样是以玩家身份入局，校验客户端 UA 与最低版本。
     client_release.require_joinable_client(request)
     async with realtime.lock:
         with storage.transaction() as db:
@@ -738,6 +736,7 @@ async def host_enter(game_id: str, request: Request):
     让在场的人当场知道有人以主持身份进了管理界面；同一账号在同一局只发一次。
     没有记录主持人身份的旧局不做越权判定。
     """
+    client_release.require_joinable_client(request, player=False)
     async with realtime.lock:
         rows = []
         with storage.transaction() as db:

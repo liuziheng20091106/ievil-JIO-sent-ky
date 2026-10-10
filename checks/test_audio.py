@@ -287,7 +287,12 @@ class Music(unittest.TestCase):
                 },
             ),
             TestClient(
-                app, base_url="http://testserver", headers={"Origin": "http://testserver"}
+                app,
+                base_url="http://testserver",
+                headers={
+                    "Origin": "http://testserver",
+                    "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+                },
             ) as client,
         ):
             host = self.login(client, "10001", host=True)

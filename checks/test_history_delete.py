@@ -75,7 +75,10 @@ class HistoryDeletion(unittest.TestCase):
         self.client = TestClient(
             app,
             base_url="http://testserver",
-            headers={"Origin": "http://testserver"},
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -147,9 +150,7 @@ class HistoryDeletion(unittest.TestCase):
                 "group_id": 123456,
             },
         ).raise_for_status()
-        player = self.client.get(
-            "/api/native/auth/challenges/" + player_challenge["id"]
-        ).json()
+        player = self.client.get("/api/native/auth/challenges/" + player_challenge["id"]).json()
         denied = self.client.delete(
             f"/api/history/{match_id}",
             headers={"Authorization": "Bearer " + player["session_token"]},

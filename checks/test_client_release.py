@@ -1,7 +1,7 @@
-"""客户端版本下发、入局版本门槛与用户协议接口。
+"""客户端版本下发、入局 UA 与版本门槛、用户协议接口。
 
 这是应用内更新系统的独立检查：自带一份临时 `GAME_DATA_DIR`，只覆盖
-`updates.json` 区间下发、`/api/online` 的「有更新」标记、过旧客户端的入局拒绝、
+`updates.json` 区间下发、`/api/online` 的「有更新」标记、非法 UA 与过旧客户端的入局拒绝、
 `/api/agreement` 与 `/releases/*`，不与其它检查文件混放。
 
 运行方式（只跑这一个文件，不跑全量）：
@@ -44,7 +44,12 @@ class AgentParsing(unittest.TestCase):
         )
 
     def test_rejects_foreign_and_malformed_agents(self):
-        for value in ("", "python-httpx/0.27.0", "seven-double-flutter/1", "seven-double-flutter/1.2"):
+        for value in (
+            "",
+            "python-httpx/0.27.0",
+            "seven-double-flutter/1",
+            "seven-double-flutter/1.2",
+        ):
             self.assertEqual(client_release.parse_client_agent(value), (None, None), value)
         self.assertEqual(client_release.parse_client_agent(None), (None, None))
 
@@ -331,7 +336,9 @@ class OnlineFlag(ReleaseData):
         }
 
     def online(self, version, platform="windows"):
-        response = self.client.get("/api/online", headers={**self.headers, **agent(version, platform)})
+        response = self.client.get(
+            "/api/online", headers={**self.headers, **agent(version, platform)}
+        )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
@@ -353,7 +360,7 @@ class OnlineFlag(ReleaseData):
 
 
 class JoinGate(ReleaseData):
-    """过旧客户端只拒绝「加入对局」，其它功能一律不受限。"""
+    """入局要求合法客户端 UA；玩家额外检查最低版本。"""
 
     def setUp(self):
         super().setUp()
@@ -371,9 +378,8 @@ class JoinGate(ReleaseData):
             }
         )
         self.host, _ = self.login("/api/native/auth/host/challenges", "10001")
-        created = self.client.post(
-            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX}
-        )
+        self.host.update(agent("1.2.0"))
+        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
         created.raise_for_status()
         self.root = "/api/games/" + created.json()["id"]
         entered = self.client.post(self.root + "/host/enter", headers=self.host)
@@ -382,7 +388,11 @@ class JoinGate(ReleaseData):
         opened = self.client.post(
             self.root + "/commands",
             headers=self.host,
-            json={"expected_version": state["version"], "action": "room.open_join", "payload": {"open": True}},
+            json={
+                "expected_version": state["version"],
+                "action": "room.open_join",
+                "payload": {"open": True},
+            },
         )
         self.assertEqual(opened.status_code, 200, opened.text)
 
@@ -405,9 +415,7 @@ class JoinGate(ReleaseData):
         return headers, completed.json()
 
     def join(self, headers, kind="player"):
-        return self.client.post(
-            self.root + "/participations", headers=headers, json={"kind": kind}
-        )
+        return self.client.post(self.root + "/participations", headers=headers, json={"kind": kind})
 
     def test_outdated_client_cannot_join_as_player(self):
         headers, _ = self.login("/api/native/auth/challenges", "11001")
@@ -421,15 +429,54 @@ class JoinGate(ReleaseData):
         self.assertEqual(response.status_code, 200, response.text)
 
     def test_current_client_joins_normally(self):
-        headers, _ = self.login("/api/native/auth/challenges", "11003")
-        response = self.join({**headers, **agent("1.2.0")})
-        self.assertEqual(response.status_code, 200, response.text)
+        for number, platform in enumerate(("windows", "android")):
+            with self.subTest(platform=platform):
+                headers, _ = self.login("/api/native/auth/challenges", str(11003 + number))
+                response = self.join({**headers, **agent("1.2.0", platform)})
+                self.assertEqual(response.status_code, 200, response.text)
 
-    def test_client_without_the_agent_header_is_not_blocked(self):
-        # 浏览器、模拟器与检查脚本都不发这个 UA：按「不满足 UA」拦会把它们一起误伤。
+    def test_client_without_the_agent_header_is_blocked(self):
         headers, _ = self.login("/api/native/auth/challenges", "11004")
+        self.client.headers.pop("user-agent", None)
         response = self.join(headers)
-        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.status_code, 426, response.text)
+
+    def test_invalid_agents_cannot_enter_as_player_or_spectator(self):
+        headers, _ = self.login("/api/native/auth/challenges", "11007")
+        before = self.client.get(self.root + "/state", headers=self.host).json()["version"]
+        invalid = (
+            "",
+            "Mozilla/5.0",
+            "seven-double-flutter/1.2.0",
+            "seven-double-flutter/1.2.0 (linux)",
+            "seven-double-flutter/1.2 (windows)",
+            "prefix seven-double-flutter/1.2.0 (windows)",
+            "seven-double-flutter/1.2.0 (windows) trailing",
+            "seven-double-flutter/1.2.0-beta (windows)",
+            "seven-double-flutter/1.2.0.9 (windows)",
+            "magicjudge-updater/1.2.0 (windows)",
+        )
+        for kind in ("player", "spectator"):
+            for value in invalid:
+                with self.subTest(kind=kind, user_agent=value):
+                    response = self.join({**headers, "User-Agent": value}, kind=kind)
+                    self.assertEqual(response.status_code, 426, response.text)
+                    after = self.client.get(self.root + "/state", headers=self.host).json()
+                    self.assertEqual(after["version"], before, "拒绝入局不能占席或写入参与身份")
+
+    def test_invalid_agent_cannot_confirm_host_entry(self):
+        response = self.client.post(
+            self.root + "/host/enter", headers={**self.host, "User-Agent": "Mozilla/5.0"}
+        )
+        self.assertEqual(response.status_code, 426, response.text)
+
+    def test_ua_gate_still_applies_without_an_update_manifest(self):
+        (self.data_dir / "updates.json").unlink()
+        headers, _ = self.login("/api/native/auth/challenges", "11008")
+        rejected = self.join(headers)
+        self.assertEqual(rejected.status_code, 426, rejected.text)
+        accepted = self.join({**headers, **agent("0.0.1")})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
 
     def test_lobby_and_messages_stay_open_for_outdated_clients(self):
         headers, _ = self.login("/api/native/auth/challenges", "11005")
@@ -454,6 +501,11 @@ class JoinGate(ReleaseData):
             "/api/invites/" + invite.json()["id"] + "/accept", headers=stale
         )
         self.assertEqual(rejected.status_code, 426, rejected.text)
+        invalid = self.client.post(
+            "/api/invites/" + invite.json()["id"] + "/accept",
+            headers={**target, "User-Agent": "magicjudge-updater/1.2.0 (windows)"},
+        )
+        self.assertEqual(invalid.status_code, 426, invalid.text)
         accepted = self.client.post(
             "/api/invites/" + invite.json()["id"] + "/accept",
             headers={**target, **agent("1.2.0")},

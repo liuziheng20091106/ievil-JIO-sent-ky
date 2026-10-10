@@ -91,14 +91,15 @@ class DialogFlow(unittest.TestCase):
         self.client = TestClient(
             app,
             base_url="http://testserver",
-            headers={"Origin": "http://testserver"},
+            headers={
+                "Origin": "http://testserver",
+                "User-Agent": "seven-double-flutter/1.1.0 (windows)",
+            },
         )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.host, _ = self.host_login("10001")
-        created = self.client.post(
-            "/api/games", headers=self.host, json={"codex": DEFAULT_CODEX}
-        )
+        created = self.client.post("/api/games", headers=self.host, json={"codex": DEFAULT_CODEX})
         created.raise_for_status()
         self.game_id = created.json()["id"]
         self.root = f"/api/games/{self.game_id}"
@@ -191,9 +192,7 @@ class DialogFlow(unittest.TestCase):
         # 发起人自己不该看到「等你回应」的对话框。
         self.assertEqual(self.state(first)["dialogs"], [])
 
-        accepted = self.command(
-            second, "channel.accept", invite["actions"][0]["payload"]
-        )
+        accepted = self.command(second, "channel.accept", invite["actions"][0]["payload"])
         self.assertEqual(accepted["dialogs"], [])
         channel = next(
             item for item in accepted["channels"] if item["id"] == invite["id"].split(":", 1)[1]
